@@ -135,6 +135,12 @@ pub enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Claude Code hook handler. Reads the hook payload on stdin; always
+    /// exits 0 so a hook never blocks the user.
+    Hook {
+        /// One of: user-prompt-submit, post-tool-use, stop.
+        event: String,
+    },
     /// Remove previously exported words from a target, leaving words you
     /// added yourself untouched.
     Unsync {
@@ -340,6 +346,15 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
+        Some(Command::Hook { event }) => {
+            // Fail-open throughout: an unparseable payload is a no-op, never
+            // an error in front of the user.
+            let body = read_stdin().unwrap_or_default();
+            let input = serde_json::from_str(&body).unwrap_or_default();
+            crate::hook::run(event, &store, &input);
+            Ok(ExitCode::SUCCESS)
+        }
+
         None => check_input(cli, &store, format, &mut out, profile),
     }
 }
@@ -410,7 +425,7 @@ fn check_input(
 
 /// Drain the spool into counts. Words, per-register frequencies, n-grams, and
 /// a bounded exemplar sample survive; the prose itself does not.
-fn process_spool(store: &Store, limit: usize) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn process_spool(store: &Store, limit: usize) -> Result<usize, Box<dyn std::error::Error>> {
     let pending = store.pending_spool(limit)?;
     let mut processed = 0;
 

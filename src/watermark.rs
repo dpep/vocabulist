@@ -25,7 +25,11 @@ const MARKERS: &[&str] = &[
     "generated with [claude code]",
     "generated with claude code",
     "🤖 generated with",
-    // Personal convention: PR descriptions carry a note about being vibed.
+    // Personal conventions. Slack and GitHub comments written on the user's
+    // behalf are prefixed "claudomatic:", which makes it an exact authorship
+    // marker — better evidence than any heuristic, and already being written.
+    "claudomatic:",
+    // PR descriptions carry a note about being vibed.
     "vibed with claude",
     "vibe-coded with claude",
 ];

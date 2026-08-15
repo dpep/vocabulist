@@ -8,6 +8,7 @@ pub mod check;
 pub mod cli;
 pub mod contraction;
 pub mod dict;
+pub mod hook;
 pub mod ngram;
 pub mod output;
 pub mod profile;
