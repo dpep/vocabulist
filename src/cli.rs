@@ -14,7 +14,7 @@ use crate::check::Checker;
 use crate::profile::Profile;
 use crate::store::{Store, default_db_path};
 use crate::types::{Finding, Register};
-use crate::{ngram, output, seed, text, watermark};
+use crate::{ngram, output, seed, sync, text, watermark};
 
 const AFTER_HELP: &str = "\
 The lexicon is yours: words you've used, tools you've installed, repos you own.
@@ -123,6 +123,28 @@ pub enum Command {
         #[arg(long, default_value_t = 500)]
         limit: usize,
     },
+    /// Export the lexicon into the spell checkers you already run.
+    Sync {
+        /// Limit to one target. Defaults to all of them.
+        #[arg(short, long)]
+        target: Option<String>,
+        /// Report what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// List the targets and where each one writes.
+        #[arg(long)]
+        list: bool,
+    },
+    /// Remove previously exported words from a target, leaving words you
+    /// added yourself untouched.
+    Unsync {
+        /// Limit to one target. Defaults to all of them.
+        #[arg(short, long)]
+        target: Option<String>,
+        /// Report what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,7 +186,9 @@ pub fn run() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("vocab: {e}");
-            ExitCode::FAILURE
+            // Distinct from 1, which means "findings". A CI step has to be
+            // able to tell bad prose from a broken database.
+            ExitCode::from(2)
         }
     }
 }
@@ -193,7 +217,7 @@ fn dispatch_inner(
                     .clone()
                     .unwrap_or_else(|| seed::SeedOptions::default().scan_root),
             };
-            let report = profile.time("seed", || seed::run(&store, &opts))?;
+            let report = profile.time("seed", || store.transaction(|| seed::run(&store, &opts)))?;
             if !cli.quiet {
                 output::render_seed(&mut out, &report, format)?;
             }
@@ -282,7 +306,52 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
+        Some(Command::Sync {
+            target,
+            dry_run,
+            list,
+        }) => {
+            if *list {
+                if !cli.quiet {
+                    output::render_targets(&mut out, &sync::targets(), format)?;
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+            let chosen = resolve_targets(target.as_deref())?;
+            let mut reports = Vec::new();
+            for t in &chosen {
+                reports.push(profile.time("sync", || sync::install(&store, t, *dry_run))?);
+            }
+            if !cli.quiet {
+                output::render_sync(&mut out, &reports, *dry_run, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Unsync { target, dry_run }) => {
+            let chosen = resolve_targets(target.as_deref())?;
+            let mut reports = Vec::new();
+            for t in &chosen {
+                reports.push(sync::uninstall(t, *dry_run)?);
+            }
+            if !cli.quiet {
+                output::render_sync(&mut out, &reports, *dry_run, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
         None => check_input(cli, &store, format, &mut out, profile),
+    }
+}
+
+/// One named target, or all of them.
+fn resolve_targets(name: Option<&str>) -> Result<Vec<sync::Target>, Box<dyn std::error::Error>> {
+    match name {
+        None => Ok(sync::targets()),
+        Some(n) => sync::find_target(n).map(|t| vec![t]).ok_or_else(|| {
+            let known: Vec<_> = sync::targets().iter().map(|t| t.name).collect();
+            format!("unknown target: {n} (known: {})", known.join(", ")).into()
+        }),
     }
 }
 
@@ -346,15 +415,34 @@ fn process_spool(store: &Store, limit: usize) -> Result<usize, Box<dyn std::erro
     let mut processed = 0;
 
     for (id, register, body, authored_by) in pending {
-        // Staged for the record, but it isn't your voice — learning from it
-        // would drift the lexicon toward the assistant's diction.
-        if authored_by != "user" {
-            store.retire_spool(id)?;
-            processed += 1;
-            continue;
-        }
-        let body = watermark::strip_trailer(&body);
+        // One transaction per row: the counts and the retirement land together
+        // or not at all, so an interrupted run can't re-apply a row it already
+        // half-counted.
+        store.transaction(|| -> Result<(), Box<dyn std::error::Error>> {
+            process_one(store, id, register, &body, &authored_by)
+        })?;
+        processed += 1;
+    }
+    Ok(processed)
+}
 
+/// Fold one spool row into counts and retire it. Called inside a transaction.
+fn process_one(
+    store: &Store,
+    id: i64,
+    register: Register,
+    body: &str,
+    authored_by: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Staged for the record, but it isn't your voice — learning from it
+    // would drift the lexicon toward the assistant's diction.
+    if authored_by != "user" {
+        store.retire_spool(id)?;
+        return Ok(());
+    }
+    let body = watermark::strip_trailer(body);
+
+    {
         for line in body.lines() {
             if !text::is_prose_line(line) {
                 continue;
@@ -385,10 +473,9 @@ fn process_spool(store: &Store, limit: usize) -> Result<usize, Box<dyn std::erro
                 store.add_exemplar(register, line.trim(), tokens.len() as f64)?;
             }
         }
-        store.retire_spool(id)?;
-        processed += 1;
     }
-    Ok(processed)
+    store.retire_spool(id)?;
+    Ok(())
 }
 
 fn read_stdin() -> io::Result<String> {

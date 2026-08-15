@@ -6,12 +6,14 @@
 
 pub mod check;
 pub mod cli;
+pub mod contraction;
 pub mod dict;
 pub mod ngram;
 pub mod output;
 pub mod profile;
 pub mod seed;
 pub mod store;
+pub mod sync;
 pub mod text;
 pub mod types;
 pub mod watermark;

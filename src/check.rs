@@ -67,12 +67,40 @@ impl Checker {
     }
 
     /// Is this word known to either set?
+    ///
+    /// A hyphenated compound counts as known when all of its parts are.
+    /// English forms these freely and no word list can enumerate them — the
+    /// system dictionary carries two hyphenated entries in 236k — so without
+    /// this, `well-known`, `long-term`, and `local-first` all read as typos.
+    /// That's the exact false-positive class this tool exists to remove.
     pub fn knows(&self, word: &str) -> bool {
+        if self.knows_atom(word) {
+            return true;
+        }
+        if !word.contains('-') {
+            return false;
+        }
+        let mut parts = word.split('-').filter(|p| !p.is_empty()).peekable();
+        let mut any = false;
+        for part in &mut parts {
+            any = true;
+            // Short fragments (`e-mail`, `x-ray`) carry no signal, and the
+            // checker already declines to judge words this short on their own.
+            if part.chars().count() < 3 {
+                continue;
+            }
+            if !self.knows_atom(part) {
+                return false;
+            }
+        }
+        any
+    }
+
+    /// A single word, against the lexicon then the backstop.
+    fn knows_atom(&self, word: &str) -> bool {
         if self.lexicon.contains(word) {
             return true;
         }
-        // A word can be in the lexicon only as an identifier part
-        // (`rubocop_todo` → `rubocop`, `todo`); those count as known too.
         match self.dictionary() {
             Some(d) => crate::dict::contains(d, word),
             None => false,
@@ -132,6 +160,20 @@ impl Checker {
     }
 
     fn unknown_finding(&self, token: &Token, word: &str, line_no: usize) -> Finding {
+        // Checked before the edit-distance scan: the mapping is exact, so it's
+        // both a better answer and a skipped full-lexicon walk. Edit distance
+        // would otherwise "correct" `dont` to `font`, since the apostrophe
+        // form isn't in the word list at all.
+        if let Some(fixed) = crate::contraction::expand(word) {
+            return Finding {
+                kind: FindingKind::Contraction,
+                word: token.text.clone(),
+                line: line_no,
+                col: token.col,
+                suggestions: vec![fixed.to_string()],
+                confidence: crate::contraction::CONFIDENCE,
+            };
+        }
         let suggestions = self.suggest(word);
         // A word with a near neighbour is more likely a typo than a coinage;
         // one with no neighbour at all is probably jargon we haven't met.
@@ -255,6 +297,47 @@ mod tests {
         let c = checker(&["contextdb", "rubocop"], &["and", "are", "fine"]);
         let f = c.check_line("contextdb and rubocop are fine", 1, &mut no_evidence);
         assert!(f.is_empty(), "unexpected findings: {f:?}");
+    }
+
+    #[test]
+    fn accepts_hyphenated_compounds_built_from_known_parts() {
+        // No word list enumerates these; English builds them on demand.
+        let c = checker(
+            &["local", "first"],
+            &["well", "known", "long", "term", "design"],
+        );
+        let f = c.check_line(
+            "a well-known long-term local-first design",
+            1,
+            &mut no_evidence,
+        );
+        assert!(f.is_empty(), "unexpected findings: {f:?}");
+    }
+
+    #[test]
+    fn still_flags_a_compound_whose_part_is_misspelled() {
+        let c = checker(&[], &["well", "known", "result"]);
+        let f = c.check_line("a well-knwon result", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].word, "well-knwon");
+    }
+
+    #[test]
+    fn fixes_contractions_typed_without_an_apostrophe() {
+        let c = checker(&[], &["we", "ship", "that"]);
+        let f = c.check_line("we dont ship that", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind, FindingKind::Contraction);
+        assert_eq!(f[0].suggestions, vec!["don't"]);
+        assert!(f[0].confidence > 0.8);
+    }
+
+    #[test]
+    fn handles_non_ascii_without_panicking() {
+        let c = checker(&[], &["notes", "from", "the", "trip"]);
+        let f = c.check_line("İstanbul notes from the trip", 1, &mut no_evidence);
+        // 'İstanbul' is a proper noun we don't know; the point is it survives.
+        assert!(f.len() <= 1);
     }
 
     #[test]

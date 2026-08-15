@@ -150,6 +150,100 @@ pub fn render_stats(
     }
 }
 
+pub fn render_targets(
+    out: &mut impl Write,
+    targets: &[crate::sync::Target],
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            for t in targets {
+                let state = if t.path.exists() { "present" } else { "absent" };
+                writeln!(out, "{:<10} {:<8} {}", t.name, state, t.path.display())?;
+                if !t.note.is_empty() {
+                    writeln!(out, "{:<19} — {}", "", t.note)?;
+                }
+            }
+            Ok(())
+        }
+        _ => {
+            let rows: Vec<_> = targets
+                .iter()
+                .map(|t| {
+                    json!({
+                        "target": t.name,
+                        "path": t.path.display().to_string(),
+                        "owned": t.owned,
+                        "exists": t.path.exists(),
+                        "note": t.note,
+                    })
+                })
+                .collect();
+            emit(out, &json!(rows), format)
+        }
+    }
+}
+
+pub fn render_sync(
+    out: &mut impl Write,
+    reports: &[crate::sync::SyncReport],
+    dry_run: bool,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            for r in reports {
+                match &r.skipped {
+                    Some(reason) => writeln!(out, "{:<10} skipped ({reason})", r.target)?,
+                    None => writeln!(
+                        out,
+                        "{:<10} +{:<6} -{:<6} {}",
+                        r.target, r.added, r.removed, r.path
+                    )?,
+                }
+            }
+            if dry_run {
+                writeln!(out, "\n(dry run — nothing written)")?;
+            }
+            Ok(())
+        }
+        _ => {
+            let rows: Vec<_> = reports
+                .iter()
+                .map(|r| {
+                    json!({
+                        "target": r.target,
+                        "path": r.path,
+                        "added": r.added,
+                        "removed": r.removed,
+                        "total": r.total,
+                        "skipped": r.skipped,
+                        "dry_run": dry_run,
+                    })
+                })
+                .collect();
+            emit(out, &json!(rows), format)
+        }
+    }
+}
+
+/// Write a JSON value in the caller's flavor: pretty for `--json`, compact
+/// one-per-line for `--ndjson`.
+fn emit(out: &mut impl Write, value: &serde_json::Value, format: Format) -> std::io::Result<()> {
+    match format {
+        Format::Ndjson => match value.as_array() {
+            Some(rows) => {
+                for row in rows {
+                    writeln!(out, "{}", serde_json::to_string(row).unwrap())?;
+                }
+                Ok(())
+            }
+            None => writeln!(out, "{}", serde_json::to_string(value).unwrap()),
+        },
+        _ => writeln!(out, "{}", serde_json::to_string_pretty(value).unwrap()),
+    }
+}
+
 /// A command result — success or failure — in the caller's format.
 pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::Result<()> {
     match format {

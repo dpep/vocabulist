@@ -117,6 +117,8 @@ pub enum FindingKind {
     /// A correctly-spelled word that looks wrong *here* — `form` for `from`.
     /// A dictionary can never catch these; only collocation evidence can.
     RealWord,
+    /// A contraction typed without its apostrophe — `dont` for `don't`.
+    Contraction,
 }
 
 impl FindingKind {
@@ -124,6 +126,7 @@ impl FindingKind {
         match self {
             FindingKind::Unknown => "unknown",
             FindingKind::RealWord => "real-word",
+            FindingKind::Contraction => "contraction",
         }
     }
 }

@@ -19,6 +19,10 @@ use crate::types::{Entry, Provenance, Register, StatsPayload};
 /// design, not by policy.
 pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
+/// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
+/// changes so an old database is recognizable rather than guessed at.
+pub const SCHEMA_VERSION: i64 = 1;
+
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -106,11 +110,45 @@ impl Store {
         let conn = Connection::open(&path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn, path })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn schema_version(&self) -> Result<i64> {
+        self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+    }
+
+    /// Run `f` inside one immediate transaction, rolling back on error.
+    ///
+    /// Two problems, one mechanism. Capture hooks run concurrently, and a
+    /// read-then-write upsert would otherwise race; `BEGIN IMMEDIATE` takes
+    /// the write lock up front so writers serialize instead. And a run that
+    /// dies partway can't leave counts half-applied against a spool row that
+    /// still looks unprocessed — which would double-count it on the retry and
+    /// quietly corrupt the evidence the real-word thresholds depend on.
+    pub fn transaction<T, E>(
+        &self,
+        f: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<rusqlite::Error>,
+    {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        match f() {
+            Ok(value) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(value)
+            }
+            Err(e) => {
+                // Best-effort: the original error is what the caller needs.
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     /// Insert or upgrade one word. Provenance ratchets: a stronger source
@@ -269,13 +307,13 @@ impl Store {
         rows.collect()
     }
 
-    /// Mark a spool row processed and drop its body. The counts survive; the
-    /// prose does not.
+    /// Delete a spool row once its counts have landed. The counts survive; the
+    /// prose does not, and neither does the row — nothing ever reads a
+    /// processed row, so keeping a tombstone would be unbounded growth in
+    /// exchange for nothing.
     pub fn retire_spool(&self, id: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE spool SET processed_at = CURRENT_TIMESTAMP, body = '' WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM spool WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -404,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn retiring_spool_drops_the_prose_but_keeps_the_row() {
+    fn retiring_spool_removes_the_prose_entirely() {
         let s = store();
         let id = s
             .spool(Register::Slack, Some("test"), "some private text", "user")
@@ -413,13 +451,27 @@ mod tests {
         s.retire_spool(id).unwrap();
         assert!(s.pending_spool(10).unwrap().is_empty());
 
-        let body: String = s
+        let remaining: i64 = s
             .conn
-            .query_row("SELECT body FROM spool WHERE id = ?1", params![id], |r| {
-                r.get(0)
-            })
+            .query_row("SELECT COUNT(*) FROM spool", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(body, "");
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn schema_version_is_stamped() {
+        assert_eq!(store().schema_version().unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn a_failed_transaction_leaves_nothing_behind() {
+        let s = store();
+        let result: Result<(), rusqlite::Error> = s.transaction(|| {
+            s.upsert_word("halfway", "halfway", Provenance::Observed, 1)?;
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        });
+        assert!(result.is_err());
+        assert!(!s.contains("halfway").unwrap());
     }
 
     #[test]

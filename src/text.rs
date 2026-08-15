@@ -114,7 +114,11 @@ pub fn is_prose_line(line: &str) -> bool {
 /// email addresses — replacing them with spaces so column offsets survive.
 pub fn mask_non_prose(line: &str) -> String {
     let mut out: Vec<char> = line.chars().collect();
-    let lower = line.to_lowercase();
+    // ASCII-only lowering, because it maps one char to one char. Full
+    // `to_lowercase` can change the character count ('İ' becomes two), which
+    // would desynchronize these indices from `out` and read out of bounds.
+    // Every marker below is ASCII, so nothing is lost.
+    let lower: String = line.chars().map(|c| c.to_ascii_lowercase()).collect();
 
     // Inline code spans.
     mask_delimited(&mut out, line, '`', '`');
@@ -267,6 +271,16 @@ mod tests {
                 .chars()
                 .count()
         );
+    }
+
+    #[test]
+    fn masking_survives_characters_that_change_length_when_lowercased() {
+        // 'İ' lowercases to two chars; masking must not desynchronize on it.
+        let line = "İstanbul https://example.com/x notes";
+        let masked = mask_non_prose(line);
+        assert_eq!(masked.chars().count(), line.chars().count());
+        assert!(!masked.contains("example"));
+        assert!(masked.contains("notes"));
     }
 
     #[test]
