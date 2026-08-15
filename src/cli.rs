@@ -6,13 +6,15 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::check::Checker;
+use crate::profile::Profile;
 use crate::store::{Store, default_db_path};
 use crate::types::{Finding, Register};
-use crate::{dict, ngram, output, seed, text, watermark};
+use crate::{ngram, output, seed, text, watermark};
 
 const AFTER_HELP: &str = "\
 The lexicon is yours: words you've used, tools you've installed, repos you own.
@@ -70,6 +72,11 @@ pub struct Cli {
     /// Emit telemetry to stderr.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Report phase timings and work counters to stderr. Never touches stdout,
+    /// so a profiled run still pipes cleanly.
+    #[arg(long, global = true)]
+    pub profile: bool,
 
     /// Suppress stdout (the work still happens).
     #[arg(short, long, global = true)]
@@ -163,7 +170,19 @@ pub fn run() -> ExitCode {
 }
 
 fn dispatch(cli: &Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let store = Store::open(cli.db_path())?;
+    let profile = Rc::new(Profile::new(cli.profile));
+    let code = dispatch_inner(cli, &profile);
+    // Profiling reports even when the command failed — a slow error path is
+    // still worth seeing.
+    profile.report(&mut io::stderr().lock(), cli.format())?;
+    code
+}
+
+fn dispatch_inner(
+    cli: &Cli,
+    profile: &Rc<Profile>,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let store = profile.time("store_open", || Store::open(cli.db_path()))?;
     let format = cli.format();
     let mut out = io::stdout().lock();
 
@@ -174,7 +193,7 @@ fn dispatch(cli: &Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .clone()
                     .unwrap_or_else(|| seed::SeedOptions::default().scan_root),
             };
-            let report = seed::run(&store, &opts)?;
+            let report = profile.time("seed", || seed::run(&store, &opts))?;
             if !cli.quiet {
                 output::render_seed(&mut out, &report, format)?;
             }
@@ -256,14 +275,14 @@ fn dispatch(cli: &Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
 
         Some(Command::Process { limit }) => {
-            let processed = process_spool(&store, *limit)?;
+            let processed = profile.time("process", || process_spool(&store, *limit))?;
             if !cli.quiet {
                 output::status(&mut out, &format!("processed {processed}"), format)?;
             }
             Ok(ExitCode::SUCCESS)
         }
 
-        None => check_input(cli, &store, format, &mut out),
+        None => check_input(cli, &store, format, &mut out, profile),
     }
 }
 
@@ -274,10 +293,19 @@ fn check_input(
     store: &Store,
     format: Format,
     out: &mut impl Write,
+    profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let lexicon = store.words()?.into_iter().collect();
-    let checker = Checker::new(lexicon, dict::load());
-    let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
+    let lexicon: std::collections::HashSet<String> = profile
+        .time("lexicon_load", || store.words())?
+        .into_iter()
+        .collect();
+    profile.count("lexicon_words", lexicon.len() as u64);
+
+    let checker = Checker::with_profile(lexicon, Rc::clone(profile));
+    let mut evidence = |gram: &str| {
+        profile.count("ngram_queries", 1);
+        store.ngram_count(gram).unwrap_or(0)
+    };
 
     let mut findings: Vec<Finding> = Vec::new();
 

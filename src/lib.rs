@@ -9,6 +9,7 @@ pub mod cli;
 pub mod dict;
 pub mod ngram;
 pub mod output;
+pub mod profile;
 pub mod seed;
 pub mod store;
 pub mod text;

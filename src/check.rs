@@ -5,9 +5,12 @@
 //! tool is dead. A missed typo costs almost nothing. So the default answer is
 //! *accept*, and a word has to work to get flagged.
 
+use std::cell::OnceCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::ngram;
+use crate::profile::Profile;
 use crate::text::{self, Token};
 use crate::types::{Finding, FindingKind};
 
@@ -20,15 +23,47 @@ const MAX_SUGGESTIONS: usize = 3;
 /// the system dictionary is the floor beneath it.
 pub struct Checker {
     lexicon: HashSet<String>,
-    dictionary: Option<HashSet<String>>,
+    /// Loaded on first miss, not up front. Reading ~236k words costs tens of
+    /// milliseconds, and text whose words are all in the lexicon never needs
+    /// it — which is the common case once the lexicon is seeded.
+    dictionary: OnceCell<Option<HashSet<String>>>,
+    profile: Rc<Profile>,
 }
 
 impl Checker {
+    /// A checker over an explicit backstop — used by tests, which supply a
+    /// fixture dictionary rather than reading the system one.
     pub fn new(lexicon: HashSet<String>, dictionary: Option<HashSet<String>>) -> Self {
+        let cell = OnceCell::new();
+        let _ = cell.set(dictionary);
         Self {
             lexicon,
-            dictionary,
+            dictionary: cell,
+            profile: Rc::new(Profile::disabled()),
         }
+    }
+
+    /// A checker that reads the system word list on demand.
+    pub fn with_profile(lexicon: HashSet<String>, profile: Rc<Profile>) -> Self {
+        Self {
+            lexicon,
+            dictionary: OnceCell::new(),
+            profile,
+        }
+    }
+
+    /// The backstop, loading it on first use.
+    fn dictionary(&self) -> Option<&HashSet<String>> {
+        self.dictionary
+            .get_or_init(|| {
+                let loaded = self.profile.time("dictionary_load", crate::dict::load);
+                self.profile.count(
+                    "dictionary_words",
+                    loaded.as_ref().map_or(0, |d| d.len()) as u64,
+                );
+                loaded
+            })
+            .as_ref()
     }
 
     /// Is this word known to either set?
@@ -38,7 +73,7 @@ impl Checker {
         }
         // A word can be in the lexicon only as an identifier part
         // (`rubocop_todo` → `rubocop`, `todo`); those count as known too.
-        match &self.dictionary {
+        match self.dictionary() {
             Some(d) => crate::dict::contains(d, word),
             None => false,
         }
@@ -54,19 +89,23 @@ impl Checker {
         line_no: usize,
         evidence: &mut impl FnMut(&str) -> i64,
     ) -> Vec<Finding> {
+        self.profile.count("lines_seen", 1);
         if !text::is_prose_line(line) {
             return Vec::new();
         }
+        self.profile.count("lines_checked", 1);
         let masked = text::mask_non_prose(line);
         let tokens = text::tokenize(&masked);
 
         let normalized: Vec<String> = tokens.iter().map(|t| text::normalize(&t.text)).collect();
+        self.profile.count("tokens", tokens.len() as u64);
 
         let mut findings = Vec::new();
         for (i, token) in tokens.iter().enumerate() {
             if !text::is_checkable(&token.text) {
                 continue;
             }
+            self.profile.count("tokens_checked", 1);
             let word = &normalized[i];
 
             if !self.knows(word) {
@@ -116,19 +155,24 @@ impl Checker {
         // short binary names that sit one edit from everything, and letting
         // provenance win would bury the obvious correction under them.
         // Preferring your own vocabulary is a tie-break, not a trump card.
+        self.profile.count("suggest_calls", 1);
         let mut scored: Vec<(usize, isize, isize, u8, &String)> = Vec::new();
-        let dictionary = self.dictionary.iter().flatten();
+        let dictionary = self.dictionary().into_iter().flatten();
         for (candidate, rank) in self
             .lexicon
             .iter()
             .map(|c| (c, 0u8))
             .chain(dictionary.map(|c| (c, 1u8)))
         {
+            // Every known word is measured against every unknown one. This
+            // counter is what makes that cost visible under --profile.
+            self.profile.count("candidates_scanned", 1);
             if let Some(d) = bounded_distance(word, candidate, MAX_EDIT_DISTANCE) {
                 let (prefix, suffix) = affinity(word, candidate);
                 scored.push((d, -(prefix as isize), -(suffix as isize), rank, candidate));
             }
         }
+        self.profile.count("candidates_kept", scored.len() as u64);
 
         scored.sort();
         scored.dedup_by(|a, b| a.4 == b.4);
