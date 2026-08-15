@@ -25,6 +25,11 @@ use crate::types::Provenance;
 pub struct Target {
     pub name: &'static str,
     pub path: PathBuf,
+    /// Where we record exactly what this install wrote. Carried on the target
+    /// rather than derived from a global data dir, so it can't be shared
+    /// state — deriving it made concurrent tests race over one real file, and
+    /// pointed the suite at the user's actual data directory.
+    pub manifest: PathBuf,
     /// True when the file is ours alone, so uninstall can just delete it.
     /// False when it's shared with the user's own additions.
     pub owned: bool,
@@ -53,6 +58,7 @@ pub fn targets() -> Vec<Target> {
     out.push(Target {
         name: "vscode",
         path: data_dir().join("vocabulist.txt"),
+        manifest: manifest_path("vscode"),
         owned: true,
         note: "add to settings.json under cSpell.customDictionaries",
     });
@@ -66,6 +72,7 @@ pub fn targets() -> Vec<Target> {
                 .join("Library")
                 .join("Spelling")
                 .join("LocalDictionary"),
+            manifest: manifest_path("macos"),
             owned: false,
             note: "restart an app to pick up changes",
         });
@@ -145,7 +152,7 @@ pub fn install(
         report.added = words.len();
         if !dry_run {
             write_all(&target.path, &words)?;
-            write_all(&manifest_path(target.name), &words)?;
+            write_all(&target.manifest, &words)?;
         }
         return Ok(report);
     }
@@ -168,20 +175,18 @@ pub fn install(
 
         // The manifest is cumulative: a word we wrote last run is still ours
         // to remove, even if this run had nothing new to add.
-        let mut owned: BTreeSet<String> = read_lines(&manifest_path(target.name))
-            .into_iter()
-            .collect();
+        let mut owned: BTreeSet<String> = read_lines(&target.manifest).into_iter().collect();
         owned.extend(fresh);
         let owned: Vec<String> = owned.into_iter().collect();
-        write_all(&manifest_path(target.name), &owned)?;
+        write_all(&target.manifest, &owned)?;
     }
     Ok(report)
 }
 
 /// Remove exactly the words this tool wrote, leaving the user's own alone.
 pub fn uninstall(target: &Target, dry_run: bool) -> Result<SyncReport, Box<dyn std::error::Error>> {
-    let manifest = manifest_path(target.name);
-    let ours: BTreeSet<String> = read_lines(&manifest).into_iter().collect();
+    let manifest = &target.manifest;
+    let ours: BTreeSet<String> = read_lines(manifest).into_iter().collect();
     let mut report = SyncReport {
         target: target.name.to_string(),
         path: target.path.display().to_string(),
@@ -197,7 +202,7 @@ pub fn uninstall(target: &Target, dry_run: bool) -> Result<SyncReport, Box<dyn s
         report.removed = ours.len();
         if !dry_run {
             let _ = std::fs::remove_file(&target.path);
-            let _ = std::fs::remove_file(&manifest);
+            let _ = std::fs::remove_file(manifest);
         }
         return Ok(report);
     }
@@ -213,7 +218,7 @@ pub fn uninstall(target: &Target, dry_run: bool) -> Result<SyncReport, Box<dyn s
 
     if !dry_run {
         write_all(&target.path, &kept)?;
-        let _ = std::fs::remove_file(&manifest);
+        let _ = std::fs::remove_file(manifest);
     }
     Ok(report)
 }
@@ -240,10 +245,13 @@ mod tests {
         dir
     }
 
+    /// Every path a test touches lives under its own scratch dir — including
+    /// the manifest, which is why it's a field rather than a global lookup.
     fn shared_target(dir: &Path) -> Target {
         Target {
             name: "test-shared",
             path: dir.join("LocalDictionary"),
+            manifest: dir.join("manifest.txt"),
             owned: false,
             note: "",
         }
@@ -265,11 +273,7 @@ mod tests {
         let target = shared_target(&dir);
         // The user learned one word; we wrote two.
         std::fs::write(&target.path, "handwritten\ncontextdb\niriq\n").unwrap();
-        write_all(
-            &manifest_path(target.name),
-            &["contextdb".into(), "iriq".into()],
-        )
-        .unwrap();
+        write_all(&target.manifest, &["contextdb".into(), "iriq".into()]).unwrap();
 
         let report = uninstall(&target, false).unwrap();
         assert_eq!(report.removed, 2);
@@ -281,7 +285,7 @@ mod tests {
         let dir = scratch("dryrun");
         let target = shared_target(&dir);
         std::fs::write(&target.path, "handwritten\ncontextdb\n").unwrap();
-        write_all(&manifest_path(target.name), &["contextdb".into()]).unwrap();
+        write_all(&target.manifest, &["contextdb".into()]).unwrap();
 
         let report = uninstall(&target, true).unwrap();
         assert_eq!(report.removed, 1);
@@ -294,10 +298,10 @@ mod tests {
         let target = Target {
             name: "test-absent",
             path: dir.join("nope"),
+            manifest: dir.join("manifest.txt"),
             owned: false,
             note: "",
         };
-        let _ = std::fs::remove_file(manifest_path(target.name));
         let report = uninstall(&target, false).unwrap();
         assert!(report.skipped.is_some());
     }
