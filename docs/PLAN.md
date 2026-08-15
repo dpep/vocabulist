@@ -284,21 +284,34 @@ automatically, and by what test?
 
 ## 11. Integration surfaces
 
-**Tier 1 — write the file.** Several checkers keep their personal dictionary as
-a newline-delimited file. A `sync` subcommand exports one lexicon to N targets,
-idempotently. This is how you "upgrade the built-in checker" for a fraction of
-the cost of replacing it.
+**Tier 1 — write the file.** ✅ Shipped as `vocab sync` / `vocab unsync`.
+Several checkers keep their personal dictionary as a newline-delimited file, so
+one lexicon exports to N targets idempotently. This is how you "upgrade the
+built-in checker" for a fraction of the cost of replacing it.
 
-- VS Code / `cSpell` — via `cSpell.customDictionaries` pointing at a file we
-  own, rather than writing into the user's JSONC settings
-- macOS `~/Library/Spelling/LocalDictionary` — feeds `NSSpellChecker`, so Mail,
-  Notes, TextEdit, and Safari all benefit. Read at app launch, so
-  eventually-consistent
-- Chromium `Custom Dictionary.txt` — covers Chrome, Slack desktop, and every
-  web textarea. Chrome rewrites the file on exit, so writes are best-effort
+- **VS Code / cSpell** — a file we own, referenced from
+  `cSpell.customDictionaries`. Deliberately *not* a rewrite of the user's
+  `settings.json`: that file is JSONC and theirs, and mechanical edits lose
+  comments.
+- **macOS `~/Library/Spelling/LocalDictionary`** — feeds `NSSpellChecker`, so
+  Mail, Notes, TextEdit, and Safari all benefit. Read at app launch, so
+  eventually-consistent rather than live.
+- **Chromium `Custom Dictionary.txt`** — deferred. It would cover Chrome, Slack
+  desktop, and every web textarea, but the file carries a trailing
+  `checksum_v1` line and Chrome is understood to discard the dictionary when
+  that doesn't match, so a naive append may silently disable it. **Verify
+  before implementing** — this is the one target that can fail closed and
+  silently.
 
-Every export is a **lossy projection** — a flat membership set. The rich store
-stays rich; the dumbest consumer must not shape the schema.
+**Uninstall must be exact.** These files are shared with words the user added
+themselves — macOS writes there on every "Learn Spelling". So each install
+records a sidecar manifest of precisely what it wrote, and uninstall removes
+only those lines. Sentinel comment lines would be simpler but pollute a file
+where every line is treated as a word.
+
+Every export is a **lossy projection** — a flat membership set, filtered to
+what an ordinary dictionary doesn't already know. The rich store stays rich;
+the dumbest consumer must not shape the schema.
 
 **Tier 2 — be the checker.** An LSP server serves VS Code, Neovim, Zed, and
 Helix from one implementation, and its "add to lexicon" code action is the
@@ -326,6 +339,43 @@ place: finding a semantic neighbor *within your lexicon* can't be done by
 counting, because the substitute may never co-occur with the original. That's
 phase 3, and `ae`'s `embed.rs` (ONNX with a deterministic hash fallback) is the
 model to copy. Nothing before then needs a model download.
+
+## 12a. Performance, and the size of the backstop **[open]**
+
+Measured with `--profile` on a 2,807-word lexicon:
+
+| Path | Cost | Note |
+|---|---|---|
+| `capture` (the hook path) | ~2ms | Already fine; hooks measure ~5ms including spawn |
+| `check`, all words known | ~6ms | The backstop is never read |
+| `check`, one unknown word | ~60ms | Dominated by reading 236k dictionary words |
+
+The backstop is loaded lazily for exactly this reason — it's the single
+largest cost and it's usually unnecessary. What remains is two problems worth
+separating:
+
+**Loading 236k words is disproportionate.** A person's working vocabulary is
+a fraction of that, and the tail is words nobody writes. But the fix isn't
+only about speed — the huge list is also a *quality* problem. `/usr/share/dict/words`
+carries no frequency data, so `smal` gets `small`, `smalm`, and `smalt` as
+equally-ranked candidates. A **frequency-ranked list of the top ~30–50k words**
+would shrink the load *and* let common words outrank obscure ones, which is
+the better win. That single change addresses both, and should come before any
+clever indexing.
+
+**Scanning every candidate per unknown word.** ~474k distance computations for
+two unknowns. The boring fixes are the right ones: bucket candidates by length
+(a ±2 filter applied *before* the scan, not inside it), band the DP to the
+|i−j| ≤ 2 diagonal since max distance is fixed, and hoist the per-candidate
+allocations. Together roughly an order of magnitude, with no new abstractions.
+
+**Deliberately not doing yet:** BK-trees and SymSpell-style deletion
+neighborhoods. `vocab` is a per-invocation CLI, so any index dies with the
+process — a distance-2 delete neighborhood over 236k words costs seconds to
+build and tens of MB to hold, which would have to be persisted, coupling a
+derived index to the schema and to dictionary-file invalidation. These earn
+their keep in the Phase 4 LSP, which is a long-lived process worth amortizing
+into. Not before.
 
 ## 13. Roadmap
 
