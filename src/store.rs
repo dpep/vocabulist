@@ -342,6 +342,46 @@ impl Store {
         rows.collect()
     }
 
+    /// Word → occurrence count, optionally scoped to one register.
+    ///
+    /// Unscoped this reads `lexicon.count`, which includes words seeded from
+    /// ground truth at count 0 — those are vocabulary you *have*, not
+    /// vocabulary you *used*, so they contribute nothing to frequency and are
+    /// dropped here.
+    pub fn word_counts(
+        &self,
+        register: Option<Register>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let mut out = std::collections::HashMap::new();
+        match register {
+            Some(r) => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT word, count FROM word_registers WHERE register = ?1 AND count > 0",
+                )?;
+                let rows = stmt.query_map(params![r.as_str()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+                })?;
+                for row in rows {
+                    let (word, count) = row?;
+                    out.insert(word, count);
+                }
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT word, count FROM lexicon WHERE count > 0")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+                })?;
+                for row in rows {
+                    let (word, count) = row?;
+                    out.insert(word, count);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub fn stats(&self) -> Result<StatsPayload> {
         let words = self
             .conn

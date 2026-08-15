@@ -139,6 +139,18 @@ pub enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Measure vocabulary and linguistic complexity — for a text, or for
+    /// everything captured so far.
+    Analyze {
+        /// Text to analyze. Omit with --lexicon, or pipe via stdin.
+        text: Option<String>,
+        /// Analyze the accumulated corpus instead of a text.
+        #[arg(long)]
+        lexicon: bool,
+        /// Limit corpus analysis to one register (one voice you write in).
+        #[arg(short, long)]
+        register: Option<String>,
+    },
     /// Claude Code hook handler. Reads the hook payload on stdin; always
     /// exits 0 so a hook never blocks the user.
     Hook {
@@ -353,6 +365,43 @@ fn dispatch_inner(
             }
             if !cli.quiet {
                 output::render_sync(&mut out, &reports, *dry_run, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Analyze {
+            text,
+            lexicon,
+            register,
+        }) => {
+            let report = if *lexicon {
+                let register = match register {
+                    Some(r) => {
+                        Some(Register::parse(r).ok_or_else(|| format!("unknown register: {r}"))?)
+                    }
+                    None => None,
+                };
+                let scope =
+                    register.map_or("lexicon".to_string(), |r| format!("lexicon:{}", r.as_str()));
+                let counts = store.word_counts(register)?;
+                crate::complexity::from_counts(&scope, &counts)
+            } else {
+                let body = match text {
+                    Some(t) => t.clone(),
+                    None => match &cli.file {
+                        Some(path) => std::fs::read_to_string(path)?,
+                        None => read_stdin()?,
+                    },
+                };
+                if body.trim().is_empty() {
+                    return Err(
+                        "nothing to analyze (pass text, --file, stdin, or --lexicon)".into(),
+                    );
+                }
+                crate::complexity::from_text("text", &body)
+            };
+            if !cli.quiet {
+                output::render_analysis(&mut out, &report, format)?;
             }
             Ok(ExitCode::SUCCESS)
         }

@@ -253,6 +253,66 @@ fn emit(out: &mut impl Write, value: &serde_json::Value, format: Format) -> std:
     }
 }
 
+pub fn render_analysis(
+    out: &mut impl Write,
+    report: &crate::complexity::Report,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            let v = &report.vocabulary;
+            writeln!(out, "{}", report.scope)?;
+            writeln!(out, "  {:<22} {:>10}", "tokens", v.tokens)?;
+            writeln!(out, "  {:<22} {:>10}", "types", v.types)?;
+            writeln!(
+                out,
+                "  {:<22} {:>10.3}",
+                "type-token ratio", v.type_token_ratio
+            )?;
+            writeln!(out, "  {:<22} {:>10.2}", "guiraud R", v.guiraud_r)?;
+            writeln!(out, "  {:<22} {:>10.3}", "hapax ratio", v.hapax_ratio)?;
+            writeln!(
+                out,
+                "  {:<22} {:>10.2}",
+                "mean word length", v.mean_word_length
+            )?;
+            writeln!(
+                out,
+                "  {:<22} {:>10.3}",
+                "long word ratio", v.long_word_ratio
+            )?;
+
+            match &report.readability {
+                Some(r) => {
+                    writeln!(out, "\n  {:<22} {:>10}", "sentences", r.sentences)?;
+                    writeln!(
+                        out,
+                        "  {:<22} {:>10.2}",
+                        "mean sentence length", r.mean_sentence_length
+                    )?;
+                    writeln!(
+                        out,
+                        "  {:<22} {:>10.2}",
+                        "syllables per word", r.mean_syllables_per_word
+                    )?;
+                    writeln!(
+                        out,
+                        "  {:<22} {:>10.1}",
+                        "flesch reading ease", r.flesch_reading_ease
+                    )
+                }
+                // Say why, rather than leaving a silent gap.
+                None => writeln!(
+                    out,
+                    "\n  (no sentence metrics — processing keeps counts, not prose)"
+                ),
+            }
+        }
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(report).unwrap()),
+        Format::Ndjson => writeln!(out, "{}", serde_json::to_string(report).unwrap()),
+    }
+}
+
 /// A command result — success or failure — in the caller's format.
 pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::Result<()> {
     match format {

@@ -119,9 +119,19 @@ processed 1
 ```
 
 Text is tracked per **register** — `prompt`, `slack`, `email`, `commit`, `pr`,
-`doc`, `code`. A single "writing style" is a fiction: prompts are terse and
-imperative, docs are not, and conflating them produces a voice that exists
-nowhere.
+`doc`, `code`.
+
+> **register** *(linguistics)* — the variety of language a person uses in a
+> particular setting, and the way it shifts with audience, medium, and
+> purpose. The same speaker has a formal register and a casual one, and moves
+> between them without effort or awareness. It is *not* the same as the
+> source: two emails, one to a colleague and one to a vendor, come from the
+> same place and are written in different registers.
+
+A single "writing style" is a fiction: prompts are terse and imperative, docs
+are not, and averaging them produces a voice that exists nowhere. Counts stay
+split, and the capture channel labels the register for free — a Slack send and
+a commit message arrive through different paths — so this needs no classifier.
 
 Assistant-drafted text is recognized by its watermarks and never learned from —
 it's about your work, but it isn't in your voice.
@@ -130,6 +140,24 @@ it's about your work, but it isn't in your voice.
 $ vocab capture -r pr "$(cat pr-body.md)"
 captured as assistant (co-authored-by: claude)
 ```
+
+## Measuring complexity
+
+`analyze` reports vocabulary and readability metrics — for a text, or for
+everything captured so far:
+
+```sh
+$ vocab analyze "We ship small, focused changes. Simple beats clever."
+$ vocab analyze --lexicon --register slack
+```
+
+The headline number is **Guiraud's R** (`types / √tokens`) rather than the more
+familiar type-token ratio, because TTR falls as a sample gets longer and so
+can't compare texts of different sizes.
+
+Corpus mode reports no sentence metrics, and says so rather than leaving a
+silent gap: processing keeps counts and drops the prose, so anything below the
+word can't be recovered afterward. That's the cost of not being an archive.
 
 ## Built for pipes and agents
 

@@ -6,6 +6,7 @@
 
 pub mod check;
 pub mod cli;
+pub mod complexity;
 pub mod contraction;
 pub mod dict;
 pub mod hook;
