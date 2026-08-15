@@ -81,6 +81,10 @@ pub struct Cli {
     /// Suppress stdout (the work still happens).
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Print a shell completion script (bash, zsh, fish, elvish, powershell).
+    #[arg(long, value_name = "SHELL")]
+    pub completions: Option<clap_complete::Shell>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -187,6 +191,13 @@ pub fn run() -> ExitCode {
         })
         .format_timestamp(None)
         .init();
+
+    // Before anything touches the store — generating completions must work
+    // on a machine that has never run `vocab seed`.
+    if let Some(shell) = cli.completions {
+        clap_complete::generate(shell, &mut Cli::command(), "vocab", &mut io::stdout());
+        return ExitCode::SUCCESS;
+    }
 
     match dispatch(&cli) {
         Ok(code) => code,
@@ -462,7 +473,10 @@ fn process_one(
             if !text::is_prose_line(line) {
                 continue;
             }
-            let masked = text::mask_non_prose(line);
+            // Same normalization the checker applies, so a word captured
+            // from Slack (curly apostrophe) counts as the word it is.
+            let line = text::normalize_typography(line);
+            let masked = text::mask_non_prose(&line);
             let tokens: Vec<String> = text::tokenize(&masked)
                 .iter()
                 .map(|t| text::normalize(&t.text))

@@ -122,7 +122,8 @@ impl Checker {
             return Vec::new();
         }
         self.profile.count("lines_checked", 1);
-        let masked = text::mask_non_prose(line);
+        let line = text::normalize_typography(line);
+        let masked = text::mask_non_prose(&line);
         let tokens = text::tokenize(&masked);
 
         let normalized: Vec<String> = tokens.iter().map(|t| text::normalize(&t.text)).collect();
@@ -135,6 +136,21 @@ impl Checker {
             }
             self.profile.count("tokens_checked", 1);
             let word = &normalized[i];
+
+            // Before the known-word gate, not after: `dont`, `didnt`, and
+            // `thats` are all *in* the system word list, so gating on
+            // "unknown" made this unreachable for the words it targets.
+            if let Some(fixed) = crate::contraction::expand(word) {
+                findings.push(Finding {
+                    kind: FindingKind::Contraction,
+                    word: token.text.clone(),
+                    line: line_no,
+                    col: token.col,
+                    suggestions: vec![fixed.to_string()],
+                    confidence: crate::contraction::CONFIDENCE,
+                });
+                continue;
+            }
 
             if !self.knows(word) {
                 findings.push(self.unknown_finding(token, word, line_no));
@@ -160,20 +176,6 @@ impl Checker {
     }
 
     fn unknown_finding(&self, token: &Token, word: &str, line_no: usize) -> Finding {
-        // Checked before the edit-distance scan: the mapping is exact, so it's
-        // both a better answer and a skipped full-lexicon walk. Edit distance
-        // would otherwise "correct" `dont` to `font`, since the apostrophe
-        // form isn't in the word list at all.
-        if let Some(fixed) = crate::contraction::expand(word) {
-            return Finding {
-                kind: FindingKind::Contraction,
-                word: token.text.clone(),
-                line: line_no,
-                col: token.col,
-                suggestions: vec![fixed.to_string()],
-                confidence: crate::contraction::CONFIDENCE,
-            };
-        }
         let suggestions = self.suggest(word);
         // A word with a near neighbour is more likely a typo than a coinage;
         // one with no neighbour at all is probably jargon we haven't met.
@@ -330,6 +332,36 @@ mod tests {
         assert_eq!(f[0].kind, FindingKind::Contraction);
         assert_eq!(f[0].suggestions, vec!["don't"]);
         assert!(f[0].confidence > 0.8);
+    }
+
+    #[test]
+    fn contractions_are_caught_even_when_the_word_list_contains_them() {
+        // `dont`, `didnt` and `thats` are all in /usr/share/dict/words, so a
+        // check gated on "unknown word" would never reach them.
+        let c = checker(&[], &["we", "dont", "ship", "that"]);
+        let f = c.check_line("we dont ship that", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind, FindingKind::Contraction);
+        assert_eq!(f[0].suggestions, vec!["don't"]);
+    }
+
+    #[test]
+    fn a_curly_apostrophe_reads_as_the_same_word() {
+        // What macOS, Slack, and Gmail actually emit.
+        let c = checker(&[], &["we", "do", "ship", "that"]);
+        assert!(
+            c.check_line("we don\u{2019}t ship that", 1, &mut no_evidence)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn columns_are_character_positions() {
+        let c = checker(&[], &["caf\u{e9}", "the"]);
+        // "café the zzzqx" — byte offsets would drift by the accent.
+        let f = c.check_line("caf\u{e9} the zzzqx", 1, &mut no_evidence);
+        assert_eq!(f[0].word, "zzzqx");
+        assert_eq!(f[0].col, 10);
     }
 
     #[test]

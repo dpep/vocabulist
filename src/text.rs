@@ -5,11 +5,36 @@
 //! file paths. Skipping those up front is worth more than any amount of
 //! clever ranking downstream.
 
+/// Fold smart typography down to its ASCII equivalent.
+///
+/// This is not "supporting Unicode" — it's handling English as editors
+/// actually produce it. macOS, Slack, and Gmail all autocorrect `'` to `’`,
+/// so captured prose is full of curly quotes; left alone, `don’t` tokenizes
+/// as `don` + `t` and splits the corpus across two spellings of the same
+/// word. Every mapping here is one char to one char, so column positions
+/// survive unchanged.
+pub fn normalize_typography(line: &str) -> String {
+    line.chars()
+        .map(|c| match c {
+            '\u{2019}' | '\u{02BC}' => '\'', // right single quote, modifier apostrophe
+            '\u{2018}' => '\'',              // left single quote
+            '\u{201C}' | '\u{201D}' => '"',  // curly double quotes
+            '\u{2013}' | '\u{2014}' => '-',  // en dash, em dash
+            '\u{00A0}' => ' ',               // non-breaking space
+            other => other,
+        })
+        .collect()
+}
+
 /// One token lifted out of a line, with where it sat.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub text: String,
-    /// 1-based column of the first byte.
+    /// 1-based **character** column. Characters, not bytes, because tokens
+    /// are lifted from a masked copy of the line — masking replaces runs
+    /// (possibly multibyte) with single-byte spaces, so byte offsets there
+    /// stop matching the original. Char counts survive both masking and
+    /// typography folding.
     pub col: usize,
 }
 
@@ -19,25 +44,37 @@ pub struct Token {
 pub fn tokenize(line: &str) -> Vec<Token> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
+    // Byte offset → char offset, so tokens can report char columns.
+    let char_of: std::collections::HashMap<usize, usize> = line
+        .char_indices()
+        .enumerate()
+        .map(|(n, (byte, _))| (byte, n))
+        .collect();
 
     for (i, ch) in line.char_indices() {
         let wordish = ch.is_alphanumeric() || ch == '_' || ch == '\'' || ch == '-';
         match (wordish, start) {
             (true, None) => start = Some(i),
             (false, Some(s)) => {
-                push_token(&mut out, line, s, i);
+                push_token(&mut out, line, s, i, &char_of);
                 start = None;
             }
             _ => {}
         }
     }
     if let Some(s) = start {
-        push_token(&mut out, line, s, line.len());
+        push_token(&mut out, line, s, line.len(), &char_of);
     }
     out
 }
 
-fn push_token(out: &mut Vec<Token>, line: &str, start: usize, end: usize) {
+fn push_token(
+    out: &mut Vec<Token>,
+    line: &str,
+    start: usize,
+    end: usize,
+    char_of: &std::collections::HashMap<usize, usize>,
+) {
     // Leading/trailing punctuation-ish characters aren't part of the word:
     // `--flag` and `don't.` should surface as `flag` and `don't`.
     let raw = &line[start..end];
@@ -46,9 +83,10 @@ fn push_token(out: &mut Vec<Token>, line: &str, start: usize, end: usize) {
         return;
     }
     let offset = raw.find(trimmed).unwrap_or(0);
+    let byte = start + offset;
     out.push(Token {
         text: trimmed.to_string(),
-        col: start + offset + 1,
+        col: char_of.get(&byte).copied().unwrap_or(byte) + 1,
     });
 }
 
