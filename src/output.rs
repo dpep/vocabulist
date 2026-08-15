@@ -133,13 +133,13 @@ pub fn render_stats(
             writeln!(out, "spooled: {}", stats.spooled)?;
             if !stats.by_provenance.is_empty() {
                 writeln!(out, "\nby provenance:")?;
-                for (name, count) in &stats.by_provenance {
+                for (name, count) in sorted_desc(&stats.by_provenance) {
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
             if !stats.by_register.is_empty() {
                 writeln!(out, "\nby register:")?;
-                for (name, count) in &stats.by_register {
+                for (name, count) in sorted_desc(&stats.by_register) {
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
@@ -225,6 +225,15 @@ pub fn render_sync(
             emit(out, &json!(rows), format)
         }
     }
+}
+
+/// Biggest first, for human reading. The payload itself is a map — keyed by
+/// name so JSON consumers get an object — so display order is a rendering
+/// concern rather than something the data has to carry.
+fn sorted_desc(counts: &std::collections::BTreeMap<String, i64>) -> Vec<(&String, &i64)> {
+    let mut rows: Vec<_> = counts.iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    rows
 }
 
 /// Write a JSON value in the caller's flavor: pretty for `--json`, compact

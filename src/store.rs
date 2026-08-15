@@ -358,14 +358,14 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT provenance, COUNT(*) FROM lexicon GROUP BY provenance ORDER BY 2 DESC",
         )?;
-        let by_provenance: Vec<(String, i64)> = stmt
+        let by_provenance: std::collections::BTreeMap<String, i64> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_>>()?;
 
         let mut stmt = self.conn.prepare(
             "SELECT register, SUM(count) FROM word_registers GROUP BY register ORDER BY 2 DESC",
         )?;
-        let by_register: Vec<(String, i64)> = stmt
+        let by_register: std::collections::BTreeMap<String, i64> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_>>()?;
 

@@ -3,6 +3,8 @@
 //! Field names here are stable — consumers parse them, so renames are
 //! breaking changes.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Where a word came from. Ordered by how deliberate the evidence is: a repo
@@ -190,8 +192,11 @@ pub struct StatsPayload {
     pub words: i64,
     pub ngrams: i64,
     pub spooled: i64,
-    pub by_provenance: Vec<(String, i64)>,
-    pub by_register: Vec<(String, i64)>,
+    /// Keyed maps rather than arrays of pairs: `{"installed": 640}` is what a
+    /// JSON consumer expects, and `[["installed", 640]]` would have been
+    /// awkward to fix once anyone scripted against it.
+    pub by_provenance: BTreeMap<String, i64>,
+    pub by_register: BTreeMap<String, i64>,
 }
 
 /// A generic command result, so `--json` works on every command and not just
