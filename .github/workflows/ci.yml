@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    types: [ opened, edited, synchronize ]
+
+jobs:
+  test:
+    name: Rust ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [ stable ]
+
+    steps:
+      - name: clone ${{ github.repository }}
+        uses: actions/checkout@v6
+
+      - name: setup Rust ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The backstop dictionary is the system word list. Ubuntu runners don't
+      # ship one, and the checker degrades to lexicon-only without it — which
+      # would quietly skip the dictionary paths in the test suite.
+      - name: install word list
+        run: sudo apt-get update && sudo apt-get install -y wamerican
+
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test
+
+      - name: release build
+        run: cargo build --release

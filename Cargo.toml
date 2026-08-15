@@ -1,0 +1,29 @@
+[package]
+name = "vocabulist"
+version = "0.1.0"
+edition = "2024"
+description = "Vocabulist — a live personal dictionary, learned from the words you actually use."
+license = "MIT"
+repository = "https://github.com/dpep/vocabulist"
+keywords = ["spelling", "dictionary", "lexicon", "linguistics", "cli"]
+categories = ["command-line-utilities", "text-processing"]
+
+# Published as `vocabulist`; the binary is `vocab`.
+[[bin]]
+name = "vocab"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+log = "0.4"
+env_logger = "0.11"
+
+# Release builds optimize for a small single binary: strip symbols/debug info
+# and let LTO + one codegen unit drop dead code.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
