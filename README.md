@@ -54,6 +54,15 @@ skips anything that isn't plausibly prose — short tokens, anything with a
 digit, ALLCAPS, camelCase, URLs, paths, email addresses, inline code, fenced
 blocks, indented lines — before it forms an opinion.
 
+## Contractions
+
+`dont` → `don't`, as its own high-confidence finding rather than a guess. Edit
+distance handles these badly, because the apostrophe form usually isn't in the
+word list at all — left alone, `dont` gets "corrected" to `font`.
+
+Only forms that aren't real words are in the table. `cant`, `wont`, `its`, and
+`lets` all need to know the sentence, which is the next problem.
+
 ## Real-word errors
 
 The typos that survive into sent mail are the ones that are spelled fine:
@@ -77,6 +86,24 @@ $ vocab -j "apart form the rest"
 
 This gets better strictly as your corpus grows, and says nothing at all until
 it has evidence — a tool with no evidence should have no opinion.
+
+## Feeding the checkers you already run
+
+You don't have to switch tools. Several checkers keep their personal dictionary
+as a plain file, so `sync` writes your lexicon into them:
+
+```sh
+$ vocab sync --dry-run
+vscode     +1988   -0      ~/.local/share/vocabulist/vocabulist.txt
+macos      +1988   -0      ~/Library/Spelling/LocalDictionary
+```
+
+The macOS target is the one that pays off quietly — it backs `NSSpellChecker`,
+so Mail, Notes, TextEdit, and Safari all stop flagging your jargon.
+
+`vocab unsync` reverses it. Each install records a sidecar manifest of exactly
+what it wrote, so uninstall removes only those words and never touches ones you
+added yourself.
 
 ## Learning
 
