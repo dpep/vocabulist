@@ -1,3 +1,5 @@
+# Auto-approves Dependabot PRs and enables auto-merge for minor/patch updates.
+# Requires allow_auto_merge on the repo.
 name: Dependabot automations
 on: pull_request
 
