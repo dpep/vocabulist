@@ -379,7 +379,7 @@ neighborhoods. `vocab` is a per-invocation CLI, so any index dies with the
 process — a distance-2 delete neighborhood over 236k words costs seconds to
 build and tens of MB to hold, which would have to be persisted, coupling a
 derived index to the schema and to dictionary-file invalidation. These earn
-their keep in the Phase 4 LSP, which is a long-lived process worth amortizing
+their keep in the Phase 5 LSP, which is a long-lived process worth amortizing
 into. Not before.
 
 ## 12b. Cold start, and what didn't work **[open]**
@@ -408,6 +408,53 @@ inversion the whole tool rests on: your evidence over the general prior.
 edit-distance-1 neighbors derived from the dictionary, so the set scales past
 what anyone would enumerate. That only identifies *candidates*, though — the
 collocate table is still what decides between them.
+
+## 12d. Where precision actually goes **[measured]**
+
+Measured against held-out technical prose — four upstream READMEs never mined
+into any lexicon, corrupted at known positions by `vocab eval`:
+
+| | |
+|---|---|
+| recall | 0.63 |
+| precision | 0.77 |
+| correction rate | 0.68 (of caught typos, the right word was ranked first) |
+
+Precision is the number that matters here, and 0.77 is well under what
+"reluctance is the product" demands. The useful part is *what* the false
+positives are. Sampled, they run:
+
+`mdbook`, `repology`, `burntsushi`, `ugrep`, `zstandard`, `passthru`,
+`substr`, `winget-pkgs`, `nixpkgs`, `voidlinux`, `iterator`
+
+**Fourteen of fifteen are names** — projects, orgs, package managers, and
+jargon. One, `iterator`, is an ordinary modern word that 1934's Webster's
+doesn't have.
+
+This reorders the roadmap. The plan had been to attack precision with a bigger,
+frequency-ranked word list, and that would have bought almost nothing: no word
+list will ever contain `burntsushi` or `nixpkgs`, and adding entries can only
+help the `iterator` case, which is 1-in-15 of the error. The dictionary is not
+the binding constraint. **Unknown-but-not-a-word is.**
+
+The signals that separate the two are already in reach and cost no download:
+
+- **Compounds of known words** — `nixpkgs`, `voidlinux`, `winget-pkgs`,
+  `zstandard` all decompose via `text::split_identifier`, which exists.
+- **Position** — a token appearing in a URL, a repo path, or a code span is a
+  name by context, and `mask_non_prose` already finds those regions.
+- **Shape across the document** — a token capitalized anywhere in the text is
+  a name everywhere in it, which `is_proper_noun` currently only decides
+  per-occurrence.
+
+Each is an *accept* rule, which is the direction new heuristics are supposed to
+default. The `Kind` axis to record the answer already exists; nothing yet
+derives it for a word first seen in someone else's prose.
+
+Note also that real-word errors are essentially unmeasured — the injector
+produced one and the checker caught none. That is the cold-start problem in
+§12b, not a regression, but it means the headline recall describes
+single-character damage only.
 
 ## 12c. Code and comments **[open]**
 
@@ -441,11 +488,17 @@ Hooks in the myclaude plugin: `UserPromptSubmit` (prompt register),
 uses: the writes here are short and infrequent, so a lock is enough and a
 socket would be machinery without a purpose.
 
-**Phase 3 — export + profile**
+**Phase 3 — precision** ⬅ *next, per §12d*
+Name detection: compound decomposition, positional evidence, and
+document-level capitalization, so `nixpkgs` stops reading as a typo. Then the
+modern word list for the residual `iterator` case, and the collocate cue table
+from §12b to give real-word checking anything to say at all.
+
+**Phase 4 — export + profile**
 `vocab sync` to the Tier 1 targets. The stylometry pass and the linguist persona
 that renders a voice document from lexicon + collocations + exemplars.
 
-**Phase 4 — LSP + generative**
+**Phase 5 — LSP + generative**
 Language server with an add-to-lexicon code action. Embedding-backed
 substitution for drafting.
 
