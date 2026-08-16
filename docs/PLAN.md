@@ -99,9 +99,10 @@ fenced blocks, indented lines, and any line with more punctuation than letters.
 
 ## 5. Capture: spool, not firehose
 
-Capture stages text in a `spool` table. Processing derives counts from it. The
-raw text is then **dropped** — the row survives with its body emptied, so
-dedup and provenance still work.
+Capture stages text in a `spool` table. Processing derives counts from it, and
+the row is then **deleted** — body and all. Nothing reads a processed row, so
+a tombstone would be unbounded growth for nothing; dedup of re-read messages
+lives in a separate `captured` table keyed by each message's own identifier.
 
 This is a deliberate divergence from a general-purpose firehose, which retains
 blobs precisely so it can re-extract when parsers improve. That trade is right
@@ -431,12 +432,14 @@ where the parse tree needed to separate comment from code already lives.
 Store schema, provenance model, ground-truth seeding, the conservative checker,
 real-word mechanism, watermark filtering, `--json`/`--ndjson` throughout.
 
-**Phase 2 — capture**
+**Phase 2 — capture** ✅
 Hooks in the myclaude plugin: `UserPromptSubmit` (prompt register),
 `PostToolUse` filtered to outbound tools only (`create_draft`,
 `slack_send_message`, `gh pr create`, `git commit`). Backfill via
-`vocab capture` for existing repos and sent mail. Leader election over a Unix
-socket, copied from `ae/src/ipc.rs` — no daemon to manage.
+`vocab capture` for existing repos and sent mail. Concurrency is handled by SQLite's
+`BEGIN IMMEDIATE` plus a busy timeout rather than the leader election `ae`
+uses: the writes here are short and infrequent, so a lock is enough and a
+socket would be machinery without a purpose.
 
 **Phase 3 — export + profile**
 `vocab sync` to the Tier 1 targets. The stylometry pass and the linguist persona

@@ -78,8 +78,18 @@ vocabulist/
     check.rs      ← the checker, suggestion ranking, bounded edit distance
     ngram.rs      ← collocations, log-likelihood, real-word confusion sets
     dict.rs       ← system word list + inflection folding (the backstop)
-    text.rs       ← tokenizing and the "don't even look at this" heuristics
+    frequency.rs  ← embedded core list + how common a word is in English
+    text.rs       ← tokenizing, masking, and the shared `prose_words` pipeline
+    contraction.rs← apostrophe-less contractions (`dont` → `don't`)
+    complexity.rs ← vocabulary and readability metrics
     watermark.rs  ← assistant-authored detection
+    hook.rs       ← Claude Code hook handlers
+    inbound.rs    ← the user's own messages, parsed out of tool responses
+    identity.rs   ← which handles are the user's, detected not configured
+    ingest.rs     ← bulk load from JSON on stdin
+    sync.rs       ← export into cSpell and the macOS dictionary
+    eval.rs       ← labeled-corpus measurement (inject typos, score)
+    profile.rs    ← --profile timings and counters
   docs/PLAN.md    ← design contract + roadmap
   docs/RESEARCH.md← prior art, methods, and candidate data sources
   tests/          ← CLI e2e harness
@@ -115,7 +125,10 @@ cargo test`.
 
 ## Schema changes
 
-`store.rs` owns the schema. A schema change updates the storage section of
+`store.rs` owns the schema and `SCHEMA_VERSION`. New *tables* come from the
+`CREATE TABLE IF NOT EXISTS` block; new *columns* need an explicit ALTER in
+`migrate`, because the create block silently won't add them to an existing
+database. Bump `SCHEMA_VERSION` and note the change in
 [docs/PLAN.md](docs/PLAN.md) in the same commit.
 
 ## Landing changes

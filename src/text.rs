@@ -287,6 +287,31 @@ fn mask_around(out: &mut [char], line: &str, needle: char) {
     }
 }
 
+/// The prose words of one line: typography folded, non-prose masked,
+/// tokenized, normalized, and filtered to things that are actually words.
+///
+/// One definition rather than five. This pipeline was copied into the
+/// spool processor, the frequency miner, and the complexity analyzer, and the
+/// copies had drifted: one allowed hyphens and the others didn't, and the
+/// analyzer applied neither masking nor the prose-line test — so `analyze` on
+/// a text counted URL fragments as vocabulary while the corpus path never saw
+/// them, despite the two claiming to be comparable.
+pub fn prose_words(line: &str) -> Vec<String> {
+    if !is_prose_line(line) {
+        return Vec::new();
+    }
+    let masked = mask_non_prose(&normalize_typography(line));
+    tokenize(&masked)
+        .iter()
+        .map(|t| normalize(&t.text))
+        .filter(|w| {
+            w.chars().count() >= 2
+                && w.chars()
+                    .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+        })
+        .collect()
+}
+
 /// Split an identifier into its parts: `rubocop_todo` → `rubocop`, `todo`;
 /// `pattern-engine` → `pattern`, `engine`; `camelCase` → `camel`, `case`.
 /// The whole identifier is a word in its own right — the caller keeps it too.
@@ -386,6 +411,22 @@ mod tests {
         assert!(!is_prose_line("```rust"));
         assert!(!is_prose_line("    let x = 1;"));
         assert!(!is_prose_line("| a | b |"));
+    }
+
+    #[test]
+    fn prose_words_masks_before_counting() {
+        // The analyzer used to skip masking, so a URL's fragments counted as
+        // vocabulary in one mode and not the other.
+        let words = prose_words("see github.com/dpep/polyid for the design");
+        assert!(!words.contains(&"github".to_string()));
+        assert!(!words.contains(&"polyid".to_string()));
+        assert!(words.contains(&"design".to_string()));
+    }
+
+    #[test]
+    fn prose_words_skips_non_prose_lines() {
+        assert!(prose_words("    let x = compute();").is_empty());
+        assert!(prose_words("| a | b |").is_empty());
     }
 
     #[test]

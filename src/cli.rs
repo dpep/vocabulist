@@ -805,25 +805,7 @@ fn process_one(
 /// The prose words of a body, normalized — the shared front half of both
 /// processing paths.
 fn prose_words(body: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in body.lines() {
-        if !text::is_prose_line(line) {
-            continue;
-        }
-        let normalized = text::normalize_typography(line);
-        let masked = text::mask_non_prose(&normalized);
-        for token in text::tokenize(&masked) {
-            let word = text::normalize(&token.text);
-            if word.chars().count() >= 2
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
-            {
-                out.push(word);
-            }
-        }
-    }
-    out
+    body.lines().flat_map(text::prose_words).collect()
 }
 
 /// Fold one body's sentence shape into the running per-register stats.

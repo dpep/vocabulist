@@ -99,13 +99,12 @@ pub fn from_text(scope: &str, text: &str) -> Report {
     let mut counts: HashMap<String, u64> = HashMap::new();
     let mut syllables = 0u64;
 
+    // The same pipeline the corpus path uses. It used to skip masking and the
+    // prose-line test, so a text's URL fragments counted as vocabulary while
+    // the corpus never saw them — two modes claiming to be comparable while
+    // measuring different token populations.
     for line in text.lines() {
-        let normalized = crate::text::normalize_typography(line);
-        for token in crate::text::tokenize(&normalized) {
-            let word = crate::text::normalize(&token.text);
-            if word.chars().count() < 2 || !word.chars().any(|c| c.is_alphabetic()) {
-                continue;
-            }
+        for word in crate::text::prose_words(line) {
             syllables += count_syllables(&word);
             *counts.entry(word).or_insert(0) += 1;
         }
