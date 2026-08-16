@@ -112,15 +112,20 @@ fn read_lines(path: &Path) -> Vec<String> {
 /// dictionary already knows.
 ///
 /// Exporting words the target's own dictionary already has would be pure
-/// bloat — the value is entirely in the jargon it *doesn't* have. Words seen
-/// only once in prose are held back too, since a typo observed once shouldn't
-/// be taught to every editor on the machine.
+/// bloat — the value is entirely in the jargon it *doesn't* have.
+///
+/// The bar for an observed word is **two distinct documents**, not two
+/// occurrences. Repetition inside a single message is worth nothing here: a
+/// typo written three times in one prompt is still one mistake, and teaching
+/// it to every editor on the machine is the most expensive false positive
+/// this tool can produce — it outlives the session and shows up somewhere you
+/// won't connect back to us.
 pub fn exportable(store: &Store) -> rusqlite::Result<Vec<String>> {
     let dictionary = crate::dict::load();
     let mut out = BTreeSet::new();
 
     for entry in store.list(None, usize::MAX)? {
-        let earned = entry.provenance > Provenance::Observed || entry.count >= 2;
+        let earned = entry.provenance > Provenance::Observed || entry.sources >= 2;
         if !earned {
             continue;
         }
