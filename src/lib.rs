@@ -9,6 +9,7 @@ pub mod cli;
 pub mod complexity;
 pub mod contraction;
 pub mod dict;
+pub mod eval;
 pub mod frequency;
 pub mod hook;
 pub mod ingest;

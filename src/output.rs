@@ -387,6 +387,57 @@ pub fn render_ingest(
     }
 }
 
+pub fn render_eval(
+    out: &mut impl Write,
+    report: &crate::eval::EvalReport,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            writeln!(out, "  {:<22} {:>8}", "lines", report.lines)?;
+            writeln!(out, "  {:<22} {:>8}", "injected errors", report.injected)?;
+            writeln!(out, "  {:<22} {:>8}", "findings", report.findings)?;
+            writeln!(out)?;
+            writeln!(out, "  {:<22} {:>8}", "caught", report.caught)?;
+            writeln!(
+                out,
+                "  {:<22} {:>8}",
+                "false positives", report.false_positives
+            )?;
+            writeln!(out)?;
+            writeln!(out, "  {:<22} {:>8.1}%", "recall", report.recall * 100.0)?;
+            writeln!(
+                out,
+                "  {:<22} {:>8.1}%",
+                "precision",
+                report.precision * 100.0
+            )?;
+            writeln!(
+                out,
+                "  {:<22} {:>8.1}%",
+                "correction rate",
+                report.correction_rate * 100.0
+            )?;
+
+            if !report.by_kind.is_empty() {
+                writeln!(out, "\n  by error kind (caught/injected):")?;
+                for (kind, injected, caught) in &report.by_kind {
+                    writeln!(out, "    {kind:<20} {caught:>4}/{injected:<4}")?;
+                }
+            }
+            if !report.false_positive_sample.is_empty() {
+                writeln!(out, "\n  false positives (sample):")?;
+                for line in &report.false_positive_sample {
+                    writeln!(out, "    {line}")?;
+                }
+            }
+            Ok(())
+        }
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(report).unwrap()),
+        Format::Ndjson => writeln!(out, "{}", serde_json::to_string(report).unwrap()),
+    }
+}
+
 /// A command result — success or failure — in the caller's format.
 pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::Result<()> {
     match format {

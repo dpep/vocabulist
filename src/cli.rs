@@ -165,6 +165,20 @@ pub enum Command {
         #[arg(short, long, default_value = "other")]
         register: String,
     },
+    /// Measure the checker against a labeled corpus: corrupt known-good prose
+    /// in known places, then score what gets caught and what gets flagged
+    /// wrongly.
+    Eval {
+        /// Corpus to evaluate against. Defaults to stdin.
+        #[arg(long)]
+        corpus: Option<PathBuf>,
+        /// Corrupt roughly one prose line in this many.
+        #[arg(long, default_value_t = 4)]
+        rate: usize,
+        /// Seed, so a run is reproducible and two runs are comparable.
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+    },
     /// Rank the phrases you actually use, by association strength rather than
     /// raw frequency.
     Phrases {
@@ -459,6 +473,34 @@ fn dispatch_inner(
                 .transaction(|| crate::ingest::run(&store, &records, &selves, default_register))?;
             if !cli.quiet {
                 output::render_ingest(&mut out, &report, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Eval { corpus, rate, seed }) => {
+            let text = match corpus {
+                Some(path) => std::fs::read_to_string(path)?,
+                None => read_stdin()?,
+            };
+            if text.trim().is_empty() {
+                return Err("nothing to evaluate (pass --corpus or pipe stdin)".into());
+            }
+
+            let (mutated, injections) = crate::eval::inject(&text, *rate, *seed);
+            let lexicon: std::collections::HashSet<String> = store.words()?.into_iter().collect();
+            let checker = Checker::with_profile(lexicon, Rc::clone(profile))
+                .with_frequency(store.frequencies()?);
+            let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
+
+            let mut scanner = crate::check::Scanner::new(&checker);
+            let mut findings = Vec::new();
+            for line in mutated.lines() {
+                findings.extend(scanner.feed(line, &mut evidence));
+            }
+
+            let report = crate::eval::score(&findings, &injections, mutated.lines().count());
+            if !cli.quiet {
+                output::render_eval(&mut out, &report, format)?;
             }
             Ok(ExitCode::SUCCESS)
         }
