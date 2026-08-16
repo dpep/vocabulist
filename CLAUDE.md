@@ -84,6 +84,7 @@ vocabulist/
     store.rs      ← SQLite schema, lexicon/ngram/spool/exemplar DAO
     seed.rs       ← ground-truth mining (repos, taps, binaries, manifests)
     check.rs      ← the checker, suggestion ranking, bounded edit distance
+    names.rs      ← names the document reveals, so they don't read as typos
     process.rs    ← spool → counts, and the authorship rule that governs it
     ngram.rs      ← collocations, log-likelihood, real-word confusion sets
     dict.rs       ← system word list + inflection folding (the backstop)

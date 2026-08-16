@@ -414,47 +414,56 @@ collocate table is still what decides between them.
 Measured against held-out technical prose — four upstream READMEs never mined
 into any lexicon, corrupted at known positions by `vocab eval`:
 
-| | |
-|---|---|
-| recall | 0.63 |
-| precision | 0.77 |
-| correction rate | 0.68 (of caught typos, the right word was ranked first) |
+| | before | after |
+|---|---|---|
+| precision | 0.77 | **0.92** |
+| recall | 0.63 | 0.63 |
+| false positives | 30 | 9 |
 
-Precision is the number that matters here, and 0.77 is well under what
-"reluctance is the product" demands. The useful part is *what* the false
-positives are. Sampled, they run:
+Precision is the number this project's first principle cares about, and 0.77
+didn't clear it. What made the difference was not a better dictionary. Sampled,
+the false positives ran `mdbook`, `repology`, `burntsushi`, `ugrep`,
+`zstandard`, `winget-pkgs`, `nixpkgs`, `voidlinux` — **fourteen of fifteen were
+never words**. Growing the word list was next on the roadmap for precision and
+would have addressed one of them.
 
-`mdbook`, `repology`, `burntsushi`, `ugrep`, `zstandard`, `passthru`,
-`substr`, `winget-pkgs`, `nixpkgs`, `voidlinux`, `iterator`
+Two things fixed it, neither of them a data source.
 
-**Fourteen of fifteen are names** — projects, orgs, package managers, and
-jargon. One, `iterator`, is an ordinary modern word that 1934's Webster's
-doesn't have.
+**A masking defect.** `mask_non_prose` located URLs by asking `iriq` for them
+and then searching the line for the string it returned — which works only while
+canonicalization is a no-op. It isn't: `voidlinux.org/p/?a=1` comes back as
+`.../p?a=1`, matches nothing, and the whole URL stays in the text. Using the
+extractor's `original` span instead recovered 9 of the 30. Repeated URLs — the
+markdown badge shape, image and link naming the same target — were also masked
+only once.
 
-This reorders the roadmap. The plan had been to attack precision with a bigger,
-frequency-ranked word list, and that would have bought almost nothing: no word
-list will ever contain `burntsushi` or `nixpkgs`, and adding entries can only
-help the `iterator` case, which is 1-in-15 of the error. The dictionary is not
-the binding constraint. **Unknown-but-not-a-word is.**
+**Names the document gives you.** A README introduces a tool in a table row, an
+install command, or a link, and only then writes a sentence about it. Those
+regions are already located, because masking exists to throw them away; keeping
+what was removed turns the discarded half of every line into a name list.
+`names.rs` accumulates it — from masked spans on prose lines, from every token
+on lines that aren't prose at all, and from proper nouns the check loop already
+identifies — and an unknown word matching one is accepted.
 
-The signals that separate the two are already in reach and cost no download:
+This is an accept-only rule consulted *after* the lexicon, the mined corpus,
+and the dictionary have all declined, which is why a common word landing in the
+set by accident is harmless. It cost nothing in recall: 0.6335 before and after,
+across all three changes.
 
-- **Compounds of known words** — `nixpkgs`, `voidlinux`, `winget-pkgs`,
-  `zstandard` all decompose via `text::split_identifier`, which exists.
-- **Position** — a token appearing in a URL, a repo path, or a code span is a
-  name by context, and `mask_non_prose` already finds those regions.
-- **Shape across the document** — a token capitalized anywhere in the text is
-  a name everywhere in it, which `is_proper_noun` currently only decides
-  per-occurrence.
+It accumulates rather than pre-scanning, so a stream and a file behave the same
+way. The cost is a name introduced *below* its first prose mention — `# axum`
+as the opening heading — which stays unrecognized. A pre-pass would fix it for
+`--file` and the positional argument while leaving piped stdin different, and
+that inconsistency is worse than the residual.
 
-Each is an *accept* rule, which is the direction new heuristics are supposed to
-default. The `Kind` axis to record the answer already exists; nothing yet
-derives it for a word first seen in someone else's prose.
+**What's left is the dictionary after all**, but only now that names are gone:
+six of the nine survivors are ordinary modern English — `iterator`, `sidebar`,
+`systemwide`, `modularity` — absent from a 1934 Webster's. That is the
+frequency-list work, and it is now the whole remaining term.
 
-Note also that real-word errors are essentially unmeasured — the injector
-produced one and the checker caught none. That is the cold-start problem in
-§12b, not a regression, but it means the headline recall describes
-single-character damage only.
+Real-word errors remain essentially unmeasured — the injector produced one and
+the checker caught none. That's the cold-start problem in §12b, and it means
+recall describes single-character damage only.
 
 ## 12c. Code and comments **[open]**
 
@@ -488,10 +497,9 @@ Hooks in the myclaude plugin: `UserPromptSubmit` (prompt register),
 uses: the writes here are short and infrequent, so a lock is enough and a
 socket would be machinery without a purpose.
 
-**Phase 3 — precision** ⬅ *next, per §12d*
-Name detection: compound decomposition, positional evidence, and
-document-level capitalization, so `nixpkgs` stops reading as a typo. Then the
-modern word list for the residual `iterator` case, and the collocate cue table
+**Phase 3 — precision** *(in progress, per §12d)*
+Name detection ✅ — precision 0.77 → 0.92 at no cost in recall. Next: the
+modern word list, which is now the entire residual, and the collocate cue table
 from §12b to give real-word checking anything to say at all.
 
 **Phase 4 — export + profile**

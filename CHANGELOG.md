@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **URLs were only sometimes masked**, so `voidlinux`, `mdbook`, and
+  `repology` were reported as misspelled words. Spans were located by
+  searching the line for the string `iriq` returned, which works only while
+  canonicalization changes nothing — `voidlinux.org/p/?a=1` comes back as
+  `.../p?a=1` and matches nowhere. A repeated URL, the markdown badge shape,
+  was also masked only the first time.
+- **Names the document introduces are no longer flagged.** A README names a
+  tool in a table row, an install command, or a link before writing a sentence
+  about it; those regions were already being located in order to discard them.
+  Keeping them turns the discarded half of every line into a name list, and an
+  unknown word matching one is accepted.
+
+  Together: precision 0.77 → 0.92 against held-out technical prose, with recall
+  unchanged. See `docs/PLAN.md` §12d.
+
 ## 0.4.0 — 2026-08-16
 
 ### Breaking

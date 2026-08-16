@@ -183,3 +183,33 @@ fn quiet_suppresses_stdout_but_keeps_the_exit_code() {
     assert!(out.stdout.is_empty());
     assert_eq!(out.code, 1);
 }
+
+#[test]
+fn a_name_the_document_introduces_is_not_a_misspelling() {
+    let db = scratch_db("names");
+    // The install line names the tool; the sentence below then uses it. Both
+    // orderings matter, so the link-and-mention shape is on one line too.
+    let doc = "\
+$ sudo zypper install ripgrep
+You can install it with zypper today.
+[nixpkgs](https://github.com/NixOS/nixpkgs/blob/master/x.nix) has it as well.
+";
+    let out = run(&db, &["-j"], Some(doc));
+    assert!(!out.stdout.contains("zypper"), "{}", out.stdout);
+    assert!(!out.stdout.contains("nixpkgs"), "{}", out.stdout);
+    assert_eq!(out.code, 0);
+}
+
+#[test]
+fn naming_a_word_does_not_excuse_a_typo_elsewhere() {
+    let db = scratch_db("names-bounded");
+    // The accept rule is keyed to the exact token. A URL full of names must
+    // not turn into a general amnesty for the line.
+    let out = run(
+        &db,
+        &["-j"],
+        Some("see https://github.com/NixOS/nixpkgs for teh details\n"),
+    );
+    assert!(out.stdout.contains("teh"), "{}", out.stdout);
+    assert_eq!(out.code, 1);
+}

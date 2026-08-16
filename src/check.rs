@@ -9,6 +9,7 @@ use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::names::Names;
 use crate::ngram;
 use crate::profile::Profile;
 use crate::text::{self, Token};
@@ -162,6 +163,18 @@ impl Checker {
         }
     }
 
+    /// Check one line as a document unto itself. Test convenience — real
+    /// callers go through `Scanner`, which carries names across lines.
+    #[cfg(test)]
+    fn check_line_alone(
+        &self,
+        line: &str,
+        line_no: usize,
+        evidence: &mut impl FnMut(&str) -> i64,
+    ) -> Vec<Finding> {
+        self.check_line(line, line_no, &mut Names::new(), evidence)
+    }
+
     /// Check one line, returning findings tagged with `line`/`col`.
     ///
     /// `evidence` supplies n-gram counts for the real-word pass; pass a
@@ -170,6 +183,7 @@ impl Checker {
         &self,
         line: &str,
         line_no: usize,
+        names: &mut Names,
         evidence: &mut impl FnMut(&str) -> i64,
     ) -> Vec<Finding> {
         self.profile.count("lines_seen", 1);
@@ -179,6 +193,10 @@ impl Checker {
         self.profile.count("lines_checked", 1);
         let line = text::normalize_typography(line);
         let masked = text::mask_non_prose(&line);
+        // Before checking, not after: a line that links a project and then
+        // names it in prose — the common markdown shape — has to vouch for
+        // itself.
+        names.observe(&line, &masked);
         let tokens = text::tokenize(&masked);
 
         let normalized: Vec<String> = tokens.iter().map(|t| text::normalize(&t.text)).collect();
@@ -196,6 +214,7 @@ impl Checker {
             }
             if text::is_proper_noun(&token.text, starts_sentence) {
                 self.profile.count("proper_nouns_skipped", 1);
+                names.observe_proper_noun(&token.text);
                 continue;
             }
             self.profile.count("tokens_checked", 1);
@@ -220,6 +239,13 @@ impl Checker {
             }
 
             if !self.knows(word) {
+                // Last gate, and an accepting one: the document itself may
+                // have named this in a URL or a code span, which no word list
+                // could have.
+                if names.contains(word) {
+                    self.profile.count("names_skipped", 1);
+                    continue;
+                }
                 findings.push(self.unknown_finding(token, word, line_no));
                 continue;
             }
@@ -402,6 +428,9 @@ pub struct Scanner<'a> {
     fence: Option<String>,
     in_front_matter: bool,
     line_no: usize,
+    /// Names the document has revealed so far. Lives on the scanner, not the
+    /// checker, because it is scoped to one document rather than the machine.
+    names: Names,
 }
 
 impl<'a> Scanner<'a> {
@@ -411,6 +440,7 @@ impl<'a> Scanner<'a> {
             fence: None,
             in_front_matter: false,
             line_no: 0,
+            names: Names::new(),
         }
     }
 
@@ -432,6 +462,14 @@ impl<'a> Scanner<'a> {
             return Vec::new();
         }
 
+        // Every region spelling doesn't apply to is a region full of names.
+        // A README introduces a tool in a table row or an install command and
+        // only then writes a sentence about it, so the lines being skipped
+        // here are what make the prose below them checkable.
+        if self.fence.is_some() || !text::is_prose_line(line) {
+            self.names.observe_code(line);
+        }
+
         // Fences: ``` or ~~~, closed by the same marker. Tracking which one
         // opened the block keeps a ``` inside a ~~~ block from closing it.
         if let Some(marker) = &self.fence {
@@ -445,7 +483,8 @@ impl<'a> Scanner<'a> {
             return Vec::new();
         }
 
-        self.checker.check_line(line, self.line_no, evidence)
+        self.checker
+            .check_line(line, self.line_no, &mut self.names, evidence)
     }
 }
 
@@ -565,7 +604,7 @@ mod tests {
     #[test]
     fn accepts_lexicon_jargon_the_dictionary_never_heard_of() {
         let c = checker(&["contextdb", "rubocop"], &["and", "are", "fine"]);
-        let f = c.check_line("contextdb and rubocop are fine", 1, &mut no_evidence);
+        let f = c.check_line_alone("contextdb and rubocop are fine", 1, &mut no_evidence);
         assert!(f.is_empty(), "unexpected findings: {f:?}");
     }
 
@@ -576,7 +615,7 @@ mod tests {
             &["local", "first"],
             &["well", "known", "long", "term", "design"],
         );
-        let f = c.check_line(
+        let f = c.check_line_alone(
             "a well-known long-term local-first design",
             1,
             &mut no_evidence,
@@ -587,7 +626,7 @@ mod tests {
     #[test]
     fn still_flags_a_compound_whose_part_is_misspelled() {
         let c = checker(&[], &["well", "known", "result"]);
-        let f = c.check_line("a well-knwon result", 1, &mut no_evidence);
+        let f = c.check_line_alone("a well-knwon result", 1, &mut no_evidence);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].word, "well-knwon");
     }
@@ -595,7 +634,7 @@ mod tests {
     #[test]
     fn fixes_contractions_typed_without_an_apostrophe() {
         let c = checker(&[], &["we", "ship", "that"]);
-        let f = c.check_line("we dont ship that", 1, &mut no_evidence);
+        let f = c.check_line_alone("we dont ship that", 1, &mut no_evidence);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].kind, FindingKind::Contraction);
         assert_eq!(words(&f[0].suggestions), vec!["don't"]);
@@ -607,7 +646,7 @@ mod tests {
         // `dont`, `didnt` and `thats` are all in /usr/share/dict/words, so a
         // check gated on "unknown word" would never reach them.
         let c = checker(&[], &["we", "dont", "ship", "that"]);
-        let f = c.check_line("we dont ship that", 1, &mut no_evidence);
+        let f = c.check_line_alone("we dont ship that", 1, &mut no_evidence);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].kind, FindingKind::Contraction);
         assert_eq!(words(&f[0].suggestions), vec!["don't"]);
@@ -618,7 +657,7 @@ mod tests {
         // What macOS, Slack, and Gmail actually emit.
         let c = checker(&[], &["we", "do", "ship", "that"]);
         assert!(
-            c.check_line("we don\u{2019}t ship that", 1, &mut no_evidence)
+            c.check_line_alone("we don\u{2019}t ship that", 1, &mut no_evidence)
                 .is_empty()
         );
     }
@@ -627,7 +666,7 @@ mod tests {
     fn columns_are_character_positions() {
         let c = checker(&[], &["caf\u{e9}", "the"]);
         // "café the zzzqx" — byte offsets would drift by the accent.
-        let f = c.check_line("caf\u{e9} the zzzqx", 1, &mut no_evidence);
+        let f = c.check_line_alone("caf\u{e9} the zzzqx", 1, &mut no_evidence);
         assert_eq!(f[0].word, "zzzqx");
         assert_eq!(f[0].col, 10);
     }
@@ -635,7 +674,7 @@ mod tests {
     #[test]
     fn handles_non_ascii_without_panicking() {
         let c = checker(&[], &["notes", "from", "the", "trip"]);
-        let f = c.check_line("İstanbul notes from the trip", 1, &mut no_evidence);
+        let f = c.check_line_alone("İstanbul notes from the trip", 1, &mut no_evidence);
         // 'İstanbul' is a proper noun we don't know; the point is it survives.
         assert!(f.len() <= 1);
     }
@@ -643,7 +682,7 @@ mod tests {
     #[test]
     fn flags_a_genuine_typo_and_suggests() {
         let c = checker(&[], &["ship", "the", "change"]);
-        let f = c.check_line("shp the change", 1, &mut no_evidence);
+        let f = c.check_line_alone("shp the change", 1, &mut no_evidence);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].word, "shp");
         assert_eq!(f[0].kind, FindingKind::Unknown);
@@ -653,14 +692,14 @@ mod tests {
     #[test]
     fn reports_position() {
         let c = checker(&[], &["the", "change"]);
-        let f = c.check_line("the zzzqx change", 7, &mut no_evidence);
+        let f = c.check_line_alone("the zzzqx change", 7, &mut no_evidence);
         assert_eq!((f[0].line, f[0].col), (7, 5));
     }
 
     #[test]
     fn never_flags_urls_paths_or_code_spans() {
         let c = checker(&[], &["see", "and", "now"]);
-        let f = c.check_line(
+        let f = c.check_line_alone(
             "see https://github.com/dpep/ae and `foo_bar` now",
             1,
             &mut no_evidence,
@@ -672,16 +711,19 @@ mod tests {
     fn skips_code_shaped_lines_entirely() {
         let c = checker(&[], &["let"]);
         assert!(
-            c.check_line("    let zzzqx = 1;", 1, &mut no_evidence)
+            c.check_line_alone("    let zzzqx = 1;", 1, &mut no_evidence)
                 .is_empty()
         );
-        assert!(c.check_line("```rust", 1, &mut no_evidence).is_empty());
+        assert!(
+            c.check_line_alone("```rust", 1, &mut no_evidence)
+                .is_empty()
+        );
     }
 
     #[test]
     fn unknown_word_without_a_neighbour_is_low_confidence() {
         let c = checker(&[], &["ship"]);
-        let f = c.check_line("the zzzqxwv thing", 1, &mut no_evidence);
+        let f = c.check_line_alone("the zzzqxwv thing", 1, &mut no_evidence);
         assert!(
             f[0].confidence < 0.5,
             "jargon should not be confidently wrong"
@@ -712,7 +754,7 @@ mod tests {
             "from the" => 50,
             _ => 0,
         };
-        let f = c.check_line("apart form the rest", 1, &mut evidence);
+        let f = c.check_line_alone("apart form the rest", 1, &mut evidence);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].kind, FindingKind::RealWord);
         assert_eq!(words(&f[0].suggestions), vec!["from"]);
@@ -862,28 +904,28 @@ mod tests {
     #[test]
     fn skips_mid_sentence_capitals_as_proper_nouns() {
         let c = checker(&[], &["we", "use", "and", "for", "this"]);
-        let f = c.check_line("we use Guiraud and Zblorgian for this", 1, &mut no_evidence);
+        let f = c.check_line_alone("we use Guiraud and Zblorgian for this", 1, &mut no_evidence);
         assert!(f.is_empty(), "unexpected findings: {f:?}");
     }
 
     #[test]
     fn still_checks_a_capital_that_opens_a_sentence() {
         let c = checker(&[], &["the", "word"]);
-        let f = c.check_line("Zzzqxwv the word", 1, &mut no_evidence);
+        let f = c.check_line_alone("Zzzqxwv the word", 1, &mut no_evidence);
         assert_eq!(f.len(), 1, "sentence-initial caps carry no name signal");
     }
 
     #[test]
     fn resumes_checking_capitals_after_a_full_stop() {
         let c = checker(&[], &["done", "the", "word"]);
-        let f = c.check_line("done. Zzzqxwv the word", 1, &mut no_evidence);
+        let f = c.check_line_alone("done. Zzzqxwv the word", 1, &mut no_evidence);
         assert_eq!(f.len(), 1);
     }
 
     #[test]
     fn skips_pluralized_acronyms() {
         let c = checker(&[], &["and", "the"]);
-        let f = c.check_line("the URLs and PRs and IDs", 1, &mut no_evidence);
+        let f = c.check_line_alone("the URLs and PRs and IDs", 1, &mut no_evidence);
         assert!(f.is_empty(), "unexpected findings: {f:?}");
     }
 

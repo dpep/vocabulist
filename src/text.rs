@@ -206,24 +206,27 @@ fn mask_iris(out: &mut [char], line: &str) {
     static EXTRACTOR: std::sync::OnceLock<iriq::Extractor> = std::sync::OnceLock::new();
     let extractor = EXTRACTOR.get_or_init(iriq::Extractor::new);
 
-    for iri in extractor.extract_strings(line) {
-        // The extractor normalizes (adding a scheme, among other things), so
-        // the string it returns may not appear verbatim in the source. Fall
-        // back to the scheme-less form to locate the original span.
-        let needle = if line.contains(&iri) {
-            Some(iri.clone())
-        } else {
-            iri.split_once("://")
-                .map(|(_, rest)| rest.to_string())
-                .filter(|rest| line.contains(rest.as_str()))
-        };
-        let Some(needle) = needle else { continue };
-        let Some(byte_start) = line.find(&needle) else {
+    // `extract`, not `extract_strings`: the latter hands back the *canonical*
+    // form, and locating a span by searching for it only works while
+    // normalization is a no-op. It isn't — `voidlinux.org/p/?a=1` canonicalizes
+    // to `.../p?a=1`, which appears nowhere in the line, so the URL went
+    // unmasked and put `voidlinux` in the lexicon as a word. `original` is the
+    // matched text verbatim.
+    for iri in extractor.extract(line) {
+        let needle = iri.original.as_str();
+        if needle.is_empty() {
             continue;
-        };
-        let start = line[..byte_start].chars().count();
-        for c in out.iter_mut().skip(start).take(needle.chars().count()) {
-            *c = ' ';
+        }
+        // Every occurrence, not just the first: a markdown badge names the
+        // same URL twice, once for the image and once for the link.
+        let mut from = 0;
+        while let Some(rel) = line[from..].find(needle) {
+            let byte = from + rel;
+            let start = line[..byte].chars().count();
+            for c in out.iter_mut().skip(start).take(needle.chars().count()) {
+                *c = ' ';
+            }
+            from = byte + needle.len();
         }
     }
 }
@@ -418,6 +421,24 @@ mod tests {
                 .chars()
                 .count()
         );
+    }
+
+    #[test]
+    fn masks_a_url_the_extractor_rewrites() {
+        // iriq canonicalizes `/p/?a=1` to `/p?a=1`, so locating the span by
+        // searching for the *returned* string finds nothing and the URL went
+        // through unmasked — putting `voidlinux` in the lexicon as a word.
+        let masked = mask_non_prose("see https://voidlinux.org/packages/?arch=x86_64&q=rg ok");
+        assert!(!masked.contains("voidlinux"));
+        assert!(masked.contains("see"));
+        assert!(masked.contains("ok"));
+    }
+
+    #[test]
+    fn masks_every_occurrence_of_a_repeated_url() {
+        // A markdown badge names the same URL twice — image, then link.
+        let line = "[![x](https://crates.io/crates/mdbook)](https://crates.io/crates/mdbook)";
+        assert!(!mask_non_prose(line).contains("mdbook"));
     }
 
     #[test]

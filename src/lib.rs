@@ -15,6 +15,7 @@ pub mod hook;
 pub mod identity;
 pub mod inbound;
 pub mod ingest;
+pub mod names;
 pub mod ngram;
 pub mod output;
 pub mod process;
