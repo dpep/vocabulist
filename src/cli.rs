@@ -116,7 +116,12 @@ pub enum Command {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
-    /// Show store-wide counts.
+    /// Show store-wide counts, what has been read, and where it exports to.
+    ///
+    /// Aliased as `status`, because that is the word people reach for — and
+    /// without the alias `vocab status` spell-checks the word "status",
+    /// reports it clean, and looks like a command that did nothing.
+    #[command(alias = "status")]
     Stats,
     /// Stage text for learning. Assistant-authored text is recorded but never
     /// learned from.
@@ -697,7 +702,14 @@ fn check_input(
     }
 
     if !cli.quiet {
-        output::render_findings(out, &findings, format)?;
+        // Only for a one-word positional argument: piped or --file input was
+        // never going to be mistaken for a subcommand.
+        let single_word = cli
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && !t.contains(char::is_whitespace));
+        output::render_findings(out, &findings, single_word, format)?;
     }
     // Lint convention: clean input exits 0, findings exit 1, so this drops
     // into a pre-commit hook or CI step without a wrapper.

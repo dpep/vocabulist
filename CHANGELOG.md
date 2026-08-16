@@ -4,6 +4,14 @@
 
 ### Added
 
+- `vocab status` works, as an alias for `stats`. It previously spell-checked
+  the *word* "status", found it correctly spelled, and printed "No issues
+  found" — so a subcommand that does not exist looked like one that ran.
+- A one-word check now names the word: `"log" is spelled correctly`, rather
+  than a bare "No issues found" that reads like a command result.
+- `stats` reports when the lexicon was last seeded, and paths are shown
+  relative to `~` in human output. JSON keeps absolute paths, since `~` is a
+  shell convention a consumer would have to know to expand.
 - `vocab stats` reports what it has actually **read** — bodies per register,
   messages captured per service — and which spell checkers the lexicon has
   been exported into. For a shared file it distinguishes the words it wrote

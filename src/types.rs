@@ -247,6 +247,10 @@ pub struct SeedSource {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct StatsPayload {
     pub db: String,
+    /// How long ago the lexicon was seeded from ground truth. `None` means
+    /// never, which on a live store means auto-seeding has not run yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeded_secs_ago: Option<i64>,
     pub words: i64,
     pub ngrams: i64,
     pub spooled: i64,

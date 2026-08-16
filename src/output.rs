@@ -17,12 +17,21 @@ use crate::types::{Entry, Finding, SeedReport, StatsPayload, StatusPayload};
 pub fn render_findings(
     out: &mut impl Write,
     findings: &[Finding],
+    checked: Option<&str>,
     format: Format,
 ) -> std::io::Result<()> {
     match format {
         Format::Human => {
             if findings.is_empty() {
-                return writeln!(out, "No issues found.");
+                // Name what was checked when it was a single bare word. A
+                // mistyped or imagined subcommand — `vocab status`, `vocab
+                // log` — is valid English, so it checks clean and a bare "no
+                // issues found" reads as if the subcommand ran. Echoing the
+                // word makes the interpretation obvious at a glance.
+                return match checked {
+                    Some(word) => writeln!(out, "\"{word}\" is spelled correctly."),
+                    None => writeln!(out, "No issues found."),
+                };
             }
             for f in findings {
                 // Each suggestion carries its own share of the belief, so
@@ -134,7 +143,8 @@ pub fn render_stats(
 ) -> std::io::Result<()> {
     match format {
         Format::Human => {
-            writeln!(out, "db:      {}", stats.db)?;
+            writeln!(out, "db:      {}", tilde(&stats.db))?;
+            writeln!(out, "seeded:  {}", age(stats.seeded_secs_ago))?;
             writeln!(out, "words:   {}", stats.words)?;
             writeln!(out, "ngrams:  {}", stats.ngrams)?;
             writeln!(out, "spooled: {}", stats.spooled)?;
@@ -175,7 +185,7 @@ pub fn render_stats(
                         (true, ours) => format!("{ours} of {} words ours", i.total),
                     };
                     writeln!(out, "  {:<14} {}", i.name, state)?;
-                    writeln!(out, "  {:<14} {}", "", i.path)?;
+                    writeln!(out, "  {:<14} {}", "", tilde(&i.path))?;
                 }
             }
             Ok(())
@@ -194,7 +204,13 @@ pub fn render_targets(
         Format::Human => {
             for t in targets {
                 let state = if t.path.exists() { "present" } else { "absent" };
-                writeln!(out, "{:<10} {:<8} {}", t.name, state, t.path.display())?;
+                writeln!(
+                    out,
+                    "{:<10} {:<8} {}",
+                    t.name,
+                    state,
+                    tilde(&t.path.display().to_string())
+                )?;
                 if !t.note.is_empty() {
                     writeln!(out, "{:<19} — {}", "", t.note)?;
                 }
@@ -233,7 +249,10 @@ pub fn render_sync(
                     None => writeln!(
                         out,
                         "{:<10} +{:<6} -{:<6} {}",
-                        r.target, r.added, r.removed, r.path
+                        r.target,
+                        r.added,
+                        r.removed,
+                        tilde(&r.path)
                     )?,
                 }
             }
@@ -265,6 +284,37 @@ pub fn render_sync(
 /// Biggest first, for human reading. The payload itself is a map — keyed by
 /// name so JSON consumers get an object — so display order is a rendering
 /// concern rather than something the data has to carry.
+/// A coarse "how long ago", for facts where the exact second is noise.
+fn age(seconds: Option<i64>) -> String {
+    let Some(s) = seconds else {
+        return "never".to_string();
+    };
+    match s {
+        s if s < 90 => "just now".to_string(),
+        s if s < 5400 => format!("{} minutes ago", s / 60),
+        s if s < 172_800 => format!("{} hours ago", s / 3600),
+        s => format!("{} days ago", s / 86400),
+    }
+}
+
+/// Abbreviate `$HOME` to `~` for display.
+///
+/// Human output only. JSON keeps the absolute path, because `~` is a shell
+/// convention rather than a filesystem one — a consumer that reads the field
+/// and opens it would have to know to expand it, and most won't.
+pub fn tilde(path: &str) -> String {
+    let Some(home) = std::env::var_os("HOME") else {
+        return path.to_string();
+    };
+    let home = home.to_string_lossy();
+    // Only at a path boundary: `/Users/dan-old/x` must not become `~-old/x`.
+    match path.strip_prefix(home.as_ref()) {
+        Some("") => "~".to_string(),
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
+    }
+}
+
 fn sorted_desc(counts: &std::collections::BTreeMap<String, i64>) -> Vec<(&String, &i64)> {
     let mut rows: Vec<_> = counts.iter().collect();
     rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
@@ -552,7 +602,7 @@ mod tests {
 
     fn render(format: Format) -> String {
         let mut buf = Vec::new();
-        render_findings(&mut buf, &[finding()], format).unwrap();
+        render_findings(&mut buf, &[finding()], None, format).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
@@ -580,14 +630,14 @@ mod tests {
     #[test]
     fn empty_findings_still_say_something_in_human_mode() {
         let mut buf = Vec::new();
-        render_findings(&mut buf, &[], Format::Human).unwrap();
+        render_findings(&mut buf, &[], None, Format::Human).unwrap();
         assert!(String::from_utf8(buf).unwrap().contains("No issues"));
     }
 
     #[test]
     fn empty_findings_are_an_empty_json_array() {
         let mut buf = Vec::new();
-        render_findings(&mut buf, &[], Format::Json).unwrap();
+        render_findings(&mut buf, &[], None, Format::Json).unwrap();
         assert_eq!(String::from_utf8(buf).unwrap().trim(), "[]");
     }
 
@@ -617,5 +667,25 @@ mod tests {
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("contextdb"));
         assert!(out.contains("owned"));
+    }
+
+    #[test]
+    fn tilde_abbreviates_only_at_a_path_boundary() {
+        // SAFETY: single-threaded test, and HOME is read, not cached.
+        unsafe { std::env::set_var("HOME", "/Users/dan") };
+        assert_eq!(tilde("/Users/dan/x"), "~/x");
+        assert_eq!(tilde("/Users/dan"), "~");
+        // `dan-old` merely starts with the same characters.
+        assert_eq!(tilde("/Users/dan-old/x"), "/Users/dan-old/x");
+        assert_eq!(tilde("/etc/hosts"), "/etc/hosts");
+    }
+
+    #[test]
+    fn age_reads_coarsely() {
+        assert_eq!(age(None), "never");
+        assert_eq!(age(Some(10)), "just now");
+        assert_eq!(age(Some(600)), "10 minutes ago");
+        assert_eq!(age(Some(7200)), "2 hours ago");
+        assert_eq!(age(Some(864_000)), "10 days ago");
     }
 }

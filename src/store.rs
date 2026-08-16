@@ -853,8 +853,14 @@ impl Store {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_>>()?;
 
+        // Seeding refreshes on a timer, so "how stale is the ground truth"
+        // is a real operational question and the only one this store can
+        // answer about itself.
+        let seeded_secs_ago = self.seconds_since_seed()?;
+
         Ok(StatsPayload {
             db: self.path.display().to_string(),
+            seeded_secs_ago,
             words,
             ngrams,
             spooled,

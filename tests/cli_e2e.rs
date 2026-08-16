@@ -302,3 +302,34 @@ fn stats_reports_what_it_has_read_and_where_it_exports() {
     assert!(out.stdout.contains("\"integrations\""), "{}", out.stdout);
     assert!(out.stdout.contains("\"vscode\""), "{}", out.stdout);
 }
+
+#[test]
+fn a_bare_word_says_it_was_spell_checked() {
+    // `vocab status` used to print "No issues found." — the word is spelled
+    // correctly, so a subcommand that does not exist looked like one that ran
+    // and found nothing. Naming the word makes the interpretation obvious.
+    let db = scratch_db("bare-word");
+    let out = vocab(&db, &["log"]);
+    assert!(
+        out.stdout.contains("\"log\" is spelled correctly"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.code, 0);
+
+    // A real sentence keeps the plain message — nothing to disambiguate.
+    let sentence = vocab(&db, &["we shipped the change today"]);
+    assert!(
+        sentence.stdout.contains("No issues found"),
+        "{}",
+        sentence.stdout
+    );
+}
+
+#[test]
+fn status_is_an_alias_for_stats() {
+    let db = scratch_db("status-alias");
+    let out = vocab(&db, &["status"]);
+    assert!(out.stdout.contains("words:"), "{}", out.stdout);
+    assert_eq!(out.code, 0);
+}
