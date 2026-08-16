@@ -126,15 +126,26 @@ fn capture_then_process_teaches_the_lexicon() {
 }
 
 #[test]
-fn assistant_authored_capture_is_never_learned_from() {
+fn assistant_authored_text_gives_vocabulary_but_not_voice() {
     let db = scratch_db("watermark");
     let body = "the frobnicator handles retries\n\nCo-Authored-By: Claude Opus 5 <x>";
     let captured = vocab(&db, &["capture", "-r", "pr", body]);
     assert!(captured.stdout.contains("assistant"));
 
     vocab(&db, &["process"]);
-    // Its vocabulary must not have entered the lexicon.
-    assert_eq!(vocab(&db, &["the frobnicator works"]).code, 1);
+
+    // The word counts as evidence — it's about your work and carries your
+    // project's jargon, so the checker shouldn't flag it afterward.
+    let listed = vocab(&db, &["list", "frobnicator"]);
+    assert!(listed.stdout.contains("frobnicator"), "{}", listed.stdout);
+
+    // But the phrasing isn't yours, so no collocations were recorded.
+    let phrases = vocab(&db, &["phrases", "--min-count", "1", "-j"]);
+    assert!(
+        !phrases.stdout.contains("frobnicator"),
+        "assistant phrasing must not reach the voice tables: {}",
+        phrases.stdout
+    );
 }
 
 #[test]

@@ -644,19 +644,20 @@ fn process_one(
     authored_by: &str,
     doc: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // An assistant draft is nobody's vocabulary evidence — it was generated,
-    // not observed in the wild — so it contributes nothing at all.
-    if authored_by == "assistant" {
-        store.retire_spool(id)?;
-        return Ok(());
-    }
     let body = watermark::strip_trailer(body);
 
-    // Someone else's writing corroborates that a word is real without
+    // One rule for everything you didn't write, whether a colleague or an
+    // assistant wrote it: it corroborates that a word is *real* without
     // saying anything about how *you* write. It reaches the lexicon and the
-    // source-diversity table, and stops there — no register counts, no
-    // collocations, no exemplars, no prose stats. Otherwise the voice
-    // profile drifts toward an average of everyone you correspond with.
+    // source-diversity table and stops there — no register counts, no
+    // collocations, no exemplars, no prose stats.
+    //
+    // Assistant drafts are worth keeping for the same reason a colleague's
+    // are: they're about your work and carry your project's jargon. Knowing
+    // `utilize` is a word doesn't make you write it, because vocabulary and
+    // voice are separate axes here. What must not happen is the diction
+    // being fed back as yours, and excluding it from the voice tables is
+    // what prevents that.
     if authored_by != "user" {
         for word in prose_words(body) {
             store.upsert_word(&word, &word, crate::types::Provenance::Observed, 0)?;
@@ -815,18 +816,31 @@ mod tests {
     }
 
     #[test]
-    fn processing_skips_assistant_authored_text() {
+    fn assistant_text_corroborates_vocabulary_but_not_voice() {
         let store = Store::open(":memory:").unwrap();
         store
             .spool(
                 Register::Pr,
-                None,
+                Some("pr"),
                 "Some prose here about widgets\n\nCo-Authored-By: Claude <x>",
                 "assistant",
             )
             .unwrap();
         assert_eq!(process_spool(&store, 10).unwrap(), 1);
-        assert!(!store.contains("widgets").unwrap());
+
+        // The word is evidence — it's about your work and carries your jargon.
+        assert!(store.contains("widgets").unwrap());
+        // The phrasing is not yours and must not shape the voice tables.
+        assert_eq!(store.ngram_count("about widgets").unwrap(), 0);
+        assert_eq!(
+            store
+                .prose_totals(None)
+                .unwrap()
+                .get("sentences")
+                .copied()
+                .unwrap_or(0),
+            0
+        );
     }
 
     #[test]
