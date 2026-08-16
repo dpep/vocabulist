@@ -18,6 +18,9 @@ use crate::types::{Finding, FindingKind};
 const MAX_EDIT_DISTANCE: usize = 2;
 /// Most suggestions to return per finding.
 const MAX_SUGGESTIONS: usize = 3;
+/// How often a word must appear in mined prose before it counts as real.
+/// Above one, so a single typo in a README doesn't become vocabulary.
+const MIN_CORPUS_EVIDENCE: i64 = 3;
 
 /// The resolved word sets a check runs against. The lexicon is the authority;
 /// the system dictionary is the floor beneath it.
@@ -111,9 +114,20 @@ impl Checker {
         any
     }
 
-    /// A single word, against the lexicon then the backstop.
+    /// A single word, against the lexicon, then mined prose, then the
+    /// backstop dictionary.
+    ///
+    /// Mined prose sits above the dictionary because the dictionary is
+    /// `web2` — Webster's Second International, published 1934. It has no
+    /// `inline`, `download`, `roadmap`, or `pre`, so a word list alone flags
+    /// ordinary modern English as misspelled. Words seen repeatedly in real
+    /// prose on this machine are real words, and the repetition threshold is
+    /// what keeps a typo in someone's README from qualifying.
     fn knows_atom(&self, word: &str) -> bool {
         if self.lexicon.contains(word) {
+            return true;
+        }
+        if self.frequency_of(word) >= MIN_CORPUS_EVIDENCE {
             return true;
         }
         match self.dictionary() {
@@ -145,8 +159,17 @@ impl Checker {
         self.profile.count("tokens", tokens.len() as u64);
 
         let mut findings = Vec::new();
+        let mut sentence_initial = true;
         for (i, token) in tokens.iter().enumerate() {
+            let starts_sentence = sentence_initial;
+            // The next token begins a sentence only if this one ended one.
+            sentence_initial = ends_sentence(&masked, token, &tokens.get(i + 1).map(|t| t.col));
+
             if !text::is_checkable(&token.text) {
+                continue;
+            }
+            if text::is_proper_noun(&token.text, starts_sentence) {
+                self.profile.count("proper_nouns_skipped", 1);
                 continue;
             }
             self.profile.count("tokens_checked", 1);
@@ -252,6 +275,99 @@ impl Checker {
             .map(|(_, _, _, _, _, w)| w.clone())
             .collect()
     }
+}
+
+/// Does a sentence end between this token and the next?
+///
+/// Looks at the characters separating them rather than the token itself, so
+/// `e.g.` mid-sentence doesn't reset the state for every abbreviation.
+fn ends_sentence(line: &str, token: &Token, next_col: &Option<usize>) -> bool {
+    let chars: Vec<char> = line.chars().collect();
+    let start = token.col - 1 + token.text.chars().count();
+    let end = next_col.map_or(chars.len(), |c| (c - 1).min(chars.len()));
+    if start >= end {
+        return false;
+    }
+    chars[start..end]
+        .iter()
+        .any(|c| matches!(c, '.' | '!' | '?' | ':'))
+}
+
+/// A stateful pass over a whole document.
+///
+/// Some things that shouldn't be spell-checked can't be recognized one line
+/// at a time. A fenced code block is the clear case: every line inside it is
+/// code, but a line reading `# returns the users nam` looks like prose in
+/// isolation. Deciding that requires remembering the fence opened above.
+///
+/// The same reasoning covers YAML front matter, which is configuration
+/// wearing a colon.
+pub struct Scanner<'a> {
+    checker: &'a Checker,
+    fence: Option<String>,
+    in_front_matter: bool,
+    line_no: usize,
+}
+
+impl<'a> Scanner<'a> {
+    pub fn new(checker: &'a Checker) -> Self {
+        Self {
+            checker,
+            fence: None,
+            in_front_matter: false,
+            line_no: 0,
+        }
+    }
+
+    /// Feed the next line. Returns findings for it, or nothing if the line
+    /// sits in a region where spelling doesn't apply.
+    pub fn feed(&mut self, line: &str, evidence: &mut impl FnMut(&str) -> i64) -> Vec<Finding> {
+        self.line_no += 1;
+        let trimmed = line.trim();
+
+        // Front matter: `---` on the very first line opens it.
+        if self.line_no == 1 && trimmed == "---" {
+            self.in_front_matter = true;
+            return Vec::new();
+        }
+        if self.in_front_matter {
+            if trimmed == "---" || trimmed == "..." {
+                self.in_front_matter = false;
+            }
+            return Vec::new();
+        }
+
+        // Fences: ``` or ~~~, closed by the same marker. Tracking which one
+        // opened the block keeps a ``` inside a ~~~ block from closing it.
+        if let Some(marker) = &self.fence {
+            if trimmed.starts_with(marker.as_str()) {
+                self.fence = None;
+            }
+            return Vec::new();
+        }
+        if let Some(marker) = fence_marker(trimmed) {
+            self.fence = Some(marker);
+            return Vec::new();
+        }
+
+        self.checker.check_line(line, self.line_no, evidence)
+    }
+
+    /// True when the scanner is inside a region it's skipping — useful for
+    /// callers that want to report why nothing came back.
+    pub fn skipping(&self) -> bool {
+        self.fence.is_some() || self.in_front_matter
+    }
+}
+
+/// The fence marker a line opens, if it opens one.
+fn fence_marker(trimmed: &str) -> Option<String> {
+    for marker in ["```", "~~~"] {
+        if trimmed.starts_with(marker) {
+            return Some(marker.to_string());
+        }
+    }
+    None
 }
 
 /// Shared leading and trailing characters, as `(prefix, suffix)`.
@@ -564,6 +680,111 @@ mod tests {
         )
         .with_frequency(frequency);
         assert_eq!(c.suggest("smal").first().unwrap(), "small");
+    }
+
+    #[test]
+    fn skips_mid_sentence_capitals_as_proper_nouns() {
+        let c = checker(&[], &["we", "use", "and", "for", "this"]);
+        let f = c.check_line("we use Guiraud and Zblorgian for this", 1, &mut no_evidence);
+        assert!(f.is_empty(), "unexpected findings: {f:?}");
+    }
+
+    #[test]
+    fn still_checks_a_capital_that_opens_a_sentence() {
+        let c = checker(&[], &["the", "word"]);
+        let f = c.check_line("Zzzqxwv the word", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1, "sentence-initial caps carry no name signal");
+    }
+
+    #[test]
+    fn resumes_checking_capitals_after_a_full_stop() {
+        let c = checker(&[], &["done", "the", "word"]);
+        let f = c.check_line("done. Zzzqxwv the word", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1);
+    }
+
+    #[test]
+    fn skips_pluralized_acronyms() {
+        let c = checker(&[], &["and", "the"]);
+        let f = c.check_line("the URLs and PRs and IDs", 1, &mut no_evidence);
+        assert!(f.is_empty(), "unexpected findings: {f:?}");
+    }
+
+    #[test]
+    fn mined_prose_covers_words_the_1934_dictionary_lacks() {
+        // web2 has no "inline", "download", or "roadmap".
+        let frequency: std::collections::HashMap<String, i64> =
+            [("inline".to_string(), 9i64), ("roadmap".to_string(), 5i64)]
+                .into_iter()
+                .collect();
+        let c = Checker::new(HashSet::new(), Some(HashSet::new())).with_frequency(frequency);
+        assert!(c.knows("inline"));
+        assert!(c.knows("roadmap"));
+        // But a word seen once is not yet evidence of anything.
+        assert!(!c.knows("zzzqxwv"));
+    }
+
+    #[test]
+    fn skips_everything_inside_a_fenced_block() {
+        let c = checker(&[], &["real", "prose", "here"]);
+        let doc = "real prose here\n```\nzzzqx zzzqxwv qqxjjv\n```\nreal prose here";
+        let mut scanner = Scanner::new(&c);
+        let findings: Vec<_> = doc
+            .lines()
+            .flat_map(|l| scanner.feed(l, &mut no_evidence))
+            .collect();
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn a_different_fence_marker_does_not_close_the_block() {
+        let c = checker(&[], &[]);
+        let doc = "~~~\nzzzqx\n```\nzzzqxwv\n~~~";
+        let mut scanner = Scanner::new(&c);
+        let findings: Vec<_> = doc
+            .lines()
+            .flat_map(|l| scanner.feed(l, &mut no_evidence))
+            .collect();
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn resumes_checking_after_the_block_closes() {
+        let c = checker(&[], &["and", "then"]);
+        let doc = "```\nzzzqx\n```\nand then zzzqxwv";
+        let mut scanner = Scanner::new(&c);
+        let findings: Vec<_> = doc
+            .lines()
+            .flat_map(|l| scanner.feed(l, &mut no_evidence))
+            .collect();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].word, "zzzqxwv");
+        assert_eq!(findings[0].line, 4, "line numbers survive skipped regions");
+    }
+
+    #[test]
+    fn skips_yaml_front_matter() {
+        let c = checker(&[], &["real", "prose"]);
+        let doc = "---\nname: zzzqx\ndescription: zzzqxwv\n---\nreal prose";
+        let mut scanner = Scanner::new(&c);
+        let findings: Vec<_> = doc
+            .lines()
+            .flat_map(|l| scanner.feed(l, &mut no_evidence))
+            .collect();
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn a_horizontal_rule_midway_is_not_front_matter() {
+        // `---` only opens front matter on line 1.
+        let c = checker(&[], &["some", "prose"]);
+        let doc = "some prose\n---\nzzzqxwv";
+        let mut scanner = Scanner::new(&c);
+        let findings: Vec<_> = doc
+            .lines()
+            .flat_map(|l| scanner.feed(l, &mut no_evidence))
+            .collect();
+        assert_eq!(findings.len(), 1);
     }
 
     #[test]

@@ -534,19 +534,22 @@ fn check_input(
     };
 
     let mut findings: Vec<Finding> = Vec::new();
+    // A scanner rather than bare check_line: fenced blocks and front matter
+    // can only be recognized with memory of the lines above.
+    let mut scanner = crate::check::Scanner::new(&checker);
 
     if let Some(text) = &cli.text {
-        for (i, line) in text.lines().enumerate() {
-            findings.extend(checker.check_line(line, i + 1, &mut evidence));
+        for line in text.lines() {
+            findings.extend(scanner.feed(line, &mut evidence));
         }
     } else if let Some(path) = &cli.file {
         let file = std::fs::File::open(path)?;
-        for (i, line) in io::BufReader::new(file).lines().enumerate() {
-            findings.extend(checker.check_line(&line?, i + 1, &mut evidence));
+        for line in io::BufReader::new(file).lines() {
+            findings.extend(scanner.feed(&line?, &mut evidence));
         }
     } else if !io::stdin().is_terminal() {
-        for (i, line) in io::stdin().lock().lines().enumerate() {
-            findings.extend(checker.check_line(&line?, i + 1, &mut evidence));
+        for line in io::stdin().lock().lines() {
+            findings.extend(scanner.feed(&line?, &mut evidence));
         }
     } else {
         Cli::command().print_help()?;

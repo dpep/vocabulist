@@ -112,10 +112,28 @@ pub fn is_checkable(token: &str) -> bool {
     if alpha.chars().all(|c| c.is_ascii_uppercase()) {
         return false;
     }
+    // A pluralized acronym — `URLs`, `PRs`, `IDs` — is still an acronym.
+    if let Some(stem) = alpha.strip_suffix('s')
+        && stem.len() >= 2
+        && stem.chars().all(|c| c.is_ascii_uppercase())
+    {
+        return false;
+    }
     if is_camel_case(&alpha) {
         return false;
     }
     true
+}
+
+/// Is this token capitalized in a position where that marks a proper noun?
+///
+/// Mid-sentence capitals are names — of people, products, files, libraries —
+/// and no dictionary will hold them. Guessing corrections for them produces
+/// exactly the confident-but-wrong suggestion that teaches a user to stop
+/// reading the output. Sentence-initial capitals carry no such signal, so
+/// they stay checkable.
+pub fn is_proper_noun(token: &str, sentence_initial: bool) -> bool {
+    !sentence_initial && token.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 /// `camelCase` / `PascalCase` — an internal capital after a lowercase letter.
