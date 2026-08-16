@@ -356,3 +356,27 @@ fn help_explains_options_not_just_subcommands() {
     let unknown = vocab(&db, &["help", "zzqxwv"]);
     assert_eq!(unknown.code, 2);
 }
+
+#[test]
+fn prune_removes_ids_but_keeps_your_own_words() {
+    let db = scratch_db("prune");
+    // A word nothing vouches for, alongside a session id.
+    vocab(
+        &db,
+        &["capture", "-r", "doc", "the evals ran cleanly", "-q"],
+    );
+    vocab(
+        &db,
+        &["capture", "-r", "doc", "run b4309yce7 finished today", "-q"],
+    );
+    vocab(&db, &["process", "-q"]);
+
+    let dry = vocab(&db, &["prune", "--dry-run", "-j"]);
+    assert!(dry.stdout.contains("\"dry_run\": true"), "{}", dry.stdout);
+
+    vocab(&db, &["prune", "-q"]);
+    let phrases = vocab(&db, &["phrases", "--min-count", "1", "--limit", "50"]);
+    assert!(!phrases.stdout.contains("b4309yce7"), "{}", phrases.stdout);
+    // `evals` is in no dictionary, and the default prune must not touch it.
+    assert!(phrases.stdout.contains("the evals"), "{}", phrases.stdout);
+}

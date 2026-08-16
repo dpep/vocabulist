@@ -410,6 +410,19 @@ impl Store {
     }
 
     /// Total count for an n-gram across all registers.
+    /// Every distinct gram in the store, across orders and registers.
+    pub fn all_ngrams(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT gram FROM ngrams")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// Drop a gram from every register it was counted in.
+    pub fn remove_ngram(&self, gram: &str) -> Result<usize> {
+        self.conn
+            .execute("DELETE FROM ngrams WHERE gram = ?1", params![gram])
+    }
+
     pub fn ngram_count(&self, gram: &str) -> Result<i64> {
         Ok(self
             .conn

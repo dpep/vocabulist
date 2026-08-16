@@ -22,6 +22,7 @@ pub mod ngram;
 pub mod output;
 pub mod process;
 pub mod profile;
+pub mod prune;
 pub mod seed;
 pub mod store;
 pub mod sync;

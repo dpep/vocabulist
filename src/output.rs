@@ -136,6 +136,43 @@ pub fn render_seed(
     }
 }
 
+pub fn render_prune(
+    out: &mut impl Write,
+    report: &crate::prune::PruneReport,
+    dry_run: bool,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            let verb = if dry_run { "would remove" } else { "removed" };
+            writeln!(out, "{verb} {} phrases", report.ngrams_removed)?;
+            if report.words_removed > 0 {
+                writeln!(out, "{verb} {} words", report.words_removed)?;
+            }
+            if !report.sample.is_empty() {
+                writeln!(out, "\nsample:")?;
+                for item in &report.sample {
+                    writeln!(out, "  {item}")?;
+                }
+            }
+            if dry_run {
+                writeln!(out, "\n(dry run — nothing removed)")?;
+            }
+            Ok(())
+        }
+        _ => emit(
+            out,
+            &json!({
+                "ngrams_removed": report.ngrams_removed,
+                "words_removed": report.words_removed,
+                "sample": report.sample,
+                "dry_run": dry_run,
+            }),
+            format,
+        ),
+    }
+}
+
 pub fn render_status(
     out: &mut impl Write,
     status: &StoreStatus,

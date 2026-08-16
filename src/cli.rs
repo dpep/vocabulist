@@ -142,6 +142,20 @@ pub enum Command {
     /// Show store-wide counts, what has been read, and where it exports to.
     Status,
 
+    /// Remove phrases and words that today's capture rules would reject —
+    /// session ids, path fragments, and anything else learned under a since
+    /// fixed bug.
+    Prune {
+        /// Report what would go without removing it.
+        #[arg(long)]
+        dry_run: bool,
+        /// Also remove phrases containing words nothing vouches for. Reaches
+        /// residue that shape cannot, and takes your own coinages with it —
+        /// read `--dry-run` first.
+        #[arg(long)]
+        strict: bool,
+    },
+
     /// Explain a command or an option — `vocab help --completions` as well as
     /// `vocab help status`.
     Help {
@@ -438,6 +452,14 @@ fn dispatch_inner(
 
         Some(Command::Help { topic }) => {
             crate::help::render(&mut out, topic.as_deref())?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Prune { dry_run, strict }) => {
+            let report = crate::prune::run(&store, *dry_run, *strict)?;
+            if !cli.quiet {
+                output::render_prune(&mut out, &report, *dry_run, format)?;
+            }
             Ok(ExitCode::SUCCESS)
         }
 

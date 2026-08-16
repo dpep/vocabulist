@@ -4,6 +4,12 @@
 
 ### Added
 
+- `vocab prune` removes what today's capture rules would reject but an older
+  version already learned — session ids, tool-call ids, path fragments. The
+  default judges shape alone, which cannot take anything that was ever a word.
+  `--strict` also requires the dictionary or your lexicon to vouch for each
+  word, which reaches residue shape cannot and takes your own coinages with
+  it; `--dry-run` first.
 - `vocab phrases -n 3` for three-word phrases. Two-word output was all there
   ever was, which is thin for something called a phrase. The association test
   stays a 2x2 table by splitting at the *last* space, so a trigram is scored
