@@ -201,7 +201,12 @@ pub fn mask_non_prose(line: &str) -> String {
 /// accepts `e.g.` and `etc.The` as IRIs, so per-token parsing would silently
 /// skip ordinary prose. The extractor applies context and doesn't.
 fn mask_iris(out: &mut [char], line: &str) {
-    for iri in iriq::Extractor::new().extract_strings(line) {
+    // Built once. Constructing an extractor compiles regexes, and this runs
+    // per line — seeding alone reads hundreds of thousands of them.
+    static EXTRACTOR: std::sync::OnceLock<iriq::Extractor> = std::sync::OnceLock::new();
+    let extractor = EXTRACTOR.get_or_init(iriq::Extractor::new);
+
+    for iri in extractor.extract_strings(line) {
         // The extractor normalizes (adding a scheme, among other things), so
         // the string it returns may not appear verbatim in the source. Fall
         // back to the scheme-less form to locate the original span.

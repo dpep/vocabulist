@@ -74,11 +74,39 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
         "user-prompt-submit" => capture_prompt(store, input),
         "post-tool-use" => capture_tool(store, input),
         "stop" => {
+            // Seeding lives here rather than on any synchronous hook: it takes
+            // seconds, and this one is async and fires at the end of a turn,
+            // so the cost is invisible. It also means someone who only ever
+            // uses the plugin — never the CLI — still gets a seeded lexicon
+            // and, with it, the detected identities that read-capture needs.
+            maybe_seed(store);
             let _ = crate::cli::process_spool(store, STOP_PROCESS_LIMIT);
         }
         _ => {}
     }
     0
+}
+
+/// Seed if it's never happened, or if the last one has gone stale.
+///
+/// Unlike the interactive path, this also refreshes: the machine acquires
+/// repos and tools over time, and a lexicon describing last month's machine
+/// flags this month's vocabulary. Failures are swallowed — an absent `gh` or
+/// an unreadable directory must never surface at the end of a turn.
+fn maybe_seed(store: &Store) {
+    let stale = match store.seconds_since_seed() {
+        Ok(None) => true,
+        Ok(Some(age)) => age > crate::cli::SEED_TTL_SECS,
+        Err(_) => return,
+    };
+    if !stale {
+        return;
+    }
+    let seeded =
+        store.transaction(|| crate::seed::run(store, &crate::seed::SeedOptions::default()));
+    if seeded.is_ok() {
+        let _ = store.mark_seeded();
+    }
 }
 
 /// The purest signal available: text the user typed themselves.

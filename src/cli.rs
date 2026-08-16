@@ -282,6 +282,29 @@ fn dispatch(cli: &Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     code
 }
 
+/// Re-seed after this long. The machine drifts — repos appear, tools get
+/// installed — and a lexicon reflecting last month's machine flags this
+/// month's vocabulary.
+pub const SEED_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
+/// Seed on first use, so nobody has to know the command exists.
+///
+/// An unseeded lexicon flags nearly everything, which makes the first run
+/// look broken. Seeding takes seconds, though, so it is announced rather than
+/// slipped in — and never runs on the hook path, where it would put six
+/// seconds in front of a keystroke.
+fn ensure_seeded(store: &Store, quiet: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if store.seconds_since_seed()?.is_some() {
+        return Ok(());
+    }
+    if !quiet {
+        eprintln!("vocab: first run — learning your vocabulary from this machine (once)");
+    }
+    store.transaction(|| seed::run(store, &seed::SeedOptions::default()))?;
+    store.mark_seeded()?;
+    Ok(())
+}
+
 fn dispatch_inner(
     cli: &Cli,
     profile: &Rc<Profile>,
@@ -289,6 +312,20 @@ fn dispatch_inner(
     let store = profile.time("store_open", || Store::open(cli.db_path()))?;
     let format = cli.format();
     let mut out = io::stdout().lock();
+
+    // Auto-seed the *default* store only. An explicit `--db` is a deliberate,
+    // scoped store — a scratch file, a test, a per-project lexicon — and
+    // quietly spending six seconds scanning the whole machine into it would be
+    // both surprising and wrong. Excludes `seed`, which does its own, and
+    // `hook`, which must stay fast; the Stop hook seeds asynchronously.
+    if cli.db.is_none()
+        && !matches!(
+            cli.command,
+            Some(Command::Seed { .. }) | Some(Command::Hook { .. })
+        )
+    {
+        ensure_seeded(&store, cli.quiet)?;
+    }
 
     match &cli.command {
         Some(Command::Seed { scan_root }) => {
@@ -298,6 +335,7 @@ fn dispatch_inner(
                     .unwrap_or_else(|| seed::SeedOptions::default().scan_root),
             };
             let report = profile.time("seed", || store.transaction(|| seed::run(&store, &opts)))?;
+            store.mark_seeded()?;
             if !cli.quiet {
                 output::render_seed(&mut out, &report, format)?;
             }

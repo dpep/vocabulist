@@ -127,9 +127,12 @@ CREATE TABLE IF NOT EXISTS frequency (
 -- everyone's messages; without this there's no way to tell which are yours,
 -- and capturing the rest would make the voice profile an average of the
 -- room.
+-- `denied` is why removal is a flag rather than a delete: detection re-runs
+-- on every seed and would otherwise resurrect a handle the user rejected.
 CREATE TABLE IF NOT EXISTS identities (
     handle TEXT PRIMARY KEY,
     source TEXT NOT NULL DEFAULT 'manual',
+    denied INTEGER NOT NULL DEFAULT 0,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -142,6 +145,13 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE TABLE IF NOT EXISTS captured (
     source_key TEXT PRIMARY KEY,
     captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Small key/value corner for facts about the store itself, such as when it
+-- was last seeded.
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_spool_unprocessed ON spool(processed_at)
@@ -178,6 +188,10 @@ fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE spool ADD COLUMN author TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE identities ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE identities ADD COLUMN denied INTEGER NOT NULL DEFAULT 0",
         [],
     );
     Ok(())
@@ -474,9 +488,33 @@ impl Store {
         rows.collect()
     }
 
+    /// Seconds since the lexicon was last seeded, or `None` if it never was.
+    pub fn seconds_since_seed(&self) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT CAST(strftime('%s','now') AS INTEGER) - CAST(value AS INTEGER)
+                   FROM meta WHERE key = 'seeded_at'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
+    /// Stamp the store as seeded, now.
+    pub fn mark_seeded(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('seeded_at', strftime('%s','now'))
+             ON CONFLICT(key) DO UPDATE SET value = strftime('%s','now')",
+            [],
+        )?;
+        Ok(())
+    }
+
     /// Record a handle that identifies the user, noting where it came from.
     /// Idempotent, and a manual entry is never overwritten by a detected one.
     pub fn add_identity_from(&self, handle: &str, source: &str) -> Result<bool> {
+        // OR IGNORE leaves a denied row denied, which is the point: seeding
+        // re-detects everything and must not undo a rejection.
         let changed = self.conn.execute(
             "INSERT OR IGNORE INTO identities (handle, source) VALUES (?1, ?2)",
             params![handle.to_lowercase(), source],
@@ -484,30 +522,41 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Record a handle the user named themselves.
+    /// Record a handle the user named themselves. Naming one explicitly
+    /// overrides an earlier rejection.
     pub fn add_identity(&self, handle: &str) -> Result<bool> {
-        self.add_identity_from(handle, "manual")
+        let changed = self.conn.execute(
+            "INSERT INTO identities (handle, source, denied) VALUES (?1, 'manual', 0)
+             ON CONFLICT(handle) DO UPDATE SET denied = 0, source = 'manual'",
+            params![handle.to_lowercase()],
+        )?;
+        Ok(changed > 0)
     }
 
     /// Handles with the reason each is believed, for display.
     pub fn identities_with_source(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT handle, source FROM identities ORDER BY handle")?;
+            .prepare("SELECT handle, source FROM identities WHERE denied = 0 ORDER BY handle")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect()
     }
 
+    /// Reject a handle. Recorded rather than deleted, so the next seed's
+    /// detection doesn't bring it back.
     pub fn remove_identity(&self, handle: &str) -> Result<bool> {
         Ok(self.conn.execute(
-            "DELETE FROM identities WHERE handle = ?1",
+            "INSERT INTO identities (handle, source, denied) VALUES (?1, 'denied', 1)
+             ON CONFLICT(handle) DO UPDATE SET denied = 1",
             params![handle.to_lowercase()],
         )? > 0)
     }
 
     /// Every handle that identifies the user, lowercased.
     pub fn identities(&self) -> Result<std::collections::HashSet<String>> {
-        let mut stmt = self.conn.prepare("SELECT handle FROM identities")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT handle FROM identities WHERE denied = 0")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.collect()
     }
@@ -870,6 +919,31 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM spool", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn a_rejected_identity_survives_re_detection() {
+        let s = store();
+        s.add_identity_from("work@example.com", "commits").unwrap();
+        assert!(s.identities().unwrap().contains("work@example.com"));
+
+        s.remove_identity("work@example.com").unwrap();
+        assert!(!s.identities().unwrap().contains("work@example.com"));
+
+        // Seeding re-detects everything; the rejection has to outlast it.
+        s.add_identity_from("work@example.com", "commits").unwrap();
+        assert!(
+            !s.identities().unwrap().contains("work@example.com"),
+            "detection must not resurrect a rejected handle"
+        );
+    }
+
+    #[test]
+    fn naming_a_handle_explicitly_overrides_an_earlier_rejection() {
+        let s = store();
+        s.remove_identity("dpep").unwrap();
+        s.add_identity("dpep").unwrap();
+        assert!(s.identities().unwrap().contains("dpep"));
     }
 
     #[test]
