@@ -33,9 +33,11 @@ pub struct Detected {
 pub fn detect_local() -> Vec<Detected> {
     let mut out = Vec::new();
 
-    // Authoritative when available — it's the authenticated account.
-    if let Some(login) = run("gh", &["api", "user", "--jq", ".login"]) {
-        push(&mut out, login.trim(), "gh");
+    // Read from gh's own config rather than `gh api user`. Same answer, no
+    // network — this crate promises to make none, and shelling out to the
+    // API quietly broke that as well as costing a third of a second.
+    for login in gh_logins() {
+        push(&mut out, &login, "gh");
     }
     // The email is the more valuable of the two: it's what other services
     // render alongside their own IDs, so it's the bridge to Slack.
@@ -45,6 +47,49 @@ pub fn detect_local() -> Vec<Detected> {
     if let Some(name) = run("git", &["config", "--get", "user.name"]) {
         push(&mut out, name.trim(), "gitconfig");
     }
+    out
+}
+
+/// Logins `gh` has authenticated, straight out of its config file.
+///
+/// The shape is `hosts.yml` → `<host>:` → `users:` → `<login>:`, so the
+/// logins are the keys nested one level under `users`. Parsed by indentation
+/// rather than with a YAML dependency: the file is small, the shape is fixed,
+/// and a miss here costs a detected identity rather than anything worse.
+fn gh_logins() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let path = std::path::Path::new(&home).join(".config/gh/hosts.yml");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut users_indent: Option<usize> = None;
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if trimmed == "users:" {
+            users_indent = Some(indent);
+            continue;
+        }
+        let Some(parent) = users_indent else { continue };
+        if indent <= parent {
+            // Dedented back out of the users block.
+            users_indent = None;
+            continue;
+        }
+        // Only the immediate children are logins; their fields are deeper.
+        if indent == parent + 4
+            && let Some(login) = trimmed.strip_suffix(':')
+            && !login.is_empty()
+        {
+            out.push(login.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
     out
 }
 

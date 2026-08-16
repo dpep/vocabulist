@@ -336,10 +336,11 @@ fn dispatch_inner(
 
     match &cli.command {
         Some(Command::Seed { scan_root }) => {
-            let opts = seed::SeedOptions {
-                scan_root: scan_root
-                    .clone()
-                    .unwrap_or_else(|| seed::SeedOptions::default().scan_root),
+            let opts = match scan_root {
+                Some(root) => seed::SeedOptions {
+                    scan_roots: vec![root.clone()],
+                },
+                None => seed::SeedOptions::default(),
             };
             let report = profile.time("seed", || seed::run(&store, &opts))?;
             store.mark_seeded()?;

@@ -25,18 +25,44 @@ const SYSTEM_BIN_DIRS: &[&str] = &["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/u
 /// How deep to hunt for git repos beneath the scan root.
 const MAX_REPO_DEPTH: usize = 3;
 
+/// Where people keep code. `~/code` is one convention among many, and
+/// assuming it means the tool finds nothing at all for most users — with no
+/// error, since an empty scan looks exactly like a machine with no repos.
+const PROJECT_DIRS: &[&str] = &[
+    "code",
+    "src",
+    "projects",
+    "Projects",
+    "dev",
+    "Developer",
+    "work",
+    "workspace",
+    "git",
+    "repos",
+];
+
 pub struct SeedOptions {
-    /// Directory tree to scan for repos and manifests.
-    pub scan_root: PathBuf,
+    /// Directory trees to scan for repos and manifests.
+    pub scan_roots: Vec<PathBuf>,
 }
 
 impl Default for SeedOptions {
     fn default() -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return Self {
+                scan_roots: vec![PathBuf::from(".")],
+            };
+        };
+        let roots: Vec<PathBuf> = PROJECT_DIRS
+            .iter()
+            .map(|d| home.join(d))
+            .filter(|p| p.is_dir())
+            .collect();
         Self {
-            scan_root: home
-                .map(|h| h.join("code"))
-                .unwrap_or_else(|| PathBuf::from(".")),
+            // Falling back to $HOME itself rather than giving up: bounded by
+            // MAX_REPO_DEPTH, and finding the repos matters more than the
+            // seconds it costs someone with an unconventional layout.
+            scan_roots: if roots.is_empty() { vec![home] } else { roots },
         }
     }
 }
@@ -51,7 +77,9 @@ struct Harvest {
 
 /// Mine every source and write the results into the lexicon.
 pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
-    let repos = find_repos(&opts.scan_root);
+    let mut repos: Vec<PathBuf> = opts.scan_roots.iter().flat_map(|r| find_repos(r)).collect();
+    repos.sort();
+    repos.dedup();
 
     let harvests = vec![
         harvest_owned(&repos),
