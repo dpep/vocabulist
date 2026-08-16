@@ -99,7 +99,7 @@ impl Kind {
 /// Which voice a piece of text was written in. A single "writing style" is a
 /// fiction — prompts, commits, and email are different registers, and
 /// conflating them produces parody. The capture channel labels this for free.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Register {
     Prompt,
@@ -189,7 +189,7 @@ pub struct Finding {
     pub word: String,
     /// 1-based line number; 1 for a single-blob analysis.
     pub line: usize,
-    /// 1-based column of the token's first byte.
+    /// 1-based **character** column — see `text::Token::col` for why not bytes.
     pub col: usize,
     /// Ranked replacements, best first. May be empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

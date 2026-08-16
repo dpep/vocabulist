@@ -20,7 +20,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Finding, FindingKind};
+use crate::types::Finding;
 
 /// Adjacent keys on a QWERTY keyboard, for substitutions that resemble real
 /// slips rather than random letters.
@@ -320,18 +320,10 @@ fn ratio(a: usize, b: usize) -> f64 {
     if b == 0 { 0.0 } else { a as f64 / b as f64 }
 }
 
-/// Findings that are real-word kind, for reporting on the hardest class.
-pub fn real_word_findings(findings: &[Finding]) -> usize {
-    findings
-        .iter()
-        .filter(|f| f.kind == FindingKind::RealWord)
-        .count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Suggestion;
+    use crate::types::{FindingKind, Suggestion};
 
     #[test]
     fn injection_is_reproducible_for_a_seed() {

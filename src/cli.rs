@@ -117,7 +117,7 @@ pub enum Command {
         text: Option<String>,
         /// Which voice this text is in.
         #[arg(short, long, default_value = "other")]
-        register: String,
+        register: Register,
         /// Where it came from, for provenance.
         #[arg(short, long)]
         source: Option<String>,
@@ -149,7 +149,7 @@ pub enum Command {
         lexicon: bool,
         /// Limit corpus analysis to one register (one voice you write in).
         #[arg(short, long)]
-        register: Option<String>,
+        register: Option<Register>,
     },
     /// Bulk-load text from JSON on stdin — NDJSON or an array of
     /// `{body, author?, register?, source?}`.
@@ -163,7 +163,7 @@ pub enum Command {
         selves: Vec<String>,
         /// Register for records that don't name one.
         #[arg(short, long, default_value = "other")]
-        register: String,
+        register: Register,
     },
     /// Measure the checker against a labeled corpus: corrupt known-good prose
     /// in known places, then score what gets caught and what gets flagged
@@ -184,7 +184,7 @@ pub enum Command {
     Phrases {
         /// Limit to one register.
         #[arg(short, long)]
-        register: Option<String>,
+        register: Option<Register>,
         /// Ignore pairings seen fewer than this many times.
         #[arg(long, default_value_t = 2)]
         min_count: i64,
@@ -394,8 +394,7 @@ fn dispatch_inner(
             register,
             source,
         }) => {
-            let register =
-                Register::parse(register).ok_or_else(|| format!("unknown register: {register}"))?;
+            let register = *register;
             let body = match arg {
                 Some(t) => t.clone(),
                 None => read_stdin()?,
@@ -464,12 +463,7 @@ fn dispatch_inner(
             register,
         }) => {
             let report = if *lexicon {
-                let register = match register {
-                    Some(r) => {
-                        Some(Register::parse(r).ok_or_else(|| format!("unknown register: {r}"))?)
-                    }
-                    None => None,
-                };
+                let register = *register;
                 let scope =
                     register.map_or("lexicon".to_string(), |r| format!("lexicon:{}", r.as_str()));
                 // Names are excluded: `contextdb` and `polyid` are things
@@ -526,8 +520,7 @@ fn dispatch_inner(
         }
 
         Some(Command::Ingest { selves, register }) => {
-            let default_register =
-                Register::parse(register).ok_or_else(|| format!("unknown register: {register}"))?;
+            let default_register = *register;
             let selves: std::collections::HashSet<String> =
                 selves.iter().map(|s| s.to_lowercase()).collect();
             let records = crate::ingest::parse(&read_stdin()?)?;
@@ -572,12 +565,7 @@ fn dispatch_inner(
             min_count,
             limit,
         }) => {
-            let register = match register {
-                Some(r) => {
-                    Some(Register::parse(r).ok_or_else(|| format!("unknown register: {r}"))?)
-                }
-                None => None,
-            };
+            let register = *register;
             let bigrams = store.ngrams(2, register)?;
             let mut ranked = ngram::rank_collocations(&bigrams, *min_count);
             ranked.truncate(*limit);
