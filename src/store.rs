@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS word_sources (
 
 CREATE INDEX IF NOT EXISTS idx_word_sources_word ON word_sources(word);
 
+-- How common a word is in ordinary English, as distinct from how often *you*
+-- use it (which lives in lexicon.count). Seeded from a small embedded core
+-- and grown by mining prose already on the machine. Breaks suggestion ties
+-- and lets confusion detection work before any personal evidence exists.
+CREATE TABLE IF NOT EXISTS frequency (
+    word TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_spool_unprocessed ON spool(processed_at)
     WHERE processed_at IS NULL;
 
@@ -434,6 +443,38 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![register.as_str()], |r| r.get::<_, String>(0))?;
         rows.collect()
+    }
+
+    /// Add to a word's general-English frequency.
+    pub fn bump_frequency(&self, word: &str, by: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO frequency (word, count) VALUES (?1, ?2)
+             ON CONFLICT(word) DO UPDATE SET count = count + ?2",
+            params![word, by],
+        )?;
+        Ok(())
+    }
+
+    /// The whole frequency table, for loading into memory once per run.
+    pub fn frequencies(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let mut stmt = self.conn.prepare("SELECT word, count FROM frequency")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        rows.collect()
+    }
+
+    /// Seed the embedded core list. Idempotent by design — re-seeding takes
+    /// the max rather than accumulating, so running `seed` repeatedly doesn't
+    /// inflate the prior out of proportion with mined counts.
+    pub fn seed_core_frequencies(&self) -> Result<usize> {
+        let core = crate::frequency::core_counts();
+        for (word, count) in &core {
+            self.conn.execute(
+                "INSERT INTO frequency (word, count) VALUES (?1, ?2)
+                 ON CONFLICT(word) DO UPDATE SET count = MAX(count, ?2)",
+                params![word, count],
+            )?;
+        }
+        Ok(core.len())
     }
 
     /// Note that `word` appeared in document `doc`. Idempotent — a word seen

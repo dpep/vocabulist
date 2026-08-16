@@ -92,11 +92,71 @@ pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
         upgraded += usize::from(was_upgraded);
     }
 
+    // General-English frequency: the embedded core first, then real counts
+    // mined from prose already on this machine. The core covers the head of
+    // the distribution on day one; the mined counts fill in the tail with
+    // language from the domain the user actually writes in.
+    store.seed_core_frequencies()?;
+    let frequency_words = harvest_prose_frequency(store, &repos)?;
+    sources.push(SeedSource {
+        name: "prose".into(),
+        provenance: Provenance::Observed,
+        terms: frequency_words,
+        skipped: None,
+    });
+
     Ok(SeedReport {
         sources,
         added,
         upgraded,
     })
+}
+
+/// Files worth reading for ordinary English, as opposed to code.
+const PROSE_FILES: &[&str] = &["README.md", "README", "CONTRIBUTING.md", "CHANGELOG.md"];
+
+/// Bytes of any one file we'll read. A generated changelog can be enormous
+/// and adds nothing after the first few thousand words.
+const MAX_PROSE_BYTES: usize = 200_000;
+
+/// Mine word frequencies from prose files in the scanned repos.
+///
+/// This is not vocabulary harvesting — the words go to the `frequency` table,
+/// not the lexicon. The question it answers is "how common is this word in
+/// ordinary writing", which is what breaks suggestion ties and makes
+/// confusion detection possible before any personal corpus exists.
+fn harvest_prose_frequency(store: &Store, repos: &[PathBuf]) -> rusqlite::Result<usize> {
+    let mut counts: HashMap<String, i64> = HashMap::new();
+
+    for repo in repos {
+        for name in PROSE_FILES {
+            let path = repo.join(name);
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let body = &body[..body.len().min(MAX_PROSE_BYTES)];
+            for line in body.lines() {
+                if !text::is_prose_line(line) {
+                    continue;
+                }
+                let masked = text::mask_non_prose(&text::normalize_typography(line));
+                for token in text::tokenize(&masked) {
+                    let word = text::normalize(&token.text);
+                    if word.chars().count() >= 2
+                        && word.chars().all(|c| c.is_ascii_alphabetic() || c == '\'')
+                    {
+                        *counts.entry(word).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let distinct = counts.len();
+    for (word, count) in counts {
+        store.bump_frequency(&word, count)?;
+    }
+    Ok(distinct)
 }
 
 /// A term contributes itself plus its parts: `pattern-engine` is a word, and

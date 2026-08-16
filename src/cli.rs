@@ -526,7 +526,8 @@ fn check_input(
         .collect();
     profile.count("lexicon_words", lexicon.len() as u64);
 
-    let checker = Checker::with_profile(lexicon, Rc::clone(profile));
+    let frequency = profile.time("frequency_load", || store.frequencies())?;
+    let checker = Checker::with_profile(lexicon, Rc::clone(profile)).with_frequency(frequency);
     let mut evidence = |gram: &str| {
         profile.count("ngram_queries", 1);
         store.ngram_count(gram).unwrap_or(0)

@@ -23,6 +23,8 @@ const MAX_SUGGESTIONS: usize = 3;
 /// the system dictionary is the floor beneath it.
 pub struct Checker {
     lexicon: HashSet<String>,
+    /// General-English frequency, for breaking ties the dictionary can't.
+    frequency: std::collections::HashMap<String, i64>,
     /// Loaded on first miss, not up front. Reading ~236k words costs tens of
     /// milliseconds, and text whose words are all in the lexicon never needs
     /// it — which is the common case once the lexicon is seeded.
@@ -38,6 +40,7 @@ impl Checker {
         let _ = cell.set(dictionary);
         Self {
             lexicon,
+            frequency: std::collections::HashMap::new(),
             dictionary: cell,
             profile: Rc::new(Profile::disabled()),
         }
@@ -47,9 +50,21 @@ impl Checker {
     pub fn with_profile(lexicon: HashSet<String>, profile: Rc<Profile>) -> Self {
         Self {
             lexicon,
+            frequency: std::collections::HashMap::new(),
             dictionary: OnceCell::new(),
             profile,
         }
+    }
+
+    /// Attach general-English frequencies, used to rank suggestions and to
+    /// judge confusions before personal evidence exists.
+    pub fn with_frequency(mut self, frequency: std::collections::HashMap<String, i64>) -> Self {
+        self.frequency = frequency;
+        self
+    }
+
+    fn frequency_of(&self, word: &str) -> i64 {
+        self.frequency.get(word).copied().unwrap_or(0)
     }
 
     /// The backstop, loading it on first use.
@@ -193,14 +208,18 @@ impl Checker {
     /// Ranked replacements within `MAX_EDIT_DISTANCE`. Lexicon words rank
     /// above dictionary words — if you have a word for it, it's your word.
     pub fn suggest(&self, word: &str) -> Vec<String> {
-        // (distance, -prefix, -suffix, source rank, word) — every field sorts
-        // ascending, so the agreement lengths are negated to put the closest
-        // candidate first. Shape outranks source: your lexicon is full of
-        // short binary names that sit one edit from everything, and letting
-        // provenance win would bury the obvious correction under them.
-        // Preferring your own vocabulary is a tie-break, not a trump card.
+        // (distance, -frequency, -prefix, -suffix, source rank, word) — every
+        // field sorts ascending, so the values that should win are negated.
+        //
+        // Frequency sits above shape because it's the stronger evidence when
+        // it exists: `aviod` shares three leading letters with `avid` and only
+        // two with `avoid`, so prefix agreement alone picks the wrong one.
+        // Shape then decides among candidates no frequency list knows, and
+        // outranks source — your lexicon is full of short binary names that
+        // sit one edit from everything, and letting provenance win would bury
+        // the obvious correction under them.
         self.profile.count("suggest_calls", 1);
-        let mut scored: Vec<(usize, isize, isize, u8, &String)> = Vec::new();
+        let mut scored: Vec<(usize, i64, isize, isize, u8, &String)> = Vec::new();
         let dictionary = self.dictionary().into_iter().flatten();
         for (candidate, rank) in self
             .lexicon
@@ -213,17 +232,24 @@ impl Checker {
             self.profile.count("candidates_scanned", 1);
             if let Some(d) = bounded_distance(word, candidate, MAX_EDIT_DISTANCE) {
                 let (prefix, suffix) = affinity(word, candidate);
-                scored.push((d, -(prefix as isize), -(suffix as isize), rank, candidate));
+                scored.push((
+                    d,
+                    -self.frequency_of(candidate),
+                    -(prefix as isize),
+                    -(suffix as isize),
+                    rank,
+                    candidate,
+                ));
             }
         }
         self.profile.count("candidates_kept", scored.len() as u64);
 
         scored.sort();
-        scored.dedup_by(|a, b| a.4 == b.4);
+        scored.dedup_by(|a, b| a.5 == b.5);
         scored
             .into_iter()
             .take(MAX_SUGGESTIONS)
-            .map(|(_, _, _, _, w)| w.clone())
+            .map(|(_, _, _, _, _, w)| w.clone())
             .collect()
     }
 }
@@ -249,30 +275,45 @@ fn affinity(a: &str, b: &str) -> (usize, usize) {
     (prefix, suffix)
 }
 
-/// Levenshtein distance, abandoned once it exceeds `max`. Returns `None` when
-/// the words are further apart than that — the common case, so bailing early
-/// is what keeps a full-lexicon scan cheap.
+/// Edit distance counting a transposition as **one** edit, abandoned once it
+/// exceeds `max`. Returns `None` when the words are further apart than that —
+/// the common case, so bailing early is what keeps a full-lexicon scan cheap.
+///
+/// This is Damerau-Levenshtein (optimal string alignment) rather than plain
+/// Levenshtein, because swapping two adjacent letters is one of the most
+/// common ways to mistype a word and plain Levenshtein charges it as two
+/// substitutions. That difference is not academic: it puts `aviod` two edits
+/// from `avoid` but only one from `avid`, so the obvious correction loses to
+/// a worse one.
 pub fn bounded_distance(a: &str, b: &str, max: usize) -> Option<usize> {
-    let (a_len, b_len) = (a.chars().count(), b.chars().count());
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let (a_len, b_len) = (a_chars.len(), b_chars.len());
     if a_len.abs_diff(b_len) > max {
         return None;
     }
 
-    let b_chars: Vec<char> = b.chars().collect();
+    // Three rows, because a transposition looks back two positions.
+    let mut prev_prev: Vec<usize> = vec![0; b_len + 1];
     let mut prev: Vec<usize> = (0..=b_len).collect();
     let mut current = vec![0usize; b_len + 1];
 
-    for (i, ca) in a.chars().enumerate() {
+    for i in 0..a_len {
         current[0] = i + 1;
         let mut row_min = current[0];
-        for (j, cb) in b_chars.iter().enumerate() {
-            let cost = usize::from(ca != *cb);
-            current[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
-            row_min = row_min.min(current[j + 1]);
+        for j in 0..b_len {
+            let cost = usize::from(a_chars[i] != b_chars[j]);
+            let mut best = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
+            if i > 0 && j > 0 && a_chars[i] == b_chars[j - 1] && a_chars[i - 1] == b_chars[j] {
+                best = best.min(prev_prev[j - 1] + 1);
+            }
+            current[j + 1] = best;
+            row_min = row_min.min(best);
         }
         if row_min > max {
             return None;
         }
+        std::mem::swap(&mut prev_prev, &mut prev);
         std::mem::swap(&mut prev, &mut current);
     }
     let d = prev[b_len];
@@ -471,6 +512,58 @@ mod tests {
         let (sh_prefix, sh_suffix) = affinity("shp", "sh");
         assert_eq!(ship_prefix, sh_prefix);
         assert!(ship_suffix > sh_suffix);
+    }
+
+    #[test]
+    fn a_transposition_costs_one_edit_not_two() {
+        // The reason `aviod` used to suggest `avid` over `avoid`.
+        assert_eq!(bounded_distance("aviod", "avoid", 2), Some(1));
+        assert_eq!(bounded_distance("teh", "the", 2), Some(1));
+        assert_eq!(bounded_distance("recieve", "receive", 2), Some(1));
+    }
+
+    #[test]
+    fn transposition_plus_frequency_ranks_the_intended_word_first() {
+        // Both are one edit away once transposition is free, and `avid`
+        // actually shares the longer prefix — so frequency is what decides.
+        let frequency: std::collections::HashMap<String, i64> =
+            [("avoid".to_string(), 20_000i64)].into_iter().collect();
+        let c = Checker::new(
+            HashSet::new(),
+            Some(
+                ["avoid", "avid", "avian"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+        )
+        .with_frequency(frequency);
+        assert_eq!(c.suggest("aviod").first().unwrap(), "avoid");
+    }
+
+    #[test]
+    fn shape_still_decides_when_no_frequency_is_known() {
+        let c = checker(&[], &["small", "sal", "mal"]);
+        assert_eq!(c.suggest("smal").first().unwrap(), "small");
+    }
+
+    #[test]
+    fn frequency_breaks_ties_the_dictionary_cannot() {
+        // All three are one edit from "smal" and agree on the same prefix;
+        // only how common they are separates them.
+        let frequency: std::collections::HashMap<String, i64> =
+            [("small".to_string(), 50_000i64)].into_iter().collect();
+        let c = Checker::new(
+            HashSet::new(),
+            Some(
+                ["small", "smalm", "smalt"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+        )
+        .with_frequency(frequency);
+        assert_eq!(c.suggest("smal").first().unwrap(), "small");
     }
 
     #[test]
