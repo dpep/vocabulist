@@ -162,25 +162,32 @@ fn capture_own_messages(store: &Store, input: &HookInput) {
     }
 
     for message in crate::inbound::harvest(&input.tool_name, &input.tool_response, &selves) {
-        // Reading the same channel twice must not count the same sentence
-        // twice — word_sources would dedup, but registers and n-grams
-        // wouldn't, and a re-read would look like a habit.
-        match store.claim_source(&message.key) {
-            Ok(true) => {}
-            _ => continue,
-        }
         let authored_by = if watermark::is_assistant_authored(&message.body) {
             "assistant"
         } else {
             "user"
         };
-        let _ = store.spool_with_author(
-            message.register,
-            Some(&message.key),
-            &message.body,
-            authored_by,
-            Some(&message.author),
-        );
+
+        // Claim and spool together. Claiming first and spooling separately
+        // loses a message for good if the write fails: the claim persists,
+        // so the next read of the same channel skips it as already captured.
+        //
+        // The claim itself is what keeps re-reads idempotent — word_sources
+        // would dedup, but registers and n-grams would not, so a second read
+        // would make the same sentence look like a habit.
+        let _ = store.transaction(|| -> rusqlite::Result<()> {
+            if !store.claim_source(&message.key)? {
+                return Ok(());
+            }
+            store.spool_with_author(
+                message.register,
+                Some(&message.key),
+                &message.body,
+                authored_by,
+                Some(&message.author),
+            )?;
+            Ok(())
+        });
     }
 }
 
