@@ -245,7 +245,7 @@ pub struct SeedSource {
 
 /// Store-wide counts, for `stats`.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
-pub struct StatsPayload {
+pub struct StoreStatus {
     pub db: String,
     /// How long ago the lexicon was seeded from ground truth. `None` means
     /// never, which on a live store means auto-seeding has not run yet.

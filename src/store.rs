@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Result, params};
 
-use crate::types::{Entry, Kind, Provenance, Register, StatsPayload};
+use crate::types::{Entry, Kind, Provenance, Register, StoreStatus};
 
 /// How many exemplars we keep per register. A voice profile needs real quoted
 /// examples — adjectives like "semi-casual" are unfalsifiable — but keeping
@@ -802,7 +802,7 @@ impl Store {
         Ok(out)
     }
 
-    pub fn stats(&self) -> Result<StatsPayload> {
+    pub fn status(&self) -> Result<StoreStatus> {
         let words = self
             .conn
             .query_row("SELECT COUNT(*) FROM lexicon", [], |r| r.get(0))?;
@@ -858,7 +858,7 @@ impl Store {
         // answer about itself.
         let seeded_secs_ago = self.seconds_since_seed()?;
 
-        Ok(StatsPayload {
+        Ok(StoreStatus {
             db: self.path.display().to_string(),
             seeded_secs_ago,
             words,

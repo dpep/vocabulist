@@ -149,10 +149,10 @@ fn assistant_authored_text_gives_vocabulary_but_not_voice() {
 }
 
 #[test]
-fn stats_reports_the_store_in_json() {
-    let db = scratch_db("stats");
+fn status_reports_the_store_in_json() {
+    let db = scratch_db("status");
     vocab(&db, &["add", "iriq"]);
-    let out = vocab(&db, &["stats", "-j"]);
+    let out = vocab(&db, &["status", "-j"]);
     let parsed: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
     assert_eq!(parsed["words"], 1);
 }
@@ -267,7 +267,7 @@ fn a_bundled_cue_catches_a_real_word_error_with_no_corpus() {
 }
 
 #[test]
-fn stats_reports_what_it_has_read_and_where_it_exports() {
+fn status_reports_what_it_has_read_and_where_it_exports() {
     let db = scratch_db("stats-sources");
     vocab(
         &db,
@@ -291,7 +291,7 @@ fn stats_reports_what_it_has_read_and_where_it_exports() {
     );
     vocab(&db, &["process", "-q"]);
 
-    let out = vocab(&db, &["stats", "-j"]);
+    let out = vocab(&db, &["status", "-j"]);
     // Bodies read, not words learned — the two answer different questions and
     // only one of them is "what has this thing seen".
     assert!(out.stdout.contains("\"documents\""), "{}", out.stdout);
@@ -327,9 +327,11 @@ fn a_bare_word_says_it_was_spell_checked() {
 }
 
 #[test]
-fn status_is_an_alias_for_stats() {
-    let db = scratch_db("status-alias");
-    let out = vocab(&db, &["status"]);
-    assert!(out.stdout.contains("words:"), "{}", out.stdout);
+fn completions_default_to_the_running_shell() {
+    // A bare `--completions` is the common case; naming the shell should be
+    // the exception, not the price of entry.
+    let db = scratch_db("completions");
+    let out = vocab(&db, &["--completions"]);
+    assert!(out.stdout.contains("_vocab"), "{}", out.stdout);
     assert_eq!(out.code, 0);
 }

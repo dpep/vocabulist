@@ -44,6 +44,50 @@ Examples:
 
 The lexicon seeds itself on first use; `vocab seed` re-runs it by hand.";
 
+/// A shell for `--completions`, or `auto` to work it out from `$SHELL`.
+///
+/// A bare `--completions` is the overwhelmingly common case — you want the
+/// script for the shell you are sitting in — so naming the shell should be the
+/// exception rather than the price of entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionShell {
+    Auto,
+    Named(clap_complete::Shell),
+}
+
+impl std::str::FromStr for CompletionShell {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "auto" {
+            return Ok(CompletionShell::Auto);
+        }
+        s.parse()
+            .map(CompletionShell::Named)
+            .map_err(|_| format!("unknown shell {s:?} (bash, zsh, fish, elvish, powershell)"))
+    }
+}
+
+impl CompletionShell {
+    /// The shell to generate for. `None` when `$SHELL` is unset or names
+    /// something clap_complete has no generator for.
+    pub fn resolve(self) -> Option<clap_complete::Shell> {
+        match self {
+            CompletionShell::Named(shell) => Some(shell),
+            // `$SHELL` is a path — /bin/zsh, /opt/homebrew/bin/fish — so the
+            // basename is the name to parse.
+            CompletionShell::Auto => std::env::var("SHELL")
+                .ok()
+                .and_then(|path| {
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                })
+                .and_then(|name| name.parse().ok()),
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "vocab",
@@ -89,9 +133,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Print a shell completion script (bash, zsh, fish, elvish, powershell).
-    #[arg(long, value_name = "SHELL")]
-    pub completions: Option<clap_complete::Shell>,
+    /// Print a shell completion script. Defaults to the shell you're running
+    /// (bash, zsh, fish, elvish, powershell).
+    #[arg(long, value_name = "SHELL", num_args = 0..=1, default_missing_value = "auto")]
+    pub completions: Option<CompletionShell>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -117,12 +162,7 @@ pub enum Command {
         limit: usize,
     },
     /// Show store-wide counts, what has been read, and where it exports to.
-    ///
-    /// Aliased as `status`, because that is the word people reach for — and
-    /// without the alias `vocab status` spell-checks the word "status",
-    /// reports it clean, and looks like a command that did nothing.
-    #[command(alias = "status")]
-    Stats,
+    Status,
     /// Stage text for learning. Assistant-authored text is recorded but never
     /// learned from.
     Capture {
@@ -274,6 +314,13 @@ pub fn run() -> ExitCode {
     // Before anything touches the store — generating completions must work
     // on a machine that has never run `vocab seed`.
     if let Some(shell) = cli.completions {
+        let Some(shell) = shell.resolve() else {
+            eprintln!(
+                "vocab: could not tell which shell you're running — \
+                 pass one to --completions (bash, zsh, fish, elvish, powershell)"
+            );
+            return ExitCode::from(2);
+        };
         clap_complete::generate(shell, &mut Cli::command(), "vocab", &mut io::stdout());
         return ExitCode::SUCCESS;
     }
@@ -393,13 +440,13 @@ fn dispatch_inner(
             })
         }
 
-        Some(Command::Stats) => {
-            let mut stats = store.stats()?;
+        Some(Command::Status) => {
+            let mut status = store.status()?;
             // Filled here rather than in the store: what a spell checker has
             // on disk is a fact about the filesystem, not about the lexicon.
-            stats.integrations = crate::sync::status();
+            status.integrations = crate::sync::status();
             if !cli.quiet {
-                output::render_stats(&mut out, &stats, format)?;
+                output::render_status(&mut out, &status, format)?;
             }
             Ok(ExitCode::SUCCESS)
         }

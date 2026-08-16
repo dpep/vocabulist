@@ -9,7 +9,7 @@ use std::io::Write;
 use serde_json::json;
 
 use crate::cli::Format;
-use crate::types::{Entry, Finding, SeedReport, StatsPayload, StatusPayload};
+use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus};
 
 /// The single structured-output path for findings. `-j` is a pretty array,
 /// `-J` is one object per line, so single-blob and streamed input emit an
@@ -136,45 +136,45 @@ pub fn render_seed(
     }
 }
 
-pub fn render_stats(
+pub fn render_status(
     out: &mut impl Write,
-    stats: &StatsPayload,
+    status: &StoreStatus,
     format: Format,
 ) -> std::io::Result<()> {
     match format {
         Format::Human => {
-            writeln!(out, "db:      {}", tilde(&stats.db))?;
-            writeln!(out, "seeded:  {}", age(stats.seeded_secs_ago))?;
-            writeln!(out, "words:   {}", stats.words)?;
-            writeln!(out, "ngrams:  {}", stats.ngrams)?;
-            writeln!(out, "spooled: {}", stats.spooled)?;
-            if !stats.by_provenance.is_empty() {
+            writeln!(out, "db:      {}", tilde(&status.db))?;
+            writeln!(out, "seeded:  {}", age(status.seeded_secs_ago))?;
+            writeln!(out, "words:   {}", status.words)?;
+            writeln!(out, "ngrams:  {}", status.ngrams)?;
+            writeln!(out, "spooled: {}", status.spooled)?;
+            if !status.by_provenance.is_empty() {
                 writeln!(out, "\nby provenance:")?;
-                for (name, count) in sorted_desc(&stats.by_provenance) {
+                for (name, count) in sorted_desc(&status.by_provenance) {
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
-            if !stats.by_register.is_empty() {
+            if !status.by_register.is_empty() {
                 writeln!(out, "\nby register:")?;
-                for (name, count) in sorted_desc(&stats.by_register) {
+                for (name, count) in sorted_desc(&status.by_register) {
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
-            if !stats.documents.is_empty() {
+            if !status.documents.is_empty() {
                 writeln!(out, "\nread (bodies):")?;
-                for (name, count) in sorted_desc(&stats.documents) {
+                for (name, count) in sorted_desc(&status.documents) {
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
-            if !stats.messages.is_empty() {
+            if !status.messages.is_empty() {
                 writeln!(out, "\nmessages captured:")?;
-                for (name, count) in sorted_desc(&stats.messages) {
+                for (name, count) in sorted_desc(&status.messages) {
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
-            if !stats.integrations.is_empty() {
+            if !status.integrations.is_empty() {
                 writeln!(out, "\nspell checkers:")?;
-                for i in &stats.integrations {
+                for i in &status.integrations {
                     // `ours` and `total` differ where the file is shared with
                     // the user's own additions, and that difference is the
                     // whole reason `unsync` is safe — worth showing.
@@ -190,8 +190,8 @@ pub fn render_stats(
             }
             Ok(())
         }
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(stats).unwrap()),
-        Format::Ndjson => writeln!(out, "{}", serde_json::to_string(stats).unwrap()),
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(status).unwrap()),
+        Format::Ndjson => writeln!(out, "{}", serde_json::to_string(status).unwrap()),
     }
 }
 

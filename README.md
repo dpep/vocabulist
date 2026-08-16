@@ -170,10 +170,10 @@ cat notes.md | vocab -J        # stream stdin, NDJSON per finding
 vocab -f README.md -j          # check a file, pretty JSON
 vocab list rubo                # lexicon entries matching "rubo"
 vocab add contextdb iriq       # add by hand (top provenance, never pruned)
-vocab stats                    # what the store knows
+vocab status                   # what the store knows, and where it exports
 ```
 
-`stats` also reports what it has actually *read* — bodies per register, messages
+`status` also reports what it has actually *read* — bodies per register, messages
 captured per service — and which spell checkers the lexicon has been exported
 into, including how many words in a shared file are ours rather than yours:
 

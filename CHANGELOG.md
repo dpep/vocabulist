@@ -4,15 +4,14 @@
 
 ### Added
 
-- `vocab status` works, as an alias for `stats`. It previously spell-checked
-  the *word* "status", found it correctly spelled, and printed "No issues
-  found" — so a subcommand that does not exist looked like one that ran.
+- `--completions` defaults to the shell you are running, read from `$SHELL`.
+  Naming the shell is now the exception rather than the price of entry.
 - A one-word check now names the word: `"log" is spelled correctly`, rather
   than a bare "No issues found" that reads like a command result.
-- `stats` reports when the lexicon was last seeded, and paths are shown
+- `status` reports when the lexicon was last seeded, and paths are shown
   relative to `~` in human output. JSON keeps absolute paths, since `~` is a
   shell convention a consumer would have to know to expand.
-- `vocab stats` reports what it has actually **read** — bodies per register,
+- `vocab status` reports what it has actually **read** — bodies per register,
   messages captured per service — and which spell checkers the lexicon has
   been exported into. For a shared file it distinguishes the words it wrote
   from the ones you added yourself, which is the difference `unsync` depends
@@ -74,6 +73,10 @@
 
 ### Breaking
 
+- `vocab stats` is now **`vocab status`**. It was renamed rather than aliased
+  because `status` is the word people reach for — and `vocab status`
+  previously spell-checked the *word* "status", found it correct, and printed
+  "No issues found", so a command that did not exist reported success.
 - `Finding.suggestions` is now `[{word, score}]` rather than `[string]`. One
   number couldn't answer two questions — how sure we are the word is wrong,
   and which replacement was meant — so `hepl` reported `help`, `hep`, and
