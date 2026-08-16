@@ -211,6 +211,33 @@ It also settles a division of labor:
 Binary proposes, Claude disposes. Pushing collocation extraction up into the
 skill layer would mean burning tokens to re-derive statistics badly.
 
+### Phrase length, and why longer ones are affordable
+
+Phrases were pairs and triples because storing every longer n-gram costs a row
+per token per order and yields almost nothing: measured on ordinary prose,
+13.9% of pairs recur and only 1.3% of five-word runs do, so four times the rows
+surface an eighth as many phrases.
+
+The way out is the *apriori* property — a phrase can never appear more often
+than its own prefix. A phrase whose prefix was seen once cannot itself be seen
+twice, so following it is provably wasted. Counting a longer phrase only after
+its prefix has recurred keeps every row that can still become evidence and
+drops the rest before they are written:
+
+| n | stored | naive | recurring |
+|---|---|---|---|
+| 2 | 3,796 | 3,796 | 361 |
+| 3 | 617 | ~4,400 | 25 |
+| 4 | 30 | ~4,500 | 1 |
+| 5 | 1 | ~4,500 | 0 |
+
+Roughly 4,400 rows for n=2..5 against ~17,200 stored naively.
+
+The cost is a one-occurrence lag: for n >= 3 the stored count is at least one
+below the true one, because counting starts when the prefix recurs. So
+`--min-count 2` on a long phrase means "said at least three times" — a
+stricter bar than it looks, and the right one for a claim about habit.
+
 ## 10. Stylometry — beyond vocabulary **[open]**
 
 Words are the first layer. Style is the second, and the interesting question

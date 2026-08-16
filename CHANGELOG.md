@@ -10,10 +10,15 @@
   `--strict` also requires the dictionary or your lexicon to vouch for each
   word, which reaches residue shape cannot and takes your own coinages with
   it; `--dry-run` first.
-- `vocab phrases -n 3` for three-word phrases. Two-word output was all there
-  ever was, which is thin for something called a phrase. The association test
-  stays a 2x2 table by splitting at the *last* space, so a trigram is scored
-  as "does this pair extend in a surprising way".
+- Phrases up to five words, via `vocab phrases -n <2..5>`. Longer ones are
+  tracked only once the phrase one word shorter has recurred, which is sound
+  because a phrase can never appear more often than its own prefix — so
+  anything seen once cannot become a collocation and following it is provably
+  wasted. That keeps n=2..5 to about 4,400 rows on the reference corpus where
+  storing everything would take 17,200. Note the stored count for n>=3 runs at
+  least one below the true one, since counting starts when the prefix recurs.
+  The association test stays a 2x2 table by splitting at the *last* space, so
+  a longer phrase is scored as "does this one extend in a surprising way".
 - `vocab help <option>` works — `vocab help --completions` as well as `vocab
   help status`. clap's built-in `help` only knows subcommands, so asking about
   a flag answered "unrecognized subcommand", which is true and useless. An

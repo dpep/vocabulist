@@ -250,9 +250,10 @@ pub enum Command {
         #[arg(long, default_value_t = 2)]
         min_count: i64,
         /// How many words per phrase. Two is the pair you say together;
-        /// three is closer to what most people mean by a phrase.
+        /// longer ones are tracked only once the shorter one has recurred, so
+        /// a five-word phrase here is one you genuinely repeat.
         #[arg(short = 'n', long, value_name = "N", default_value_t = 2,
-              value_parser = clap::value_parser!(u16).range(2..=3))]
+              value_parser = clap::value_parser!(u16).range(2..=5))]
         words: u16,
         #[arg(long, default_value_t = 25)]
         limit: usize,
