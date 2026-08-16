@@ -94,6 +94,7 @@ vocabulist/
     contraction.rs← apostrophe-less contractions (`dont` → `don't`)
     complexity.rs ← vocabulary and readability metrics
     watermark.rs  ← assistant-authored detection
+    help.rs       ← `vocab help <topic>`, for options as well as subcommands
     hook.rs       ← Claude Code hook handlers
     inbound.rs    ← the user's own messages, parsed out of tool responses
     identity.rs   ← which handles are the user's, detected not configured

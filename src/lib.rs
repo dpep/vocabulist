@@ -12,6 +12,7 @@ pub mod cue;
 pub mod dict;
 pub mod eval;
 pub mod frequency;
+pub mod help;
 pub mod hook;
 pub mod identity;
 pub mod inbound;

@@ -44,51 +44,25 @@ Examples:
 
 The lexicon seeds itself on first use; `vocab seed` re-runs it by hand.";
 
-/// A shell for `--completions`, or `auto` to work it out from `$SHELL`.
+/// The shell to generate completions for, when `--completions` was given
+/// without one.
 ///
-/// A bare `--completions` is the overwhelmingly common case — you want the
-/// script for the shell you are sitting in — so naming the shell should be the
-/// exception rather than the price of entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompletionShell {
-    Auto,
-    Named(clap_complete::Shell),
-}
-
-impl std::str::FromStr for CompletionShell {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "auto" {
-            return Ok(CompletionShell::Auto);
-        }
-        s.parse()
-            .map(CompletionShell::Named)
-            .map_err(|_| format!("unknown shell {s:?} (bash, zsh, fish, elvish, powershell)"))
-    }
-}
-
-impl CompletionShell {
-    /// The shell to generate for. `None` when `$SHELL` is unset or names
-    /// something clap_complete has no generator for.
-    pub fn resolve(self) -> Option<clap_complete::Shell> {
-        match self {
-            CompletionShell::Named(shell) => Some(shell),
-            // `$SHELL` is a path — /bin/zsh, /opt/homebrew/bin/fish — so the
-            // basename is the name to parse.
-            CompletionShell::Auto => std::env::var("SHELL")
-                .ok()
-                .and_then(|path| {
-                    std::path::Path::new(&path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                })
-                .and_then(|name| name.parse().ok()),
-        }
-    }
+/// `$SHELL` is a path — /bin/zsh, /opt/homebrew/bin/fish — so the basename is
+/// the name to parse. `None` when it is unset or names a shell clap_complete
+/// has no generator for.
+fn shell_from_env() -> Option<clap_complete::Shell> {
+    std::env::var("SHELL")
+        .ok()
+        .and_then(|path| {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .and_then(|name| name.parse().ok())
 }
 
 #[derive(Parser, Debug)]
+#[command(disable_help_subcommand = true)]
 #[command(
     name = "vocab",
     author,
@@ -133,10 +107,14 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Print a shell completion script. Defaults to the shell you're running
-    /// (bash, zsh, fish, elvish, powershell).
-    #[arg(long, value_name = "SHELL", num_args = 0..=1, default_missing_value = "auto")]
-    pub completions: Option<CompletionShell>,
+    /// Print a shell completion script. Defaults to the shell you're running.
+    ///
+    /// Naming a shell is the exception: usually you want the script for the
+    /// one you are sitting in, which is read from `$SHELL`.
+    // The outer Option is "was the flag given", the inner one "was a shell
+    // named" — a plain comment, because doc comments here are user-facing.
+    #[arg(long, value_name = "SHELL", num_args = 0..=1)]
+    pub completions: Option<Option<clap_complete::Shell>>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -163,6 +141,19 @@ pub enum Command {
     },
     /// Show store-wide counts, what has been read, and where it exports to.
     Status,
+
+    /// Explain a command or an option — `vocab help --completions` as well as
+    /// `vocab help status`.
+    Help {
+        /// A subcommand, or an option named with or without its dashes.
+        ///
+        /// Global options are the exception and want the bare name — `vocab
+        /// help json`, not `vocab help --json` — because with the dashes clap
+        /// sees a flag that really is valid here and consumes it.
+        // allow_hyphen_values or `--completions` is read as a flag on `help`.
+        #[arg(allow_hyphen_values = true)]
+        topic: Option<String>,
+    },
     /// Stage text for learning. Assistant-authored text is recorded but never
     /// learned from.
     Capture {
@@ -313,8 +304,8 @@ pub fn run() -> ExitCode {
 
     // Before anything touches the store — generating completions must work
     // on a machine that has never run `vocab seed`.
-    if let Some(shell) = cli.completions {
-        let Some(shell) = shell.resolve() else {
+    if let Some(requested) = cli.completions {
+        let Some(shell) = requested.or_else(shell_from_env) else {
             eprintln!(
                 "vocab: could not tell which shell you're running — \
                  pass one to --completions (bash, zsh, fish, elvish, powershell)"
@@ -438,6 +429,11 @@ fn dispatch_inner(
             } else {
                 ExitCode::SUCCESS
             })
+        }
+
+        Some(Command::Help { topic }) => {
+            crate::help::render(&mut out, topic.as_deref())?;
+            Ok(ExitCode::SUCCESS)
         }
 
         Some(Command::Status) => {

@@ -4,6 +4,10 @@
 
 ### Added
 
+- `vocab help <option>` works — `vocab help --completions` as well as `vocab
+  help status`. clap's built-in `help` only knows subcommands, so asking about
+  a flag answered "unrecognized subcommand", which is true and useless. An
+  unknown topic now lists what you could have asked about instead.
 - `--completions` defaults to the shell you are running, read from `$SHELL`.
   Naming the shell is now the exception rather than the price of entry.
 - A one-word check now names the word: `"log" is spelled correctly`, rather

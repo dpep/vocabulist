@@ -335,3 +335,24 @@ fn completions_default_to_the_running_shell() {
     assert!(out.stdout.contains("_vocab"), "{}", out.stdout);
     assert_eq!(out.code, 0);
 }
+
+#[test]
+fn help_explains_options_not_just_subcommands() {
+    // clap's own `help` answers "unrecognized subcommand" for a flag, which is
+    // true and useless.
+    let db = scratch_db("help-topics");
+
+    let flag = vocab(&db, &["help", "--completions"]);
+    assert!(flag.stdout.contains("--completions"), "{}", flag.stdout);
+    assert!(flag.stdout.contains("possible values"), "{}", flag.stdout);
+
+    // Global options are reachable by their bare name.
+    let global = vocab(&db, &["help", "json"]);
+    assert!(global.stdout.contains("--json"), "{}", global.stdout);
+
+    let sub = vocab(&db, &["help", "status"]);
+    assert!(sub.stdout.contains("Usage: vocab status"), "{}", sub.stdout);
+
+    let unknown = vocab(&db, &["help", "zzqxwv"]);
+    assert_eq!(unknown.code, 2);
+}
