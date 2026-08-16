@@ -66,32 +66,55 @@ pub fn detect_from_commits(repos: &[std::path::PathBuf], known: &[String]) -> Ve
     if names.is_empty() {
         return Vec::new();
     }
-    let mut seen = std::collections::BTreeSet::new();
+    // One `git log` per repo, and they're independent — across scores of
+    // repos that's most of a second spent waiting on subprocesses in turn.
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(repos.len().max(1));
+    let chunk = repos.len().div_ceil(threads.max(1));
 
-    for repo in repos {
-        let Some(log) = run(
-            "git",
-            &[
-                "-C",
-                &repo.to_string_lossy(),
-                "log",
-                "--format=%an|%ae",
-                "-n",
-                &COMMITS_PER_REPO.to_string(),
-            ],
-        ) else {
-            continue;
-        };
-        for line in log.lines() {
-            let Some((author, email)) = line.split_once('|') else {
-                continue;
-            };
-            let author = author.trim().to_lowercase();
-            let email = email.trim().to_lowercase();
-            if email.contains('@') && names.contains(&author) {
-                seen.insert(email);
-            }
-        }
+    let mut seen = std::collections::BTreeSet::new();
+    let partials: Vec<std::collections::BTreeSet<String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = repos
+            .chunks(chunk.max(1))
+            .map(|slice| {
+                let names = &names;
+                scope.spawn(move || {
+                    let mut found = std::collections::BTreeSet::new();
+                    for repo in slice {
+                        let Some(log) = run(
+                            "git",
+                            &[
+                                "-C",
+                                &repo.to_string_lossy(),
+                                "log",
+                                "--format=%an|%ae",
+                                "-n",
+                                &COMMITS_PER_REPO.to_string(),
+                            ],
+                        ) else {
+                            continue;
+                        };
+                        for line in log.lines() {
+                            let Some((author, email)) = line.split_once('|') else {
+                                continue;
+                            };
+                            let author = author.trim().to_lowercase();
+                            let email = email.trim().to_lowercase();
+                            if email.contains('@') && names.contains(&author) {
+                                found.insert(email);
+                            }
+                        }
+                    }
+                    found
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    for partial in partials {
+        seen.extend(partial);
     }
 
     seen.into_iter()

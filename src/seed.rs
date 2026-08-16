@@ -114,7 +114,10 @@ pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
     store.seed_core_frequencies()?;
     let frequency_words = harvest_prose_frequency(store, &repos)?;
     sources.push(SeedSource {
-        name: "prose".into(),
+        // Named for what it feeds, not what it read: these went to the
+        // frequency table, not the lexicon. "prose ... 20678 terms" read as
+        // though twenty thousand words had joined the user's vocabulary.
+        name: "frequency".into(),
         provenance: Provenance::Observed,
         terms: frequency_words,
         skipped: None,
@@ -162,46 +165,92 @@ const MAX_PROSE_BYTES: usize = 200_000;
 /// ordinary writing", which is what breaks suggestion ties and makes
 /// confusion detection possible before any personal corpus exists.
 fn harvest_prose_frequency(store: &Store, repos: &[PathBuf]) -> rusqlite::Result<usize> {
-    let mut counts: HashMap<String, i64> = HashMap::new();
-
-    for repo in repos {
-        // All the markdown in the repo, not just the root files. This is
-        // where the vocabulary a 1934 dictionary lacks actually lives —
-        // `textarea` and `bigram` will never be in a general word list, but
-        // they're all over the prose on this machine.
-        let mut paths: Vec<PathBuf> = PROSE_FILES.iter().map(|n| repo.join(n)).collect();
-        paths.extend(find_markdown(repo, MAX_PROSE_DEPTH));
-        paths.sort();
-        paths.dedup();
-        paths.truncate(MAX_PROSE_FILES_PER_REPO);
-
-        for path in paths {
-            let Ok(body) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let body = &body[..body.len().min(MAX_PROSE_BYTES)];
-            for line in body.lines() {
-                if !text::is_prose_line(line) {
-                    continue;
-                }
-                let masked = text::mask_non_prose(&text::normalize_typography(line));
-                for token in text::tokenize(&masked) {
-                    let word = text::normalize(&token.text);
-                    if word.chars().count() >= 2
-                        && word.chars().all(|c| c.is_ascii_alphabetic() || c == '\'')
-                    {
-                        *counts.entry(word).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-    }
+    // Reading and tokenizing hundreds of files is the bulk of a seed, and
+    // it's pure — no database, no shared state — so it splits across threads
+    // cleanly. Each worker builds its own tally and they're merged after;
+    // SQLite has a single writer, so every write stays on this thread.
+    let counts = in_parallel(repos, |repo, counts| count_repo_prose(repo, counts));
 
     let distinct = counts.len();
     for (word, count) in counts {
         store.bump_frequency(&word, count)?;
     }
     Ok(distinct)
+}
+
+/// Run `work` over `items` across the available cores, merging the tallies.
+fn in_parallel<T: Sync>(
+    items: &[T],
+    work: impl Fn(&T, &mut HashMap<String, i64>) + Sync,
+) -> HashMap<String, i64> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(items.len().max(1));
+
+    if threads <= 1 {
+        let mut counts = HashMap::new();
+        items.iter().for_each(|item| work(item, &mut counts));
+        return counts;
+    }
+
+    let chunk = items.len().div_ceil(threads);
+    let partials: Vec<HashMap<String, i64>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|slice| {
+                let work = &work;
+                scope.spawn(move || {
+                    let mut counts = HashMap::new();
+                    slice.iter().for_each(|item| work(item, &mut counts));
+                    counts
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+
+    let mut merged: HashMap<String, i64> = HashMap::new();
+    for partial in partials {
+        for (word, count) in partial {
+            *merged.entry(word).or_insert(0) += count;
+        }
+    }
+    merged
+}
+
+/// Tally the prose words in one repo's markdown.
+fn count_repo_prose(repo: &Path, counts: &mut HashMap<String, i64>) {
+    // All the markdown in the repo, not just the root files. This is
+    // where the vocabulary a 1934 dictionary lacks actually lives —
+    // `textarea` and `bigram` will never be in a general word list, but
+    // they're all over the prose on this machine.
+    let mut paths: Vec<PathBuf> = PROSE_FILES.iter().map(|n| repo.join(n)).collect();
+    paths.extend(find_markdown(repo, MAX_PROSE_DEPTH));
+    paths.sort();
+    paths.dedup();
+    paths.truncate(MAX_PROSE_FILES_PER_REPO);
+
+    for path in paths {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let body = &body[..body.len().min(MAX_PROSE_BYTES)];
+        for line in body.lines() {
+            if !text::is_prose_line(line) {
+                continue;
+            }
+            let masked = text::mask_non_prose(&text::normalize_typography(line));
+            for token in text::tokenize(&masked) {
+                let word = text::normalize(&token.text);
+                if word.chars().count() >= 2
+                    && word.chars().all(|c| c.is_ascii_alphabetic() || c == '\'')
+                {
+                    *counts.entry(word).or_insert(0) += 1;
+                }
+            }
+        }
+    }
 }
 
 /// A term contributes itself plus its parts: `pattern-engine` is a word, and
