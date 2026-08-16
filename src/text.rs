@@ -178,6 +178,10 @@ pub fn mask_non_prose(line: &str) -> String {
 
     // Inline code spans.
     mask_delimited(&mut out, line, '`', '`');
+    // Markup tags. Captured text arrives wrapped in them more often than you
+    // would think — tool payloads, hook envelopes, HTML in an email — and a
+    // tag name is an identifier that happens to sit between angle brackets.
+    mask_tags(&mut out, line);
     // Filesystem paths, which aren't IRIs and so aren't iriq's job.
     for marker in ["/", "~/", "./"] {
         mask_runs_from(&mut out, &lower, marker);
@@ -231,6 +235,44 @@ fn mask_iris(out: &mut [char], line: &str) {
     }
 }
 
+/// Mask `<tag>` and `</tag>`, but not `x < y`.
+///
+/// The distinguishing feature is that a tag has no whitespace in it and starts
+/// with a letter or a slash. Comparison operators in prose are surrounded by
+/// spaces, and arithmetic never looks like `<div>`.
+fn mask_tags(out: &mut [char], line: &str) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '<' {
+            i += 1;
+            continue;
+        }
+        let body_start = i + 1;
+        let mut j = body_start;
+        while j < chars.len() && chars[j] != '>' && !chars[j].is_whitespace() {
+            j += 1;
+        }
+        let looks_like_tag = j < chars.len()
+            && chars[j] == '>'
+            && j > body_start
+            && chars[body_start].is_ascii_alphabetic()
+            || (j > body_start + 1
+                && j < chars.len()
+                && chars[j] == '>'
+                && chars[body_start] == '/'
+                && chars[body_start + 1].is_ascii_alphabetic());
+        if looks_like_tag {
+            for c in out.iter_mut().take(j + 1).skip(i) {
+                *c = ' ';
+            }
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 fn mask_delimited(out: &mut [char], line: &str, open: char, close: char) {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
@@ -254,8 +296,20 @@ fn mask_runs_from(out: &mut [char], lower: &str, marker: &str) {
     let mut i = 0;
     while i + m.len() <= chars.len() {
         if chars[i..i + m.len()] == m[..] {
-            // A bare '/' only starts a path at a token boundary.
-            let boundary = i == 0 || chars[i - 1].is_whitespace() || chars[i - 1] == '(';
+            // A bare '/' only starts a path at a token boundary — otherwise
+            // `and/or` and `24/7` would be swallowed whole.
+            //
+            // Whitespace is not the only boundary, though, and assuming it was
+            // let `<output-file>/private/tmp/...` through with its path
+            // intact: `private`, `tmp`, and `output-file` all entered the
+            // lexicon as words. Anything that cannot be part of a word is a
+            // boundary.
+            let boundary = i == 0
+                || chars[i - 1].is_whitespace()
+                || matches!(
+                    chars[i - 1],
+                    '(' | '>' | '<' | '"' | '\'' | '=' | '[' | '{' | ':' | ',' | '|' | '`'
+                );
             if marker != "/" || boundary {
                 let mut j = i;
                 while j < chars.len() && !chars[j].is_whitespace() {
@@ -421,6 +475,35 @@ mod tests {
                 .chars()
                 .count()
         );
+    }
+
+    #[test]
+    fn masks_a_path_that_does_not_follow_whitespace() {
+        // Real capture: a path inside a tag. Assuming paths only start after
+        // a space put `private`, `tmp`, and `output-file` in the lexicon.
+        let masked = mask_non_prose("<output-file>/private/tmp/claude-501/x.txt</output-file>");
+        assert!(!masked.contains("private"), "{masked}");
+        assert!(!masked.contains("tmp"), "{masked}");
+    }
+
+    #[test]
+    fn masks_markup_tags_but_not_comparisons() {
+        let masked = mask_non_prose("<task-notification>the run finished</task-notification>");
+        assert!(!masked.contains("task-notification"), "{masked}");
+        assert!(masked.contains("the run finished"), "{masked}");
+
+        // Prose that merely uses angle brackets must survive.
+        let prose = mask_non_prose("keep it under 5 < 10 items");
+        assert!(prose.contains("under"), "{prose}");
+        assert!(prose.contains("items"), "{prose}");
+    }
+
+    #[test]
+    fn a_slash_inside_a_word_is_not_a_path() {
+        // The reason the boundary rule exists at all.
+        let masked = mask_non_prose("ship this and/or that");
+        assert!(masked.contains("and/or"), "{masked}");
+        assert!(masked.contains("ship"), "{masked}");
     }
 
     #[test]

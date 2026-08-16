@@ -235,6 +235,11 @@ pub enum Command {
         /// Ignore pairings seen fewer than this many times.
         #[arg(long, default_value_t = 2)]
         min_count: i64,
+        /// How many words per phrase. Two is the pair you say together;
+        /// three is closer to what most people mean by a phrase.
+        #[arg(short = 'n', long, value_name = "N", default_value_t = 2,
+              value_parser = clap::value_parser!(u16).range(2..=3))]
+        words: u16,
         #[arg(long, default_value_t = 25)]
         limit: usize,
     },
@@ -632,10 +637,11 @@ fn dispatch_inner(
             register,
             min_count,
             limit,
+            words,
         }) => {
             let register = *register;
-            let bigrams = store.ngrams(2, register)?;
-            let mut ranked = ngram::rank_collocations(&bigrams, *min_count);
+            let grams = store.ngrams(*words as usize, register)?;
+            let mut ranked = ngram::rank_collocations(&grams, *min_count);
             ranked.truncate(*limit);
             if !cli.quiet {
                 output::render_phrases(&mut out, &ranked, format)?;

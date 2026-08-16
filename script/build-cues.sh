@@ -102,7 +102,12 @@ fetch() {
     }
 
     set -o pipefail
-    gzcat "$raw" | awk -F'\t' -v ymin="$YEAR_MIN" '
+    # grep before awk. Only about one line in 300 mentions a confusable, and
+    # a fixed-string matcher rejects the rest far faster than awk can split
+    # and lowercase them — awk, not the network, was the bottleneck on the
+    # first full run. grep is case-insensitive because the corpus is mixed
+    # case and awk lowercases afterwards anyway.
+    gzcat "$raw" | grep -iFf "$WORK/words.txt" | awk -F'\t' -v ymin="$YEAR_MIN" '
         NR == FNR { want[$0] = 1; next }
         $2 < ymin { next }
         {
@@ -116,6 +121,8 @@ fetch() {
         }
         END { for (g in total) print g "\t" total[g] }
     ' "$WORK/words.txt" - >"$dest.tmp" || {
+        # A shard with no confusable at all would exit 1 from grep, but every
+        # prefix here holds one by construction, so this really is a failure.
         echo "  $prefix DECOMPRESS FAILED" >&2
         rm -f "$dest.tmp" "$raw"
         return 1

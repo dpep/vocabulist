@@ -107,13 +107,19 @@ pub struct Collocation {
     pub log_likelihood: f64,
 }
 
-/// Rank bigrams by association strength.
+/// Rank n-grams by association strength.
 ///
 /// Raw frequency would just return "of the" and "in the" — pairs that are
 /// common because their words are common. G² asks a better question: given
-/// how often each word appears alone, is appearing *together* surprising?
-/// That's what separates a phrase you actually use from two ordinary words
-/// that happened to be adjacent.
+/// how often each part appears alone, is appearing *together* surprising?
+/// That's what separates a phrase you actually use from ordinary words that
+/// happened to be adjacent.
+///
+/// Longer phrases work by splitting at the **last** space rather than the
+/// only one, so "the small focused" is tested as "the small" followed by
+/// "focused". The contingency table stays 2x2 — which is what G² needs — and
+/// the question becomes "does this phrase extend in a surprising way", which
+/// is the right question for a phrase rather than a pair.
 pub fn rank_collocations(bigrams: &[(String, i64)], min_count: i64) -> Vec<Collocation> {
     use std::collections::HashMap;
 
@@ -126,7 +132,7 @@ pub fn rank_collocations(bigrams: &[(String, i64)], min_count: i64) -> Vec<Collo
     let mut leads: HashMap<&str, f64> = HashMap::new();
     let mut follows: HashMap<&str, f64> = HashMap::new();
     for (gram, count) in bigrams {
-        let Some((first, second)) = gram.split_once(' ') else {
+        let Some((first, second)) = gram.rsplit_once(' ') else {
             continue;
         };
         *leads.entry(first).or_insert(0.0) += *count as f64;
@@ -137,7 +143,7 @@ pub fn rank_collocations(bigrams: &[(String, i64)], min_count: i64) -> Vec<Collo
         .iter()
         .filter(|(_, count)| *count >= min_count)
         .filter_map(|(gram, count)| {
-            let (first, second) = gram.split_once(' ')?;
+            let (first, second) = gram.rsplit_once(' ')?;
             let k11 = *count as f64;
             // The 2x2 table: this pair, this word with any other, any other
             // word with this one, and everything else.

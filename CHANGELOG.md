@@ -4,6 +4,10 @@
 
 ### Added
 
+- `vocab phrases -n 3` for three-word phrases. Two-word output was all there
+  ever was, which is thin for something called a phrase. The association test
+  stays a 2x2 table by splitting at the *last* space, so a trigram is scored
+  as "does this pair extend in a surprising way".
 - `vocab help <option>` works — `vocab help --completions` as well as `vocab
   help status`. clap's built-in `help` only knows subcommands, so asking about
   a flag answered "unrecognized subcommand", which is true and useless. An
@@ -58,6 +62,16 @@
 
 ### Fixed
 
+- **Paths, tags, and identifiers were entering the lexicon as words.** A path
+  was only recognized after whitespace, so `<output-file>/private/tmp/...`
+  contributed `private`, `tmp`, and `output-file`. Markup tags are now masked
+  too, since captured text arrives wrapped in them more often than you would
+  expect.
+- **Phrases were ranking session ids and path fragments above real phrases.**
+  N-grams were built over the unfiltered token sequence, so a UUID appearing
+  twice looked like a wildly surprising collocation. They are now built over
+  runs of ordinary words, which keeps junk out *and* keeps the tokens on
+  either side of it from being joined into an adjacency nobody wrote.
 - **URLs were only sometimes masked**, so `voidlinux`, `mdbook`, and
   `repology` were reported as misspelled words. Spans were located by
   searching the line for the string `iriq` returned, which works only while

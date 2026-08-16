@@ -91,12 +91,19 @@ fn process_one(
             store.record_word_source(word, doc)?;
         }
 
-        // N-grams run over the *unfiltered* sequence. Dropping a token would
-        // join its neighbors into an adjacency that was never written — with
-        // "ship 42 widgets", filtering first invents the bigram "ship widgets".
-        for n in [2usize, 3] {
-            for gram in ngram::ngrams(&tokens, n) {
-                store.bump_ngram(&gram, n, register, 1)?;
+        // N-grams are built over *runs* of ordinary words, so a token that
+        // isn't one both stays out of the phrase and breaks the sequence.
+        //
+        // Filtering the junk out first would have invented adjacencies that
+        // were never written — "ship 42 widgets" would yield "ship widgets".
+        // Keeping the junk in was worse: a session id and a path fragment
+        // became a top-ranked phrase, because a UUID appearing twice is a
+        // wildly surprising collocation by any association measure.
+        for run in tokens.split(|t| !text::is_lexical(t)) {
+            for n in [2usize, 3] {
+                for gram in ngram::ngrams(run, n) {
+                    store.bump_ngram(&gram, n, register, 1)?;
+                }
             }
         }
         if tokens.len() >= 6 {
@@ -254,6 +261,27 @@ mod tests {
         process_spool(&store, 10).unwrap();
         assert!(store.contains("widget").unwrap());
         assert!(!store.contains("claude").unwrap());
+    }
+
+    #[test]
+    fn junk_tokens_stay_out_of_phrases() {
+        // A session id appearing twice is a wildly surprising collocation by
+        // any association measure, so it ranked above real phrases.
+        let store = Store::open(":memory:").unwrap();
+        store
+            .spool(
+                Register::Doc,
+                None,
+                "the run a0d376be-04f5 finished cleanly",
+                "user",
+            )
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        assert_eq!(store.ngram_count("run a0d376be-04f5").unwrap(), 0);
+        assert_eq!(store.ngram_count("a0d376be-04f5 finished").unwrap(), 0);
+        // ...and the words on either side are still learned.
+        assert_eq!(store.ngram_count("the run").unwrap(), 1);
+        assert_eq!(store.ngram_count("finished cleanly").unwrap(), 1);
     }
 
     #[test]
