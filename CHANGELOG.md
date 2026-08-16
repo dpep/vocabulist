@@ -80,6 +80,18 @@
 
 ### Fixed
 
+- **A typo typed once was learned, and the checker went blind to it.** The
+  lexicon was consulted as a flat set, so one occurrence in one document
+  taught a word permanently — an audit of a real store found nine of its
+  owner's own misspellings learned that way. A merely-observed word now needs
+  two independent contexts before it silences the checker, which is the bar
+  `sync` already applied before exporting a word elsewhere.
+
+  Words that sit one edit from a common word need three, because a chronic
+  misspelling looks exactly like new vocabulary from the inside and shadowing
+  something the writer already knows is what tells them apart. On held-out
+  prose this raised recall from 0.665 to 0.720 *and* precision from 0.939 to
+  0.951 — the typos already learned had been suppressing real detections.
 - **The harness's own text was being learned as yours.** A prompt is not only
   what you typed: reminders get appended, and a finished background task
   arrives as a whole turn of its own. So `background command`, `exit code`,

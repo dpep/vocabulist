@@ -30,6 +30,29 @@ const MAX_SUGGESTIONS: usize = 3;
 /// Frequency credited to a lexicon word that no general source ranks.
 const LEXICON_FLOOR: i64 = 3;
 
+/// Distinct documents an observed word needs before it stops being checked.
+///
+/// One sighting is not evidence of a word — it is equally evidence of a typo,
+/// and typos are bursty within a single document. Two independent contexts is
+/// the same bar `sync` already applies before exporting a word to another
+/// speller, and it should not have been lower here: a word learned from one
+/// occurrence makes the checker permanently blind to that spelling.
+const MIN_SOURCES: i64 = 2;
+
+/// What a word needs when it sits one edit from a common English word.
+///
+/// `owrk`, `shoudl`, `kepe`, `insstead` — a chronic misspelling looks exactly
+/// like new vocabulary from the inside, and the thing that distinguishes them
+/// is that the misspelling shadows a word the writer already knows. Demanding
+/// more corroboration there costs a little recall on genuinely new jargon that
+/// happens to resemble a common word, and buys back the typos this tool was
+/// otherwise teaching itself to ignore.
+const SHADOW_SOURCES: i64 = 3;
+
+/// How common the shadowed word must be for the suspicion to apply. Level 35
+/// is roughly the top 50k words — resembling something obscure says nothing.
+const SHADOW_LEVEL: u8 = 35;
+
 const MIN_CORPUS_EVIDENCE: i64 = 2;
 
 /// How much less likely each additional edit is. Rough, and rough is enough:
@@ -61,6 +84,9 @@ pub struct Checker {
     /// Loaded on first miss, not up front. Reading ~236k words costs tens of
     /// milliseconds, and text whose words are all in the lexicon never needs
     /// it — which is the common case once the lexicon is seeded.
+    /// Merely-observed words, and how many distinct documents back each.
+    /// Kept apart from `lexicon` because they have not earned the same trust.
+    observed: std::collections::HashMap<String, i64>,
     dictionary: OnceCell<Option<crate::dict::Dictionary>>,
     /// Contractions derived from the dictionary and your lexicon, beyond the
     /// static table. Lazy, because building it needs the dictionary and the
@@ -78,6 +104,7 @@ impl Checker {
         Self {
             lexicon,
             frequency: std::collections::HashMap::new(),
+            observed: std::collections::HashMap::new(),
             dictionary: cell,
             derived_contractions: OnceCell::new(),
             profile: Rc::new(Profile::disabled()),
@@ -89,10 +116,17 @@ impl Checker {
         Self {
             lexicon,
             frequency: std::collections::HashMap::new(),
+            observed: std::collections::HashMap::new(),
             dictionary: OnceCell::new(),
             derived_contractions: OnceCell::new(),
             profile,
         }
+    }
+
+    /// Attach merely-observed words with their corroboration counts.
+    pub fn with_observed(mut self, observed: std::collections::HashMap<String, i64>) -> Self {
+        self.observed = observed;
+        self
     }
 
     /// Attach general-English frequencies, used to rank suggestions and to
@@ -153,6 +187,66 @@ impl Checker {
             .map(String::as_str)
     }
 
+    /// Does this sit one edit from a word common enough to have been meant?
+    ///
+    /// Generates the edit-distance-1 neighbourhood and looks each candidate up,
+    /// rather than scanning the dictionary: a few hundred hash lookups against
+    /// a hundred thousand comparisons.
+    fn shadows_a_common_word(&self, word: &str) -> bool {
+        let Some(dict) = self.dictionary() else {
+            return false;
+        };
+        let common = |candidate: &str| {
+            crate::dict::level(dict, candidate).is_some_and(|level| level <= SHADOW_LEVEL)
+        };
+        let chars: Vec<char> = word.chars().collect();
+        if chars.len() < 4 {
+            // Short words are one edit from half the language; the test says
+            // nothing about them.
+            return false;
+        }
+
+        for i in 0..chars.len() {
+            // Deletion.
+            let mut candidate: Vec<char> = chars.clone();
+            candidate.remove(i);
+            if common(&candidate.iter().collect::<String>()) {
+                return true;
+            }
+            // Transposition of this pair.
+            if i + 1 < chars.len() {
+                let mut candidate = chars.clone();
+                candidate.swap(i, i + 1);
+                if common(&candidate.iter().collect::<String>()) {
+                    return true;
+                }
+            }
+            // Substitution.
+            for letter in b'a'..=b'z' {
+                let letter = letter as char;
+                if letter == chars[i] {
+                    continue;
+                }
+                let mut candidate = chars.clone();
+                candidate[i] = letter;
+                if common(&candidate.iter().collect::<String>()) {
+                    return true;
+                }
+            }
+        }
+        // Insertion, at every position including the end.
+        for i in 0..=chars.len() {
+            for letter in b'a'..=b'z' {
+                let mut candidate = chars.clone();
+                candidate.insert(i, letter as char);
+                if common(&candidate.iter().collect::<String>()) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// The backstop, loading it on first use.
     fn dictionary(&self) -> Option<&crate::dict::Dictionary> {
         self.dictionary
@@ -209,6 +303,18 @@ impl Checker {
     fn knows_atom(&self, word: &str) -> bool {
         if self.lexicon.contains(word) {
             return true;
+        }
+        if let Some(&sources) = self.observed.get(word) {
+            let needed = if self.shadows_a_common_word(word) {
+                SHADOW_SOURCES
+            } else {
+                MIN_SOURCES
+            };
+            if sources >= needed {
+                return true;
+            }
+            // Not enough evidence yet — fall through, because the dictionary
+            // may still vouch for it.
         }
         if self.frequency_of(word) >= MIN_CORPUS_EVIDENCE {
             return true;
@@ -793,6 +899,62 @@ mod tests {
             f[0].confidence < 0.5,
             "jargon should not be confidently wrong"
         );
+    }
+
+    fn observed(pairs: &[(&str, i64)], dictionary: &[&str]) -> Checker {
+        Checker::new(HashSet::new(), Some(crate::dict::from_words(dictionary)))
+            .with_observed(pairs.iter().map(|(w, n)| (w.to_string(), *n)).collect())
+    }
+
+    #[test]
+    fn a_word_seen_once_has_not_earned_silence() {
+        // One sighting is equally evidence of a typo, and typos are bursty
+        // inside a single document. Learning from it made the checker
+        // permanently blind to that spelling.
+        let c = observed(&[("zblorg", 1)], &["the", "ship"]);
+        assert!(!c.knows("zblorg"));
+    }
+
+    #[test]
+    fn two_independent_sightings_earn_it() {
+        let c = observed(&[("zblorg", 2)], &["the", "ship"]);
+        assert!(c.knows("zblorg"));
+    }
+
+    #[test]
+    fn a_word_shadowing_a_common_one_is_held_to_a_higher_bar() {
+        // `shoudl` is a chronic misspelling, and from the inside it looks
+        // exactly like new vocabulary. That it sits one edit from a word the
+        // writer already knows is the thing that tells them apart.
+        //
+        // The shadowed word has to be *common* for that to mean anything, so
+        // this fixture states a level rather than taking the default —
+        // resembling something obscure is not evidence of a slip.
+        let common: crate::dict::Dictionary = [("should", 10u8), ("shout", 10), ("the", 10)]
+            .into_iter()
+            .map(|(w, level)| (w.to_string(), level))
+            .collect();
+        let with = |sources| {
+            Checker::new(HashSet::new(), Some(common.clone()))
+                .with_observed([("shoudl".to_string(), sources)].into_iter().collect())
+        };
+        assert!(!with(2).knows("shoudl"));
+        assert!(with(3).knows("shoudl"));
+
+        // Jargon that shadows nothing clears the ordinary bar at two.
+        let jargon = Checker::new(HashSet::new(), Some(common))
+            .with_observed([("zblorg".to_string(), 2)].into_iter().collect());
+        assert!(jargon.knows("zblorg"));
+    }
+
+    #[test]
+    fn a_deliberate_source_needs_no_corroboration() {
+        // Installing a tool or adding a word by hand is the evidence.
+        let c = Checker::new(
+            HashSet::from(["contextdb".to_string()]),
+            Some(crate::dict::from_words(["the"])),
+        );
+        assert!(c.knows("contextdb"));
     }
 
     #[test]

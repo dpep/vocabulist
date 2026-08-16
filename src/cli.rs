@@ -659,8 +659,9 @@ fn dispatch_inner(
             }
 
             let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
-            let lexicon: std::collections::HashSet<String> = store.words()?.into_iter().collect();
-            let checker = Checker::with_profile(lexicon, Rc::clone(profile))
+            let (trusted, observed) = store.checkable()?;
+            let checker = Checker::with_profile(trusted.into_iter().collect(), Rc::clone(profile))
+                .with_observed(observed.into_iter().collect())
                 .with_frequency(store.frequencies()?);
             let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
 
@@ -762,14 +763,16 @@ fn check_input(
     out: &mut impl Write,
     profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let lexicon: std::collections::HashSet<String> = profile
-        .time("lexicon_load", || store.words())?
-        .into_iter()
-        .collect();
+    let (trusted, observed) = profile.time("lexicon_load", || store.checkable())?;
+    let lexicon: std::collections::HashSet<String> = trusted.into_iter().collect();
+    let observed: std::collections::HashMap<String, i64> = observed.into_iter().collect();
     profile.count("lexicon_words", lexicon.len() as u64);
+    profile.count("observed_words", observed.len() as u64);
 
     let frequency = profile.time("frequency_load", || store.frequencies())?;
-    let checker = Checker::with_profile(lexicon, Rc::clone(profile)).with_frequency(frequency);
+    let checker = Checker::with_profile(lexicon, Rc::clone(profile))
+        .with_observed(observed)
+        .with_frequency(frequency);
     let mut evidence = |gram: &str| {
         profile.count("ngram_queries", 1);
         store.ngram_count(gram).unwrap_or(0)

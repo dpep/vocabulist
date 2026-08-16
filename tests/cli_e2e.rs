@@ -110,18 +110,32 @@ fn stdin_is_streamed_with_line_numbers() {
 #[test]
 fn capture_then_process_teaches_the_lexicon() {
     let db = scratch_db("capture");
-    assert_eq!(
-        vocab(
-            &db,
-            &["capture", "-r", "slack", "we shipped the zblorg today"]
-        )
-        .code,
-        0
-    );
-    assert_eq!(vocab(&db, &["process"]).code, 0);
+    let say = |source: &str| {
+        assert_eq!(
+            vocab(
+                &db,
+                &[
+                    "capture",
+                    "-r",
+                    "slack",
+                    "we shipped the zblorg today",
+                    "--source",
+                    source
+                ]
+            )
+            .code,
+            0
+        );
+        assert_eq!(vocab(&db, &["process"]).code, 0);
+    };
 
-    // The coinage is now known, so checking it is clean. Every word here came
-    // from the captured text, so no system word list is required.
+    // One sighting is not evidence of a word — it is equally evidence of a
+    // typo, and a typo learned once blinds the checker to it forever.
+    say("first");
+    assert_eq!(vocab(&db, &["zblorg shipped"]).code, 1);
+
+    // A second, independent context is what earns it.
+    say("second");
     assert_eq!(vocab(&db, &["zblorg shipped"]).code, 0);
 }
 

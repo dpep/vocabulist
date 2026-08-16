@@ -372,6 +372,46 @@ counting, because the substitute may never co-occur with the original. That's
 phase 3, and `ae`'s `embed.rs` (ONNX with a deterministic hash fallback) is the
 model to copy. Nothing before then needs a model download.
 
+## 12f. Learning a typo, and going blind to it **[fixed]**
+
+The lexicon was consulted as a flat set: a word in it was known, full stop. So
+one occurrence in one document taught a word permanently — and an audit of a
+real store found nine of the user's own typos learned that way:
+`incidentlaly`, `owrk`, `shoudl`, `kepe`, `insstead`, `metholodies`,
+`programatic`, `hools`, `dont`.
+
+That is worse than clutter. A typo in the lexicon makes the checker
+**permanently blind to that exact typo**, so the tool was quietly teaching
+itself not to catch this user's characteristic mistakes — the failure
+compounds in the one direction that matters.
+
+The corroboration machinery already existed and was already applied to
+*export*: `sync::exportable` requires `provenance > observed || sources >= 2`
+before writing a word into another speller. Checking never asked. It does now,
+at the same bar.
+
+**And a second tier for words that shadow a common one.** A chronic
+misspelling is indistinguishable from new vocabulary from the inside; what
+separates them is that the misspelling sits one edit from a word the writer
+already knows. `owrk`/`work`, `kepe`/`keep`, `shoudl`/`should`. Those need
+three independent contexts rather than two.
+
+Implemented by generating the edit-distance-1 neighbourhood and looking each
+candidate up — a few hundred hash lookups — rather than scanning a hundred
+thousand dictionary entries. Only words at level 35 or better count as shadowed:
+resembling something obscure says nothing.
+
+The cost is recall on genuinely new jargon that happens to resemble a common
+word, and it is real. Measured against held-out prose on a warm lexicon it was
+paid back several times over, because the typos already learned had been
+suppressing detections:
+
+| | before | after |
+|---|---|---|
+| recall | 0.665 | **0.720** |
+| precision | 0.939 | **0.951** |
+| FP per 1k | 1.19 | **1.02** |
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

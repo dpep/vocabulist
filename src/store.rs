@@ -219,6 +219,11 @@ fn add_column(conn: &Connection, sql: &str) -> Result<()> {
     }
 }
 
+/// The lexicon split by how much it has earned: words from a deliberate
+/// source, and merely-observed words paired with the number of distinct
+/// documents backing each.
+pub type Checkable = (Vec<String>, Vec<(String, i64)>);
+
 /// One staged body awaiting processing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpoolRow {
@@ -355,6 +360,40 @@ impl Store {
     }
 
     /// Every word in the lexicon, for building the in-memory check set.
+    /// The lexicon split by how much it has earned: words from a deliberate
+    /// source, and merely-observed words with the number of distinct documents
+    /// backing each.
+    ///
+    /// Checking needs the split. `words()` hands back everything, which meant
+    /// one sighting in one document made a word known forever — so a typo
+    /// typed once was learned, and the checker went permanently blind to it.
+    pub fn checkable(&self) -> Result<Checkable> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.word, l.provenance,
+                    (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
+             FROM lexicon l",
+        )?;
+        let mut trusted = Vec::new();
+        let mut observed = Vec::new();
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (word, provenance, sources) = row?;
+            if Provenance::parse(&provenance).unwrap_or(Provenance::Observed) > Provenance::Observed
+            {
+                trusted.push(word);
+            } else {
+                observed.push((word, sources));
+            }
+        }
+        Ok((trusted, observed))
+    }
+
     pub fn words(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT word FROM lexicon")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
