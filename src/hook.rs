@@ -108,9 +108,50 @@ fn maybe_seed(store: &Store) {
     }
 }
 
+/// Envelope tags whose contents the harness injects into a prompt.
+///
+/// Named explicitly rather than matched as "any tag", because a prompt about
+/// HTML legitimately contains `<div>` and its text is still the user's.
+const ENVELOPES: &[&str] = &[
+    "system-reminder",
+    "task-notification",
+    "command-name",
+    "command-message",
+    "command-args",
+    "local-command-stdout",
+    "local-command-stderr",
+];
+
+/// Remove machine-injected blocks from a prompt, leaving what was typed.
+///
+/// A prompt is not only what the user wrote. The harness appends reminders,
+/// and a completed background task arrives as a whole turn of its own — so
+/// `background command`, `exit code`, and `completed status` were showing up
+/// as this user's characteristic phrases. That is the authorship rule failing
+/// through a path nobody had looked at: the text is machine-generated, and it
+/// was being counted as voice.
+fn strip_envelopes(prompt: &str) -> String {
+    let mut out = prompt.to_string();
+    for tag in ENVELOPES {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        while let Some(start) = out.find(&open) {
+            // An unclosed envelope runs to the end — the harness truncates,
+            // and keeping the remainder would keep exactly the wrong half.
+            let end = match out[start..].find(&close) {
+                Some(offset) => start + offset + close.len(),
+                None => out.len(),
+            };
+            out.replace_range(start..end, " ");
+        }
+    }
+    out.trim().to_string()
+}
+
 /// The purest signal available: text the user typed themselves.
 fn capture_prompt(store: &Store, input: &HookInput) {
-    let prompt = input.prompt.trim();
+    let prompt = strip_envelopes(&input.prompt);
+    let prompt = prompt.trim();
     if prompt.is_empty() {
         return;
     }
@@ -228,6 +269,48 @@ mod tests {
         };
         run("user-prompt-submit", &s, &input);
         assert_eq!(s.pending_spool(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_prompt_keeps_only_what_the_user_typed() {
+        let typed = "let's ship the small focused change";
+        let prompt = format!(
+            "<system-reminder>remember the thing</system-reminder>{typed}\n\
+             <task-notification>background command completed exit code 0</task-notification>"
+        );
+        assert_eq!(strip_envelopes(&prompt), typed);
+    }
+
+    #[test]
+    fn an_unclosed_envelope_takes_the_rest_with_it() {
+        // The harness truncates, and the tail of a truncated reminder is
+        // exactly the part that isn't the user's.
+        assert_eq!(
+            strip_envelopes("ship this <system-reminder>you should also"),
+            "ship this"
+        );
+    }
+
+    #[test]
+    fn ordinary_markup_in_a_prompt_survives() {
+        // A question about HTML is still the user's prose.
+        let prompt = "why does <div>hello</div> render oddly";
+        assert_eq!(strip_envelopes(prompt), prompt);
+    }
+
+    #[test]
+    fn a_turn_that_is_only_a_notification_captures_nothing() {
+        let s = store();
+        run(
+            "user-prompt-submit",
+            &s,
+            &HookInput {
+                prompt: "<task-notification>background command completed</task-notification>"
+                    .into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.pending_spool(10).unwrap().len(), 0);
     }
 
     #[test]

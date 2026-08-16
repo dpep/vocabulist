@@ -36,6 +36,11 @@ decisions — reach for it before inventing a method that has a name.
   Vocabulary and voice are separate axes, and conflating them feeds the
   assistant's diction back as the user's. Any new capture path goes through
   the watermark check.
+
+  The harness counts as "anyone else" too. A prompt carries injected
+  reminders and arrives as a whole turn when a background task finishes, so
+  `hook::strip_envelopes` removes those blocks before capture — that path was
+  feeding machine text into the voice profile for weeks before anyone looked.
 - **stdout is for data, stderr is for logs.** All logging goes through
   `env_logger` to stderr so a consumer piping `vocab` gets clean output.
 - **Every command is agent/script-friendly.** *All* output honors the format —

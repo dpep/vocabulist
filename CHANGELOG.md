@@ -62,6 +62,13 @@
 
 ### Fixed
 
+- **The harness's own text was being learned as yours.** A prompt is not only
+  what you typed: reminders get appended, and a finished background task
+  arrives as a whole turn of its own. So `background command`, `exit code`,
+  and `completed status` had become characteristic phrases of this user. The
+  hook now strips the injected envelopes before capture, and a turn that was
+  only a notification captures nothing. Ordinary markup in a prompt survives —
+  a question about `<div>` is still your prose.
 - **Paths, tags, and identifiers were entering the lexicon as words.** A path
   was only recognized after whitespace, so `<output-file>/private/tmp/...`
   contributed `private`, `tmp`, and `output-file`. Markup tags are now masked
