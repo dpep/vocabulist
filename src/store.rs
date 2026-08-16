@@ -21,7 +21,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -121,6 +121,26 @@ CREATE INDEX IF NOT EXISTS idx_word_sources_word ON word_sources(word);
 CREATE TABLE IF NOT EXISTS frequency (
     word TEXT PRIMARY KEY,
     count INTEGER NOT NULL DEFAULT 0
+);
+
+-- The handles that are *you*, across services. Reading a channel surfaces
+-- everyone's messages; without this there's no way to tell which are yours,
+-- and capturing the rest would make the voice profile an average of the
+-- room.
+CREATE TABLE IF NOT EXISTS identities (
+    handle TEXT PRIMARY KEY,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Messages already captured, by stable per-message key.
+--
+-- Reading the same channel twice is normal and must be idempotent. Without
+-- this, a re-read inflates register counts and n-grams — word_sources would
+-- dedup, but the voice tables would not, so the same sentence would look like
+-- a habit.
+CREATE TABLE IF NOT EXISTS captured (
+    source_key TEXT PRIMARY KEY,
+    captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_spool_unprocessed ON spool(processed_at)
@@ -443,6 +463,38 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![register.as_str()], |r| r.get::<_, String>(0))?;
         rows.collect()
+    }
+
+    /// Record a handle that identifies the user. Idempotent.
+    pub fn add_identity(&self, handle: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO identities (handle) VALUES (?1)",
+            params![handle.to_lowercase()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn remove_identity(&self, handle: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM identities WHERE handle = ?1",
+            params![handle.to_lowercase()],
+        )? > 0)
+    }
+
+    /// Every handle that identifies the user, lowercased.
+    pub fn identities(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT handle FROM identities")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    /// Claim a message key. Returns false if it was already captured, which
+    /// is how re-reading a channel stays idempotent.
+    pub fn claim_source(&self, key: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "INSERT OR IGNORE INTO captured (source_key) VALUES (?1)",
+            params![key],
+        )? > 0)
     }
 
     /// Add to a word's general-English frequency.

@@ -191,6 +191,17 @@ pub enum Command {
         #[arg(long, default_value_t = 25)]
         limit: usize,
     },
+    /// Manage the handles that identify you — a GitHub login, a Slack user
+    /// ID. Reading a channel surfaces everyone; these say which messages are
+    /// yours, and capture from reads stays off until at least one is set.
+    #[command(name = "self")]
+    Identity {
+        /// Handles to add. Omit to list what's configured.
+        handles: Vec<String>,
+        /// Remove the named handles instead of adding them.
+        #[arg(long)]
+        rm: bool,
+    },
     /// Claude Code hook handler. Reads the hook payload on stdin; always
     /// exits 0 so a hook never blocks the user.
     Hook {
@@ -527,6 +538,35 @@ fn dispatch_inner(
             } else {
                 ExitCode::SUCCESS
             })
+        }
+
+        Some(Command::Identity { handles, rm }) => {
+            if handles.is_empty() {
+                let mut known: Vec<String> = store.identities()?.into_iter().collect();
+                known.sort();
+                if !cli.quiet {
+                    output::render_identities(&mut out, &known, format)?;
+                }
+                return Ok(if known.is_empty() {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                });
+            }
+            let mut changed = 0;
+            for handle in handles {
+                let hit = if *rm {
+                    store.remove_identity(handle)?
+                } else {
+                    store.add_identity(handle)?
+                };
+                changed += usize::from(hit);
+            }
+            if !cli.quiet {
+                let verb = if *rm { "removed" } else { "added" };
+                output::status(&mut out, &format!("{verb} {changed}"), format)?;
+            }
+            Ok(ExitCode::SUCCESS)
         }
 
         Some(Command::Hook { event }) => {

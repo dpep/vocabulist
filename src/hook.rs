@@ -28,6 +28,8 @@ pub struct HookInput {
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: Value,
+    #[serde(default)]
+    pub tool_response: Value,
 }
 
 /// How many spool rows one Stop hook will fold in. Bounded so the hook stays
@@ -93,10 +95,48 @@ fn capture_prompt(store: &Store, input: &HookInput) {
 }
 
 fn capture_tool(store: &Store, input: &HookInput) {
-    let Some((register, body)) = outbound(&input.tool_name, &input.tool_input) else {
+    if let Some((register, body)) = outbound(&input.tool_name, &input.tool_input) {
+        spool(store, register, &input.tool_name, &body);
+    }
+    capture_own_messages(store, input);
+}
+
+/// Recover the user's own writing from what a read returned.
+///
+/// The filter here is authorship rather than direction, and it's the stricter
+/// of the two: a channel read surfaces everyone, and only messages matching a
+/// configured identity survive. With no identities configured this is inert,
+/// which is the right default — guessing at who the user is would be the one
+/// mistake that poisons the voice profile.
+fn capture_own_messages(store: &Store, input: &HookInput) {
+    let Ok(selves) = store.identities() else {
         return;
     };
-    spool(store, register, &input.tool_name, &body);
+    if selves.is_empty() {
+        return;
+    }
+
+    for message in crate::inbound::harvest(&input.tool_name, &input.tool_response, &selves) {
+        // Reading the same channel twice must not count the same sentence
+        // twice — word_sources would dedup, but registers and n-grams
+        // wouldn't, and a re-read would look like a habit.
+        match store.claim_source(&message.key) {
+            Ok(true) => {}
+            _ => continue,
+        }
+        let authored_by = if watermark::is_assistant_authored(&message.body) {
+            "assistant"
+        } else {
+            "user"
+        };
+        let _ = store.spool_with_author(
+            message.register,
+            Some(&message.key),
+            &message.body,
+            authored_by,
+            Some(&message.author),
+        );
+    }
 }
 
 fn spool(store: &Store, register: Register, source: &str, body: &str) {

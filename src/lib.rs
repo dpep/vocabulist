@@ -12,6 +12,7 @@ pub mod dict;
 pub mod eval;
 pub mod frequency;
 pub mod hook;
+pub mod inbound;
 pub mod ingest;
 pub mod ngram;
 pub mod output;

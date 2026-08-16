@@ -444,6 +444,28 @@ pub fn render_eval(
     }
 }
 
+pub fn render_identities(
+    out: &mut impl Write,
+    handles: &[String],
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            if handles.is_empty() {
+                return writeln!(
+                    out,
+                    "No identities set — capture from reads is off.\nAdd one with: vocab self <handle>"
+                );
+            }
+            for handle in handles {
+                writeln!(out, "{handle}")?;
+            }
+            Ok(())
+        }
+        _ => emit(out, &json!(handles), format),
+    }
+}
+
 /// A command result — success or failure — in the caller's format.
 pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::Result<()> {
     match format {
