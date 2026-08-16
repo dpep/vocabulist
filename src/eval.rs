@@ -264,7 +264,7 @@ pub fn score(findings: &[Finding], injections: &[Injection], lines: usize) -> Ev
             if findings[i]
                 .suggestions
                 .iter()
-                .any(|s| s.to_lowercase() == injection.original.to_lowercase())
+                .any(|s| s.word.to_lowercase() == injection.original.to_lowercase())
             {
                 report.corrected += 1;
             }
@@ -331,6 +331,7 @@ pub fn real_word_findings(findings: &[Finding]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Suggestion;
 
     #[test]
     fn injection_is_reproducible_for_a_seed() {
@@ -407,7 +408,10 @@ mod tests {
                 word: "chagne".into(),
                 line: 1,
                 col: 5,
-                suggestions: vec!["change".into()],
+                suggestions: vec![Suggestion {
+                    word: "change".into(),
+                    score: 1.0,
+                }],
                 confidence: 0.7,
             },
             Finding {
@@ -440,7 +444,10 @@ mod tests {
             word: "chagne".into(),
             line: 1,
             col: 5,
-            suggestions: vec!["chagrin".into()],
+            suggestions: vec![Suggestion {
+                word: "chagrin".into(),
+                score: 1.0,
+            }],
             confidence: 0.7,
         }];
         let report = score(&findings, &injections, 1);

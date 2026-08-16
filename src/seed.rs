@@ -115,12 +115,26 @@ pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
 /// Files worth reading for ordinary English, as opposed to code.
 const PROSE_FILES: &[&str] = &["README.md", "README", "CONTRIBUTING.md", "CHANGELOG.md"];
 
-/// Directories whose markdown is prose rather than generated output.
-const PROSE_DIRS: &[&str] = &["docs", "doc"];
-
 /// Cap on markdown files read per repo, so one docs-heavy project doesn't
 /// dominate the frequency table.
-const MAX_PROSE_FILES_PER_REPO: usize = 25;
+const MAX_PROSE_FILES_PER_REPO: usize = 60;
+
+/// How deep to look for markdown inside a repo.
+const MAX_PROSE_DEPTH: usize = 3;
+
+/// Directories that hold other people's code or generated output. Their
+/// markdown says nothing about the vocabulary of this machine's owner, and a
+/// single `node_modules` would swamp everything else.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "vendor",
+    "build",
+    "dist",
+    ".git",
+    "venv",
+    "__pycache__",
+];
 
 /// Bytes of any one file we'll read. A generated changelog can be enormous
 /// and adds nothing after the first few thousand words.
@@ -136,16 +150,14 @@ fn harvest_prose_frequency(store: &Store, repos: &[PathBuf]) -> rusqlite::Result
     let mut counts: HashMap<String, i64> = HashMap::new();
 
     for repo in repos {
+        // All the markdown in the repo, not just the root files. This is
+        // where the vocabulary a 1934 dictionary lacks actually lives —
+        // `textarea` and `bigram` will never be in a general word list, but
+        // they're all over the prose on this machine.
         let mut paths: Vec<PathBuf> = PROSE_FILES.iter().map(|n| repo.join(n)).collect();
-        // Markdown under docs/ is written prose too, and it's where the
-        // vocabulary that isn't in a 1934 dictionary actually lives.
-        for dir in PROSE_DIRS {
-            for name in read_dir_names(&repo.join(dir)) {
-                if name.ends_with(".md") {
-                    paths.push(repo.join(dir).join(name));
-                }
-            }
-        }
+        paths.extend(find_markdown(repo, MAX_PROSE_DEPTH));
+        paths.sort();
+        paths.dedup();
         paths.truncate(MAX_PROSE_FILES_PER_REPO);
 
         for path in paths {
@@ -400,6 +412,33 @@ fn parse_package_json(path: &Path) -> Vec<String> {
         if let Some(map) = json.get(key).and_then(|v| v.as_object()) {
             // Scoped packages (`@scope/name`) contribute both halves.
             out.extend(map.keys().map(|k| k.trim_start_matches('@').to_string()));
+        }
+    }
+    out
+}
+
+/// Markdown files within `depth` of `root`, skipping dependency and build
+/// directories.
+fn find_markdown(root: &Path, depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut frontier = vec![(root.to_path_buf(), 0usize)];
+
+    while let Some((dir, level)) = frontier.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if path.is_dir() {
+                if level < depth && !name.starts_with('.') && !SKIP_DIRS.contains(&name) {
+                    frontier.push((path, level + 1));
+                }
+            } else if name.ends_with(".md") {
+                out.push(path);
+            }
         }
     }
     out

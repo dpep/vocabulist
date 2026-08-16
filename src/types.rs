@@ -133,6 +133,21 @@ impl FindingKind {
     }
 }
 
+/// One candidate correction, with its share of the belief.
+///
+/// Separate from the finding's own confidence because they answer different
+/// questions: the finding says *how sure we are the word is wrong*, and this
+/// says *which word was probably meant*. Collapsing them meant `hepl` offered
+/// `help`, `hep`, and `heal` as equals, when `help` is overwhelmingly likelier.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Suggestion {
+    pub word: String,
+    /// Share of the probability mass across the candidates offered, so they
+    /// sum to 1. A lone suggestion scores 1.0 — certainty about the ranking,
+    /// not about the correction being needed at all.
+    pub score: f32,
+}
+
 /// One flagged word. The unit of structured output: `-j` is a pretty array,
 /// `-J` is one object per line, and the shape is identical whether the input
 /// was a single blob or a streamed line.
@@ -147,10 +162,10 @@ pub struct Finding {
     pub col: usize,
     /// Ranked replacements, best first. May be empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub suggestions: Vec<String>,
-    /// How sure we are this is *wrong*. Deliberately conservative: a false
-    /// "misspelled" trains you to ignore the squiggle, a missed typo costs
-    /// almost nothing.
+    pub suggestions: Vec<Suggestion>,
+    /// How sure we are this word is *wrong* — independent of which
+    /// replacement is right. Deliberately conservative: a false "misspelled"
+    /// trains you to ignore the squiggle, a missed typo costs almost nothing.
     pub confidence: f32,
 }
 

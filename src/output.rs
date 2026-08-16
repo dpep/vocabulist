@@ -25,10 +25,16 @@ pub fn render_findings(
                 return writeln!(out, "No issues found.");
             }
             for f in findings {
+                // Each suggestion carries its own share of the belief, so
+                // "help 0.94, hep 0.04" reads very differently from a flat list.
                 let suggestions = if f.suggestions.is_empty() {
                     "-".to_string()
                 } else {
-                    f.suggestions.join(", ")
+                    f.suggestions
+                        .iter()
+                        .map(|s| format!("{} {:.2}", s.word, s.score))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 };
                 writeln!(
                     out,
@@ -458,7 +464,7 @@ pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FindingKind, Provenance};
+    use crate::types::{FindingKind, Provenance, Suggestion};
 
     fn finding() -> Finding {
         Finding {
@@ -466,7 +472,10 @@ mod tests {
             word: "shp".into(),
             line: 1,
             col: 1,
-            suggestions: vec!["ship".into()],
+            suggestions: vec![Suggestion {
+                word: "ship".into(),
+                score: 1.0,
+            }],
             confidence: 0.7,
         }
     }
