@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.4.0 — 2026-08-16
+
+### Breaking
+
+- `Finding.suggestions` is now `[{word, score}]` rather than `[string]`. One
+  number couldn't answer two questions — how sure we are the word is wrong,
+  and which replacement was meant — so `hepl` reported `help`, `hep`, and
+  `heal` as equals.
+
+### Added
+
+- **Capture from your own past messages.** Reading a Slack channel or a pull
+  request surfaces things you wrote months ago, which no forward-looking
+  capture will ever see. The filter moves from direction to authorship, which
+  is stricter: only messages matching a known handle are kept.
+- **Identities detect themselves** from gh's config, git config, and commit
+  authorship — including the work addresses `git config --get` never sees.
+  `vocab self` inspects or overrides them. Capture from reads stays inert
+  until one is known.
+- **The lexicon seeds itself** on first use, and refreshes monthly in the
+  background. Seeding is parallel and now takes ~1.5s.
+- A `word` / `name` distinction, so project names stay out of both suggestion
+  lists and vocabulary statistics.
+
+### Fixed
+
+- Suggestion ranking put a two-edit candidate above a one-edit one — `aparat`
+  offered `part` over `apart` — because frequency counts span six orders of
+  magnitude and swamped the edit penalty. Frequency is log-compressed now, and
+  distance is decided first.
+- **Re-seeding inflated the frequency table.** Mined counts were added to the
+  previous ones, and seeding recurs, so a word appearing once in local
+  markdown became a "real word" on the second pass — quietly dropping the
+  evidence threshold to 1.
+- Identity learning matched substrings, so a bare first name could match a
+  different person; it's delimiter-bounded now and restricted to Slack text,
+  since rendering JSON to one line destroyed the same-line rule that made it
+  safe. Harvesting is likewise limited to the two tool families actually
+  parsed, rather than any response containing a public login.
+- The Slack parser reset a block's body but not its author, so a block missing
+  `From:` inherited the previous one.
+- Seeding held SQLite's write lock across the whole multi-second scan, which
+  could make a concurrent capture hook time out and silently drop a prompt.
+- URLs as people actually write them (`github.com/x/y`, no scheme) put `com`
+  and `github` in the lexicon as words. Detection uses `iriq` now.
+- `~/code` was assumed as the place repos live; the conventional roots are
+  tried instead, falling back to `$HOME`.
+- Identity detection no longer shells out to the GitHub API — it reads gh's
+  config, which is the same answer with no network call, as this crate
+  promises.
+
+### Changed
+
+- One shared tokenize pipeline. The sequence was copied five times and had
+  drifted, so `analyze` on a text counted URL fragments as vocabulary while
+  the corpus path never saw them.
+- Registers are validated by clap, so an invalid one lists the valid values
+  and shell completion offers them.
+
 ## 0.3.0 — 2026-08-16
 
 ### Added
