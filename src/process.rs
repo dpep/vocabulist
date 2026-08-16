@@ -63,6 +63,11 @@ fn process_one(
     // stripping salvages a human body carrying an appended attribution;
     // there's nothing to salvage here, and a marker that prefixes the message
     // rather than following it — `claudomatic:` — would strip everything.
+    // Counted for everything processed, not just your own writing: the
+    // question this answers is "what has it read", and a colleague's message
+    // was still read.
+    store.bump_prose(register, "documents", 1)?;
+
     if authored_by != "user" {
         for word in body.lines().flat_map(text::prose_words) {
             store.upsert_word(&word, &word, Provenance::Observed, 0)?;

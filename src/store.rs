@@ -829,6 +829,30 @@ impl Store {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_>>()?;
 
+        // How many bodies each register contributed, which is the question
+        // people actually ask — "what has it read?" — and which word counts
+        // answer only obliquely.
+        let mut stmt = self.conn.prepare(
+            "SELECT register, value FROM prose_stats WHERE metric = 'documents' AND value > 0
+             ORDER BY value DESC",
+        )?;
+        let documents: std::collections::BTreeMap<String, i64> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_>>()?;
+
+        // Captured message keys carry their origin as a prefix (`slack:`,
+        // `gh:`), so the split falls out of the dedup table already kept.
+        let mut stmt = self.conn.prepare(
+            "SELECT CASE
+                 WHEN source_key LIKE 'slack:%' THEN 'slack'
+                 WHEN source_key LIKE 'gh:%' THEN 'github'
+                 ELSE 'other' END AS origin,
+             COUNT(*) FROM captured GROUP BY origin ORDER BY 2 DESC",
+        )?;
+        let messages: std::collections::BTreeMap<String, i64> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_>>()?;
+
         Ok(StatsPayload {
             db: self.path.display().to_string(),
             words,
@@ -836,6 +860,9 @@ impl Store {
             spooled,
             by_provenance,
             by_register,
+            documents,
+            messages,
+            integrations: Vec::new(),
         })
     }
 }

@@ -389,7 +389,10 @@ fn dispatch_inner(
         }
 
         Some(Command::Stats) => {
-            let stats = store.stats()?;
+            let mut stats = store.stats()?;
+            // Filled here rather than in the store: what a spell checker has
+            // on disk is a fact about the filesystem, not about the lexicon.
+            stats.integrations = crate::sync::status();
             if !cli.quiet {
                 output::render_stats(&mut out, &stats, format)?;
             }

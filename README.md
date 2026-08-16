@@ -173,14 +173,37 @@ vocab add contextdb iriq       # add by hand (top provenance, never pruned)
 vocab stats                    # what the store knows
 ```
 
+`stats` also reports what it has actually *read* — bodies per register, messages
+captured per service — and which spell checkers the lexicon has been exported
+into, including how many words in a shared file are ours rather than yours:
+
+```
+read (bodies):
+  prompt            412
+  slack              88
+
+spell checkers:
+  vscode         1,204 words
+  macos          1,204 of 1,377 words ours
+```
+
 Exit codes follow lint convention — clean input exits `0`, findings exit `1` —
 so it drops into a pre-commit hook or a CI step without a wrapper.
 
 ## Local, always
 
-No network calls. The lexicon is a SQLite database at
-`$XDG_DATA_HOME/vocabulist/lexicon.db`, the backstop is your system word list,
-and no model is downloaded to run any of it.
+No network calls, at install or at run time. The lexicon is a SQLite database
+at `$XDG_DATA_HOME/vocabulist/lexicon.db`, and the dictionary is compiled into
+the binary — so it behaves the same on a machine that has no system word list,
+and nothing is downloaded to run any of it.
+
+The bundled data is generated, not hand-written: an American-English word list
+from [SCOWL](https://wordlist.aspell.net/), and a table of discriminating
+collocates derived from
+[Google Books Ngrams](https://storage.googleapis.com/books/ngrams/books/datasetsv3.html)
+(CC BY 3.0). Both are built by scripts in `script/`, run once by a maintainer,
+and committed — deriving the collocates streams about 39 GB, and no user should
+ever pay that.
 
 ## Install
 

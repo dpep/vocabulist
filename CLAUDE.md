@@ -84,6 +84,7 @@ vocabulist/
     store.rs      ← SQLite schema, lexicon/ngram/spool/exemplar DAO
     seed.rs       ← ground-truth mining (repos, taps, binaries, manifests)
     check.rs      ← the checker, suggestion ranking, bounded edit distance
+    cue.rs        ← bundled collocates that settle a confusion with no corpus
     names.rs      ← names the document reveals, so they don't read as typos
     process.rs    ← spool → counts, and the authorship rule that governs it
     ngram.rs      ← collocations, log-likelihood, real-word confusion sets
@@ -100,6 +101,8 @@ vocabulist/
     sync.rs       ← export into cSpell and the macOS dictionary
     eval.rs       ← labeled-corpus measurement (inject typos, score)
     profile.rs    ← --profile timings and counters
+  data/           ← generated, committed: word list and cue table
+  script/         ← the generators for data/, with their provenance
   docs/PLAN.md    ← design contract + roadmap
   docs/RESEARCH.md← prior art, methods, and candidate data sources
   tests/          ← CLI e2e harness
@@ -140,6 +143,21 @@ cargo test`.
   shrinks.
 - Spec descriptions stay simple and resilient ("raises an error", not a brittle
   exact-string match).
+
+## Generated data
+
+`data/` holds two committed, generated files, each with a script beside it:
+
+| File | Built by | Source |
+|---|---|---|
+| `data/wordlist.txt` | `script/build-wordlist.sh` | SCOWL levels 10-60 |
+| `data/cues.txt` | `script/build-cues.sh` | Google Books Ngrams (CC BY 3.0) |
+
+They are committed so a build needs no network and no 39 GB download. Never
+hand-edit them — change the script and regenerate, so the provenance of a
+megabyte of embedded data stays a command anyone can rerun. Licensing lives in
+`data/COPYING.wordlist` and in each script's header; read those before changing
+a source or a level cutoff.
 
 ## Schema changes
 

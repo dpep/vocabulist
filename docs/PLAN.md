@@ -461,6 +461,23 @@ edit-distance-1 neighbors derived from the dictionary, so the set scales past
 what anyone would enumerate. That only identifies *candidates*, though — the
 collocate table is still what decides between them.
 
+## 12c. Code and comments **[open]**
+
+Prose inside code is a natural target — comments, docstrings, commit
+messages — and it's where a personal lexicon pays off most, since comments are
+dense with the identifiers and jargon a general checker flags.
+
+Code *lines* are a different problem and mostly not spell-checking: they're
+references to things that exist, in formats (`snake_case`, `camelCase`,
+`SCREAMING_SNAKE`) the tokenizer already declines to judge. But there may be a
+narrower play with code-specific semantics — a misspelled identifier is
+detectable *relative to the identifiers that exist in this project*, which is
+a symbol-table question rather than a dictionary one, and one an LSP is
+already positioned to answer.
+
+Sequencing: this lands after the VS Code integration and the LSP, which is
+where the parse tree needed to separate comment from code already lives.
+
 ## 12d. Where precision actually goes **[measured]**
 
 Measured against held-out technical prose — four upstream READMEs never mined
@@ -517,22 +534,47 @@ Real-word errors remain essentially unmeasured — the injector produced one and
 the checker caught none. That's the cold-start problem in §12b, and it means
 recall describes single-character damage only.
 
-## 12c. Code and comments **[open]**
+## 12e. Bundled data: what is generated, what ships **[decided]**
 
-Prose inside code is a natural target — comments, docstrings, commit
-messages — and it's where a personal lexicon pays off most, since comments are
-dense with the identifiers and jargon a general checker flags.
+Two files in `data/` are generated, committed, and embedded with
+`include_str!`. Both are English-only and deliberately so — accepting `colour`
+*and* `color`, or one language's vocabulary inside another's, means never
+flagging either.
 
-Code *lines* are a different problem and mostly not spell-checking: they're
-references to things that exist, in formats (`snake_case`, `camelCase`,
-`SCREAMING_SNAKE`) the tokenizer already declines to judge. But there may be a
-narrower play with code-specific semantics — a misspelled identifier is
-detectable *relative to the identifiers that exist in this project*, which is
-a symbol-table question rather than a dictionary one, and one an LSP is
-already positioned to answer.
+| File | Built by | Source | License |
+|---|---|---|---|
+| `wordlist.txt` (982 KB) | `script/build-wordlist.sh` | SCOWL levels 10–60, `english-*` + `american-*` | public-domain sources under an MIT-like grant |
+| `cues.txt` | `script/build-cues.sh` | Google Books Ngrams, `eng-all` 2-grams | CC BY 3.0 |
 
-Sequencing: this lands after the VS Code integration and the LSP, which is
-where the parse tree needed to separate comment from code already lives.
+**The split is the point.** Deriving the cue table streams about 39 GB and
+takes twenty minutes. Doing that on every install, or asking each user to do
+it, would be absurd — so it happens once, here, behind `make data`, and the
+*answer* is what ships. A build from crates.io needs no network at all. The
+generators are the only things in this repo that touch it.
+
+### On compressing the data
+
+Measured rather than assumed, because the intuition points the wrong way:
+
+| | size |
+|---|---|
+| `wordlist.txt` raw | 982 KB |
+| gzip -9 | 288 KB |
+| front-coded, no dependency | 497 KB |
+| **published `.crate`** | **444 KB** |
+| binary | 5.1 MB |
+
+Compression buys nothing for **publishing**: the `.crate` is a gzipped tarball,
+so the word list is already compressed in transit at no cost to us. What it
+would buy is roughly 700 KB of **binary**, in exchange for a decompression
+dependency and more time on a path that already spends 8.5ms loading the list.
+For a tool whose hook budget is milliseconds, that is the wrong trade at a size
+nobody is complaining about.
+
+If binary size ever does matter, the better lever is not compression: it is
+avoiding the 102k `String` allocations by binary-searching the embedded text in
+place, which costs nothing at build time and *removes* the load entirely.
+Front-coding is the fallback after that, at half the size and no dependency.
 
 ## 13. Roadmap
 

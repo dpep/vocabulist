@@ -255,6 +255,30 @@ pub struct StatsPayload {
     /// awkward to fix once anyone scripted against it.
     pub by_provenance: BTreeMap<String, i64>,
     pub by_register: BTreeMap<String, i64>,
+    /// Bodies processed per register — how much has been read, as opposed to
+    /// how many distinct words came out of it.
+    #[serde(default)]
+    pub documents: BTreeMap<String, i64>,
+    /// Messages captured per origin, from the dedup table's key prefixes.
+    #[serde(default)]
+    pub messages: BTreeMap<String, i64>,
+    /// The spell checkers this lexicon has been exported into.
+    #[serde(default)]
+    pub integrations: Vec<IntegrationStatus>,
+}
+
+/// One export target, and what is actually on disk for it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct IntegrationStatus {
+    pub name: String,
+    pub path: String,
+    /// Whether the target's word list exists at all.
+    pub present: bool,
+    /// Words this tool wrote, per its own manifest.
+    pub ours: usize,
+    /// Words in the file altogether. Larger than `ours` for a shared file the
+    /// user also adds to by hand, which is the case `unsync` must respect.
+    pub total: usize,
 }
 
 /// A generic command result, so `--json` works on every command and not just

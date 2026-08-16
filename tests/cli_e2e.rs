@@ -265,3 +265,40 @@ fn a_bundled_cue_catches_a_real_word_error_with_no_corpus() {
     assert!(out.stdout.contains("\"real-word\""), "{}", out.stdout);
     assert!(out.stdout.contains("\"than\""), "{}", out.stdout);
 }
+
+#[test]
+fn stats_reports_what_it_has_read_and_where_it_exports() {
+    let db = scratch_db("stats-sources");
+    vocab(
+        &db,
+        &[
+            "capture",
+            "-r",
+            "slack",
+            "we shipped the widget today",
+            "-q",
+        ],
+    );
+    vocab(
+        &db,
+        &[
+            "capture",
+            "-r",
+            "pr",
+            "the retry logic handles backoff",
+            "-q",
+        ],
+    );
+    vocab(&db, &["process", "-q"]);
+
+    let out = vocab(&db, &["stats", "-j"]);
+    // Bodies read, not words learned — the two answer different questions and
+    // only one of them is "what has this thing seen".
+    assert!(out.stdout.contains("\"documents\""), "{}", out.stdout);
+    assert!(out.stdout.contains("\"slack\": 1"), "{}", out.stdout);
+    assert!(out.stdout.contains("\"pr\": 1"), "{}", out.stdout);
+
+    // Export targets are reported whether or not they were ever synced.
+    assert!(out.stdout.contains("\"integrations\""), "{}", out.stdout);
+    assert!(out.stdout.contains("\"vscode\""), "{}", out.stdout);
+}

@@ -80,6 +80,27 @@ pub fn targets() -> Vec<Target> {
     out
 }
 
+/// What is on disk for each target — whether it was ever installed, how much
+/// of it is ours, and how much the user put there.
+///
+/// Read-only and tolerant of a missing file: a target that was never synced is
+/// a normal state to report, not an error.
+pub fn status() -> Vec<crate::types::IntegrationStatus> {
+    targets()
+        .into_iter()
+        .map(|t| {
+            let total = read_lines(&t.path).len();
+            crate::types::IntegrationStatus {
+                name: t.name.to_string(),
+                path: t.path.display().to_string(),
+                present: t.path.exists(),
+                ours: read_lines(&t.manifest).len(),
+                total,
+            }
+        })
+        .collect()
+}
+
 pub fn find_target(name: &str) -> Option<Target> {
     targets().into_iter().find(|t| t.name == name)
 }

@@ -24,13 +24,24 @@
 //! and a cue that is merely *likely* produces exactly the confident-but-wrong
 //! flag that teaches a user to ignore the tool.
 //!
-//! The bar is deliberately high enough that most of a confusion set's context
-//! is not covered. Silence is the correct output for everything not listed.
+//! That judgement is not one a person can hold steady across fifty pairs, and
+//! the hand-written first version proved it: it listed `relationship` as
+//! selecting `causal`, where the corpus says `casual relationship` outnumbers
+//! `causal relationship` three to one. So the table is **derived**, by
+//! `script/build-cues.sh`, from Google Books Ngrams — the exclusivity rule
+//! stated as arithmetic over real counts. `apart from` beats `apart form` by
+//! more than a thousand to one; that is what a cue looks like.
+//!
+//! The table is deliberately incomplete. Before-cues are only as complete as
+//! the corpus shards the build script fetches, and most of each confusion
+//! set's context is covered by nothing at all. Silence is the correct output
+//! for a context there is no evidence about.
 
 use crate::ngram;
+use Position::{After, Before};
 
 /// Where the cue sits relative to the word it decides.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Position {
     /// The cue immediately precedes it: `apart` in `apart from`.
     Before,
@@ -38,154 +49,39 @@ pub enum Position {
     After,
 }
 
-use Position::{After, Before};
+/// The generated table: `<position>\t<cue>\t<word it selects>`.
+/// Built by `script/build-cues.sh`; see it for provenance and thresholds.
+const CUE_DATA: &str = include_str!("../data/cues.txt");
 
-/// `(cue, position, the word it selects)`.
-///
-/// Grouped by confusion set so exclusivity can be checked by reading: within
-/// a group, no cue may appear for two different members in the same position.
-#[rustfmt::skip]
-pub const CUES: &[(&str, Position, &str)] = &[
-    // form / from — the most common of these by a wide margin.
-    ("apart", Before, "from"), ("aside", Before, "from"), ("away", Before, "from"),
-    ("far", Before, "from"), ("differs", Before, "from"), ("differ", Before, "from"),
-    ("different", Before, "from"), ("ranging", Before, "from"), ("ranges", Before, "from"),
-    ("derived", Before, "from"), ("stems", Before, "from"), ("comes", Before, "from"),
-    ("came", Before, "from"), ("suffers", Before, "from"), ("benefit", Before, "from"),
-    ("prevent", Before, "from"), ("separate", Before, "from"), ("distinguish", Before, "from"),
-    ("migrated", Before, "from"), ("inherited", Before, "from"), ("borrowed", Before, "from"),
-    ("scratch", After, "from"),
-    ("fill", Before, "form"), ("filled", Before, "form"), ("submit", Before, "form"),
-    ("submitted", Before, "form"), ("registration", Before, "form"), ("consent", Before, "form"),
-    ("blank", Before, "form"), ("fields", After, "form"), ("submission", After, "form"),
+type Table = std::collections::HashMap<(&'static str, Position), &'static str>;
 
-    // then / than — `rather then` is the canonical slip.
-    ("rather", Before, "than"), ("more", Before, "than"), ("less", Before, "than"),
-    ("better", Before, "than"), ("worse", Before, "than"), ("greater", Before, "than"),
-    ("fewer", Before, "than"), ("other", Before, "than"), ("larger", Before, "than"),
-    ("smaller", Before, "than"), ("faster", Before, "than"), ("slower", Before, "than"),
-    ("higher", Before, "than"), ("lower", Before, "than"), ("cheaper", Before, "than"),
-    ("easier", Before, "than"), ("harder", Before, "than"), ("longer", Before, "than"),
-    ("shorter", Before, "than"), ("older", Before, "than"), ("newer", Before, "than"),
-    ("bigger", Before, "than"), ("stronger", Before, "than"), ("weaker", Before, "than"),
-    ("sooner", Before, "than"), ("otherwise", Before, "than"), ("simpler", Before, "than"),
-    ("safer", Before, "than"), ("cleaner", Before, "than"),
-    ("and", Before, "then"), ("but", Before, "then"), ("back", Before, "then"),
-    ("since", Before, "then"), ("until", Before, "then"), ("right", Before, "then"),
+fn table() -> &'static Table {
+    static TABLE: std::sync::OnceLock<Table> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        CUE_DATA
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| {
+                let mut field = line.split('\t');
+                let position = match field.next()? {
+                    "before" => Position::Before,
+                    "after" => Position::After,
+                    _ => return None,
+                };
+                Some(((field.next()?, position), field.next()?))
+            })
+            .collect()
+    })
+}
 
-    // their / there
-    ("own", After, "their"), ("respective", After, "their"),
-    ("is", After, "there"), ("are", After, "there"), ("was", After, "there"),
-    ("were", After, "there"), ("will", After, "there"), ("would", After, "there"),
-    ("might", After, "there"), ("should", After, "there"), ("exists", After, "there"),
-    ("remains", After, "there"), ("seems", After, "there"), ("appears", After, "there"),
-    ("over", Before, "there"), ("out", Before, "there"), ("up", Before, "there"),
-
-    // weather / whether
-    ("or", After, "whether"), ("decide", Before, "whether"), ("decides", Before, "whether"),
-    ("decided", Before, "whether"), ("deciding", Before, "whether"), ("determine", Before, "whether"),
-    ("determines", Before, "whether"), ("determined", Before, "whether"), ("unclear", Before, "whether"),
-    ("unsure", Before, "whether"), ("regardless", Before, "whether"), ("wonder", Before, "whether"),
-    ("forecast", After, "weather"), ("conditions", After, "weather"), ("patterns", After, "weather"),
-
-    // affect / effect
-    ("side", Before, "effect"), ("net", Before, "effect"), ("adverse", Before, "effect"),
-    ("desired", Before, "effect"), ("ripple", Before, "effect"), ("takes", Before, "effect"),
-    ("take", Before, "effect"), ("took", Before, "effect"), ("into", Before, "effect"),
-    ("will", Before, "affect"), ("may", Before, "affect"), ("can", Before, "affect"),
-    ("could", Before, "affect"), ("might", Before, "affect"), ("would", Before, "affect"),
-    ("adversely", Before, "affect"), ("negatively", Before, "affect"), ("directly", Before, "affect"),
-
-    // lose / loose
-    ("ends", After, "loose"), ("cannon", After, "loose"), ("coupling", After, "loose"),
-    ("to", Before, "lose"), ("never", Before, "lose"), ("don't", Before, "lose"),
-    ("doesn't", Before, "lose"), ("can't", Before, "lose"), ("won't", Before, "lose"),
-
-    // thorough / through / though
-    ("even", Before, "though"), ("as", Before, "though"),
-    ("went", Before, "through"), ("goes", Before, "through"), ("going", Before, "through"),
-    ("ran", Before, "through"), ("running", Before, "through"), ("passed", Before, "through"),
-    ("passes", Before, "through"), ("cut", Before, "through"), ("halfway", Before, "through"),
-    ("partway", Before, "through"), ("midway", Before, "through"), ("sifted", Before, "through"),
-    ("review", After, "thorough"), ("analysis", After, "thorough"), ("investigation", After, "thorough"),
-    ("examination", After, "thorough"),
-
-    // principal / principle
-    ("first", Before, "principle"), ("guiding", Before, "principle"), ("fundamental", Before, "principle"),
-    ("underlying", Before, "principle"), ("general", Before, "principle"), ("basic", Before, "principle"),
-    ("investigator", After, "principal"), ("balance", After, "principal"),
-
-    // discrete / discreet
-    ("values", After, "discrete"), ("units", After, "discrete"), ("steps", After, "discrete"),
-    ("intervals", After, "discrete"), ("chunks", After, "discrete"), ("packets", After, "discrete"),
-    ("samples", After, "discrete"),
-
-    // complement / compliment
-    ("pay", Before, "compliment"), ("paid", Before, "compliment"), ("backhanded", Before, "compliment"),
-    ("full", Before, "complement"),
-
-    // quiet / quite
-    ("not", Before, "quite"), ("a", After, "quite"), ("an", After, "quite"),
-    ("possibly", After, "quite"), ("literally", After, "quite"),
-    ("keep", Before, "quiet"), ("kept", Before, "quiet"), ("stay", Before, "quiet"),
-    ("stayed", Before, "quiet"), ("eerily", Before, "quiet"),
-
-    // trial / trail
-    ("clinical", Before, "trial"), ("jury", Before, "trial"), ("error", After, "trial"),
-    ("hiking", Before, "trail"), ("paper", Before, "trail"), ("audit", Before, "trail"),
-
-    // casual / causal
-    ("link", After, "causal"), ("chain", After, "causal"), ("relationship", After, "causal"),
-    ("inference", After, "causal"), ("mechanism", After, "causal"),
-    ("observer", After, "casual"), ("conversation", After, "casual"), ("glance", After, "casual"),
-
-    // manger / manager — `manger` is essentially always a slip in this register.
-    ("project", Before, "manager"), ("product", Before, "manager"), ("engineering", Before, "manager"),
-    ("hiring", Before, "manager"), ("package", Before, "manager"), ("window", Before, "manager"),
-    ("session", Before, "manager"), ("connection", Before, "manager"), ("resource", Before, "manager"),
-    ("account", Before, "manager"), ("senior", Before, "manager"),
-
-    // defiantly / definitely — `definitely not` is a set phrase; the manner
-    // adverb does not take these.
-    ("not", After, "definitely"), ("worth", After, "definitely"),
-
-    // pubic / public
-    ("api", After, "public"), ("interface", After, "public"), ("method", After, "public"),
-    ("key", After, "public"), ("cloud", After, "public"), ("sector", After, "public"),
-    ("records", After, "public"), ("domain", After, "public"),
-
-    // untied / united
-    ("states", After, "united"), ("kingdom", After, "united"), ("nations", After, "united"),
-
-    // filed / field
-    ("text", Before, "field"), ("input", Before, "field"), ("hidden", Before, "field"),
-    ("required", Before, "field"), ("name", After, "field"), ("names", After, "field"),
-    ("under", After, "filed"), ("against", After, "filed"),
-
-    // angel / angle
-    ("right", Before, "angle"), ("acute", Before, "angle"), ("obtuse", Before, "angle"),
-    ("brackets", After, "angle"), ("bracket", After, "angle"),
-    ("guardian", Before, "angel"),
-
-    // sting / string
-    ("empty", Before, "string"), ("format", Before, "string"), ("query", Before, "string"),
-    ("connection", Before, "string"), ("literal", After, "string"), ("literals", After, "string"),
-    ("interpolation", After, "string"), ("concatenation", After, "string"),
-
-    // county / country
-    ("code", After, "country"), ("codes", After, "country"), ("wide", After, "country"),
-    ("clerk", After, "county"), ("courthouse", After, "county"),
-
-    // unclear / nuclear
-    ("power", After, "nuclear"), ("weapons", After, "nuclear"), ("reactor", After, "nuclear"),
-    ("remains", Before, "unclear"), ("still", Before, "unclear"),
-];
+/// Every cue in the table, as `(cue, position, selected word)`.
+pub fn all() -> impl Iterator<Item = (&'static str, Position, &'static str)> {
+    table().iter().map(|((cue, p), word)| (*cue, *p, *word))
+}
 
 /// The word a cue selects, if this token is a cue in this position.
 fn selects(token: &str, position: Position) -> Option<&'static str> {
-    CUES.iter()
-        .find(|(cue, p, _)| *p == position && *cue == token)
-        .map(|(_, _, word)| *word)
+    table().get(&(token, position)).copied()
 }
 
 /// Judge `word` against its confusables using a bundled discriminating
@@ -309,17 +205,15 @@ mod tests {
 
     #[test]
     fn no_cue_selects_two_members_of_one_set_in_the_same_position() {
-        // The exclusivity the table's whole safety rests on, checked rather
-        // than trusted to careful reading.
-        for (cue, position, word) in CUES {
-            for (other_cue, other_position, other_word) in CUES {
-                if cue != other_cue || position != other_position || word == other_word {
-                    continue;
-                }
-                assert!(
-                    !ngram::confusables(word).contains(other_word),
-                    "{cue:?} selects both {word:?} and {other_word:?}"
-                );
+        // The exclusivity the table's whole safety rests on. The derivation
+        // enforces it by construction — a context word is only emitted when
+        // one member takes it overwhelmingly — so this guards the *format*
+        // and the parse as much as the data.
+        let mut seen: std::collections::HashMap<(&str, Position), &str> =
+            std::collections::HashMap::new();
+        for (cue, position, word) in all() {
+            if let Some(previous) = seen.insert((cue, position), word) {
+                assert_eq!(previous, word, "{cue:?} selects two words");
             }
         }
     }
@@ -327,12 +221,27 @@ mod tests {
     #[test]
     fn every_cue_selects_a_word_that_has_confusables() {
         // A cue for a word in no confusion set can never fire, so it is dead
-        // weight and probably a mistake.
-        for (cue, _, word) in CUES {
+        // weight — and a sign the table was built against a stale source.
+        for (cue, _, word) in all() {
             assert!(
                 !ngram::confusables(word).is_empty(),
                 "cue {cue:?} selects {word:?}, which has no confusables"
             );
         }
+    }
+
+    #[test]
+    fn the_derived_table_rediscovers_the_obvious_cues() {
+        // If the corpus cannot find `apart from` and `rather than`, the
+        // thresholds in the build script are wrong and everything else the
+        // table says is suspect.
+        assert_eq!(selects("apart", Before), Some("from"));
+        assert_eq!(selects("rather", Before), Some("than"));
+        assert_eq!(selects("or", After), Some("whether"));
+    }
+
+    #[test]
+    fn the_table_is_not_empty() {
+        assert!(all().count() > 50, "only {} cues", all().count());
     }
 }

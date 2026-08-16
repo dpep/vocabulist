@@ -150,6 +150,34 @@ pub fn render_stats(
                     writeln!(out, "  {name:<14} {count:>6}")?;
                 }
             }
+            if !stats.documents.is_empty() {
+                writeln!(out, "\nread (bodies):")?;
+                for (name, count) in sorted_desc(&stats.documents) {
+                    writeln!(out, "  {name:<14} {count:>6}")?;
+                }
+            }
+            if !stats.messages.is_empty() {
+                writeln!(out, "\nmessages captured:")?;
+                for (name, count) in sorted_desc(&stats.messages) {
+                    writeln!(out, "  {name:<14} {count:>6}")?;
+                }
+            }
+            if !stats.integrations.is_empty() {
+                writeln!(out, "\nspell checkers:")?;
+                for i in &stats.integrations {
+                    // `ours` and `total` differ where the file is shared with
+                    // the user's own additions, and that difference is the
+                    // whole reason `unsync` is safe — worth showing.
+                    let state = match (i.present, i.ours) {
+                        (false, _) => "not synced".to_string(),
+                        (true, 0) => format!("{} words, none ours", i.total),
+                        (true, ours) if ours == i.total => format!("{ours} words"),
+                        (true, ours) => format!("{ours} of {} words ours", i.total),
+                    };
+                    writeln!(out, "  {:<14} {}", i.name, state)?;
+                    writeln!(out, "  {:<14} {}", "", i.path)?;
+                }
+            }
             Ok(())
         }
         Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(stats).unwrap()),

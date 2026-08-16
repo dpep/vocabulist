@@ -4,6 +4,11 @@
 
 ### Added
 
+- `vocab stats` reports what it has actually **read** — bodies per register,
+  messages captured per service — and which spell checkers the lexicon has
+  been exported into. For a shared file it distinguishes the words it wrote
+  from the ones you added yourself, which is the difference `unsync` depends
+  on.
 - **The dictionary is bundled, and it is a modern one.** The backstop was
   `/usr/share/dict/words` — Webster's Second International of 1934, which
   turned out to be wrong three ways: a *headword* list carrying `begin` but
