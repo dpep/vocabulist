@@ -850,7 +850,7 @@ impl Store {
 pub fn classify(
     word: &str,
     provenance: Provenance,
-    dictionary: Option<&std::collections::HashSet<String>>,
+    dictionary: Option<&crate::dict::Dictionary>,
 ) -> Kind {
     // `rubocop` is a tool *and* a word to its users, but it isn't English.
     // The dictionary is the arbiter, and it outranks provenance because a

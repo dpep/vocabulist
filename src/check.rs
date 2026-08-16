@@ -27,6 +27,9 @@ const MAX_SUGGESTIONS: usize = 3;
 /// synthetic typo never appears in local prose while a real one in someone's
 /// README does. Requiring corroboration is the same principle the rest of the
 /// store uses, and the two-point precision difference doesn't buy out of it.
+/// Frequency credited to a lexicon word that no general source ranks.
+const LEXICON_FLOOR: i64 = 3;
+
 const MIN_CORPUS_EVIDENCE: i64 = 2;
 
 /// How much less likely each additional edit is. Rough, and rough is enough:
@@ -58,14 +61,14 @@ pub struct Checker {
     /// Loaded on first miss, not up front. Reading ~236k words costs tens of
     /// milliseconds, and text whose words are all in the lexicon never needs
     /// it — which is the common case once the lexicon is seeded.
-    dictionary: OnceCell<Option<HashSet<String>>>,
+    dictionary: OnceCell<Option<crate::dict::Dictionary>>,
     profile: Rc<Profile>,
 }
 
 impl Checker {
     /// A checker over an explicit backstop — used by tests, which supply a
     /// fixture dictionary rather than reading the system one.
-    pub fn new(lexicon: HashSet<String>, dictionary: Option<HashSet<String>>) -> Self {
+    pub fn new(lexicon: HashSet<String>, dictionary: Option<crate::dict::Dictionary>) -> Self {
         let cell = OnceCell::new();
         let _ = cell.set(dictionary);
         Self {
@@ -93,12 +96,43 @@ impl Checker {
         self
     }
 
+    /// How common a word is in general English.
+    ///
+    /// The mined/embedded frequency table answers first; where it is silent,
+    /// the bundled dictionary's SCOWL level does. That level is a real
+    /// frequency signal — 10 is roughly the thousand most common words, 60 the
+    /// rare tail — and it covers the whole list rather than the fraction that
+    /// happens to appear in local prose, which is what left `smalt` ranked
+    /// level with `small`.
+    ///
+    /// Scaled to sit below anything actually observed, so evidence from real
+    /// corpora still wins over a coarse general prior.
     fn frequency_of(&self, word: &str) -> i64 {
-        self.frequency.get(word).copied().unwrap_or(0)
+        if let Some(n) = self.frequency.get(word).copied()
+            && n > 0
+        {
+            return n;
+        }
+        let general = match self.dictionary().and_then(|d| crate::dict::level(d, word)) {
+            // Invert: lower level means more common. Level 10 -> 6, level 60
+            // -> 1, and unknown -> 0.
+            Some(level) => (70 - level as i64) / 10,
+            None => 0,
+        };
+        // A word in your lexicon is common *in your writing*, which is the
+        // whole premise. Without a floor it scores 0 against any dictionary
+        // word, and ordinary English would outrank your own vocabulary in
+        // every suggestion list — the exact inversion this tool exists to
+        // prevent. The floor sits around level 35, so the genuinely common
+        // words can still win and the rare tail cannot.
+        if self.lexicon.contains(word) {
+            return general.max(LEXICON_FLOOR);
+        }
+        general
     }
 
     /// The backstop, loading it on first use.
-    fn dictionary(&self) -> Option<&HashSet<String>> {
+    fn dictionary(&self) -> Option<&crate::dict::Dictionary> {
         self.dictionary
             .get_or_init(|| {
                 let loaded = self.profile.time("dictionary_load", crate::dict::load);
@@ -322,7 +356,7 @@ impl Checker {
             .lexicon
             .iter()
             .map(|c| (c, 0u8))
-            .chain(dictionary.map(|c| (c, 1u8)))
+            .chain(dictionary.map(|(c, _)| (c, 1u8)))
         {
             // Every known word is measured against every unknown one. This
             // counter is what makes that cost visible under --profile.
@@ -603,7 +637,7 @@ mod tests {
     fn checker(lexicon: &[&str], dictionary: &[&str]) -> Checker {
         Checker::new(
             lexicon.iter().map(|s| s.to_string()).collect(),
-            Some(dictionary.iter().map(|s| s.to_string()).collect()),
+            Some(crate::dict::from_words(dictionary)),
         )
     }
 
@@ -806,12 +840,7 @@ mod tests {
                 .collect();
         let c = Checker::new(
             HashSet::new(),
-            Some(
-                ["help", "hep", "heal"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            ),
+            Some(crate::dict::from_words(["help", "hep", "heal"])),
         )
         .with_frequency(frequency);
 
@@ -837,7 +866,7 @@ mod tests {
         .collect();
         let c = Checker::new(
             HashSet::new(),
-            Some(["please", "these"].iter().map(|s| s.to_string()).collect()),
+            Some(crate::dict::from_words(["please", "these"])),
         )
         .with_frequency(frequency);
 
@@ -880,12 +909,7 @@ mod tests {
             [("avoid".to_string(), 20_000i64)].into_iter().collect();
         let c = Checker::new(
             HashSet::new(),
-            Some(
-                ["avoid", "avid", "avian"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            ),
+            Some(crate::dict::from_words(["avoid", "avid", "avian"])),
         )
         .with_frequency(frequency);
         assert_eq!(c.suggest("aviod").first().unwrap().word, "avoid");
@@ -905,12 +929,7 @@ mod tests {
             [("small".to_string(), 50_000i64)].into_iter().collect();
         let c = Checker::new(
             HashSet::new(),
-            Some(
-                ["small", "smalm", "smalt"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            ),
+            Some(crate::dict::from_words(["small", "smalm", "smalt"])),
         )
         .with_frequency(frequency);
         assert_eq!(c.suggest("smal").first().unwrap().word, "small");
@@ -951,7 +970,8 @@ mod tests {
             [("inline".to_string(), 9i64), ("roadmap".to_string(), 5i64)]
                 .into_iter()
                 .collect();
-        let c = Checker::new(HashSet::new(), Some(HashSet::new())).with_frequency(frequency);
+        let c = Checker::new(HashSet::new(), Some(crate::dict::Dictionary::new()))
+            .with_frequency(frequency);
         assert!(c.knows("inline"));
         assert!(c.knows("roadmap"));
         // But a word seen once is not yet evidence of anything.

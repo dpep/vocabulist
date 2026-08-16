@@ -359,38 +359,56 @@ The backstop is loaded lazily for exactly this reason — it's the single
 largest cost and it's usually unnecessary. What remains is two problems worth
 separating:
 
-**The backstop is missing ordinary words.** This was assumed to be a
-1934-vocabulary problem — no `download`, no `inline` — and it is worse than
-that. `web2` is a *headword* list: it holds `begin` and `hold` but not `began`
-or `held`, and it has `boxberry`, `boxcar`, and `Boxer` but not `box`. The
-embedded frequency core is 276 words, so nothing covers the gap.
+**The backstop was the problem, and it is now bundled.** ✅
 
-Measured on `tests/corpus/prose.md` with an empty lexicon — the experience of
-a user's first minute, before seeding or capture — the checker flags 22 words,
-all of them correct: `began`, `held`, `box`, `database`, `email`, `debug`,
-`baseline`, `timeline`, `tradeoff`, `rewritten`, `payloads`. That is **8.1
-false positives per thousand words**, against 1.5 on a warm lexicon. Cold start
-is the demo, and the demo is the worst the tool ever looks.
+The old backstop was `/usr/share/dict/words` — on macOS, `web2`, Webster's
+Second International of 1934. It was filed as a staleness problem and was
+three problems at once. It is a *headword* list: `begin` and `hold` but not
+`began` or `held`, `boxcar` and `boxberry` but not `box`. It is ninety years
+old. And it carries no frequency data, so `smal` drew `small`, `smalm`, and
+`smalt` as equals.
 
-This is the same fix as the one below, which is why it goes first.
+SCOWL levels 10–60 replace it — 102k words, bundled rather than read from the
+host. The size levels *are* a frequency ranking, so one file supplies
+membership and rank together, which is what `smalt` needed (it is level 70 and
+no longer present at all).
 
-**Loading 236k words is disproportionate.** A person's working vocabulary is
-a fraction of that, and the tail is words nobody writes. But the fix isn't
-only about speed — the huge list is also a *quality* problem. `/usr/share/dict/words`
-carries no frequency data, so `smal` gets `small`, `smalm`, and `smalt` as
-equally-ranked candidates. A **frequency-ranked list of the top ~30–50k words**
-would shrink the load *and* let common words outrank obscure ones, which is
-the better win. That single change addresses both, and should come before any
-clever indexing.
+The level choice is licensing before taste: UKACD, the one component with a
+real condition, enters at **level 80**. Everything at or below 70 is Moby,
+Brian Kelk's list, 12Dicts, 5desk, and ENABLE — all public domain — under
+Atkinson's MIT-like grant. Within that safe range the cutoff was measured:
 
-**Scanning every candidate per unknown word.** ~474k distance computations for
-two unknowns; 8.7M for the 37 unknowns in a cold-start pass over the reference
-corpus, which is the 1.6s that pass costs. Note that a better word list shrinks
-this too — most of those unknowns are only unknown because the list is bad — so
-the ordering above holds. The boring fixes are the right ones: bucket candidates by length
-(a ±2 filter applied *before* the scan, not inside it), band the DP to the
-|i−j| ≤ 2 diagonal since max distance is fixed, and hoist the per-candidate
-allocations. Together roughly an order of magnitude, with no new abstractions.
+| cutoff | cold FP/1k | cold recall | warm precision |
+|---|---|---|---|
+| 40 | 3.95 | 0.92 | 0.88 |
+| 50 | 0.88 | 0.88 | 0.93 |
+| **60** | **0.66** | **0.88** | **0.94** |
+| 70 | 0.44 | 0.83 | 0.95 |
+
+60 is the knee. 70 buys 0.2 false positives per thousand words and costs five
+points of recall, because obscure words absorb real typos — the dictionary-size
+tradeoff, priced.
+
+One correction it forced: a lexicon word scores 0 against any dictionary word
+that now has a frequency, so ordinary English began outranking personal
+vocabulary in suggestion lists — the exact inversion this tool exists to
+prevent. Lexicon membership carries a frequency floor around level 35, so
+genuinely common words can still win and the rare tail cannot.
+
+Everything moved at once, which is what "four complaints, one cause" predicted:
+
+| | before | after |
+|---|---|---|
+| cold-start FP/1k | 8.12 | **0.66** |
+| cold-start correction rate | — | **100%** |
+| warm precision | 0.92 | **0.94** |
+| warm correction rate | 0.68 | **0.89** |
+| dictionary load | 27.5ms | 8.5ms |
+| candidates scanned, cold pass | 8.67M | 307k |
+| cold pass | 1623ms | **80ms** |
+
+Bundling also removed the last thing the crate wanted from the host, so it now
+behaves identically on a machine with no word list installed.
 
 **Deliberately not doing yet:** BK-trees and SymSpell-style deletion
 neighborhoods. `vocab` is a per-invocation CLI, so any index dies with the
@@ -515,14 +533,14 @@ Hooks in the myclaude plugin: `UserPromptSubmit` (prompt register),
 uses: the writes here are short and infrequent, so a lock is enough and a
 socket would be machinery without a purpose.
 
-**Phase 3 — precision** *(in progress)*
+**Phase 3 — precision** ✅
+The frequency-ranked word list landed and took the other three complaints with
+it (§12a).
 Name detection ✅ — precision 0.77 → 0.92 at no cost in recall (§12d).
 Bundled collocate cues ✅ — real-word recall 0% → 26% on a corpus with no
 history, no new false positives (§12b).
-Next, and now the whole remaining term: **the frequency-ranked word list**. It
-is the entire precision residual on warm lexicons (§12d), the entire cold-start
-false-positive problem (§12a), the fix for unranked suggestions, and the reason
-a cold pass costs 1.6s. Four separate complaints, one cause.
+Bundled word list ✅ — cold-start false positives 8.1 → 0.7 per thousand
+words, correction rate 0.68 → 0.89, and a cold pass 20x faster (§12a).
 
 **Phase 4 — export + profile**
 `vocab sync` to the Tier 1 targets. The stylometry pass and the linguist persona

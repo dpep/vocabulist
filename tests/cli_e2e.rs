@@ -217,21 +217,13 @@ fn naming_a_word_does_not_excuse_a_typo_elsewhere() {
 /// Words the checker gets wrong on `tests/corpus/prose.md` with an empty
 /// lexicon — the cold-start experience, before any seeding or capture.
 ///
-/// Every one is ordinary modern English. They are here because the backstop
-/// dictionary is `web2`, Webster's Second International of 1934, which is a
-/// *headword* list: it holds `begin` and `hold` but not `began` or `held`,
-/// and it has `boxcar` and `boxberry` but not `box`. The embedded frequency
-/// core covers 276 words, so nothing catches the rest.
+/// Both are recent coinages that the bundled list does not carry. It was 22
+/// words when the backstop was the system dictionary; see `docs/PLAN.md` §12a
+/// for what that list looked like and why.
 ///
-/// The list shrinking is the point — see `docs/PLAN.md` §12a. It must never
-/// grow, which is what the test below actually enforces.
-#[rustfmt::skip]
-const KNOWN_COLD_START_MISSES: &[&str] = &[
-    "Debugging", "I'm", "baseline", "began", "box", "database", "databases",
-    "debug", "debugger", "debugger's", "debugging", "email", "held", "partway",
-    "payloads", "pileup", "prioritized", "proactive", "proactively",
-    "rewritten", "timeline", "tradeoff",
-];
+/// The list shrinking is the point. It must never grow, which is what the
+/// test below actually enforces.
+const KNOWN_COLD_START_MISSES: &[&str] = &["recency", "tradeoff"];
 
 #[test]
 fn no_new_false_positives_on_the_reference_corpus() {

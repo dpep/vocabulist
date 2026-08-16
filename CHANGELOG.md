@@ -4,6 +4,19 @@
 
 ### Added
 
+- **The dictionary is bundled, and it is a modern one.** The backstop was
+  `/usr/share/dict/words` — Webster's Second International of 1934, which
+  turned out to be wrong three ways: a *headword* list carrying `begin` but
+  not `began` and `boxcar` but not `box`, ninety years stale, and with no
+  frequency data, so `smal` offered `small`, `smalm`, and `smalt` as equals.
+
+  SCOWL levels 10-60 replace it. The levels are themselves a frequency
+  ranking, so one file answers both "is this a word" and "how common".
+  Cold-start false positives fell from 8.1 per thousand words to 0.7,
+  correction rate rose from 0.68 to 0.89, and a cold pass got 20x faster.
+
+  `vocab` no longer reads anything from the host, so it behaves the same on a
+  machine with no word list installed.
 - **Real-word errors are caught without a corpus.** The mechanism needed
   collocation evidence, and a new lexicon has none, so it caught nothing for
   weeks — measured, 0 of 19. A bundled table of discriminating collocates
