@@ -184,7 +184,53 @@ pub fn mask_non_prose(line: &str) -> String {
     }
     // Email addresses: mask the whole run around an '@'.
     mask_around(&mut out, line, '@');
+    // Bare domains, which is how URLs are actually written in chat:
+    // `github.com/dpep/polyid/pull/43` has no scheme, so nothing above
+    // catches it, and it contributed `com`, `dpep`, `github`, and `pull` to
+    // the lexicon as though they were words.
+    mask_bare_urls(&mut out, line);
     out.into_iter().collect()
+}
+
+/// Common TLDs, for domains written without a scheme or path.
+const TLDS: &[&str] = &[
+    ".com", ".org", ".net", ".io", ".dev", ".ai", ".co", ".gov", ".edu", ".sh", ".rs", ".app",
+];
+
+/// Mask whitespace-delimited runs that are URLs rather than prose.
+///
+/// Two tests, both requiring no internal whitespace. A run holding both a dot
+/// and a slash is a URL or a path — which cleanly excludes `e.g.` and a
+/// missing space after a full stop, since neither has a slash. A run ending
+/// in a known TLD covers bare domains with no path at all.
+fn mask_bare_urls(out: &mut [char], line: &str) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut start = 0;
+
+    while start < chars.len() {
+        if chars[start].is_whitespace() {
+            start += 1;
+            continue;
+        }
+        let mut end = start;
+        while end < chars.len() && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        let run: String = chars[start..end].iter().collect();
+        let lower = run.to_ascii_lowercase();
+        let looks_like_url = (lower.contains('.') && lower.contains('/'))
+            || TLDS.iter().any(|tld| {
+                lower
+                    .split_once(tld)
+                    .is_some_and(|(_, rest)| rest.is_empty() || rest.starts_with('/'))
+            });
+        if looks_like_url {
+            for c in out.iter_mut().take(end).skip(start) {
+                *c = ' ';
+            }
+        }
+        start = end;
+    }
 }
 
 fn mask_delimited(out: &mut [char], line: &str, open: char, close: char) {

@@ -644,8 +644,6 @@ fn process_one(
     authored_by: &str,
     doc: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let body = watermark::strip_trailer(body);
-
     // One rule for everything you didn't write, whether a colleague or an
     // assistant wrote it: it corroborates that a word is *real* without
     // saying anything about how *you* write. It reaches the lexicon and the
@@ -658,6 +656,11 @@ fn process_one(
     // voice are separate axes here. What must not happen is the diction
     // being fed back as yours, and excluding it from the voice tables is
     // what prevents that.
+    //
+    // Note this uses the **whole** body, not a trailer-stripped one. Trailer
+    // stripping salvages a human body carrying an appended attribution;
+    // there's nothing to salvage here, and a marker that prefixes the message
+    // rather than following it — `claudomatic:` — would strip everything.
     if authored_by != "user" {
         for word in prose_words(body) {
             store.upsert_word(&word, &word, crate::types::Provenance::Observed, 0)?;
@@ -666,6 +669,9 @@ fn process_one(
         store.retire_spool(id)?;
         return Ok(());
     }
+
+    // Your own text: drop any appended attribution, then learn voice from it.
+    let body = watermark::strip_trailer(body);
 
     {
         for line in body.lines() {

@@ -364,14 +364,14 @@ pub fn render_ingest(
             if report.others > 0 {
                 writeln!(
                     out,
-                    "  {} from others (corroboration only — not your voice)",
+                    "  {} from others (vocabulary only — not your voice)",
                     report.others
                 )?;
             }
             if report.assistant > 0 {
                 writeln!(
                     out,
-                    "  {} assistant-authored (not learned from)",
+                    "  {} assistant-authored (vocabulary only — not your voice)",
                     report.assistant
                 )?;
             }
