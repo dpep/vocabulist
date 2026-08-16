@@ -44,8 +44,16 @@ decisions — reach for it before inventing a method that has a name.
   `-J/--ndjson` is one compact object per line. When you add a command or a
   payload field, give it structured output in the same change and keep field
   names in `src/types.rs` stable — consumers parse them.
-- **Exit codes follow lint convention.** Clean input exits 0, findings exit 1,
-  so `vocab` drops into a hook or CI step without a wrapper.
+- **Exit codes follow the convention of the command's job**, which means
+  `1` reads two ways and that is deliberate:
+  - *Checking* is a linter — clean input exits 0, findings exit 1, so `vocab`
+    drops into a pre-commit hook or CI step without a wrapper.
+  - *Querying* (`list`, `phrases`, `self`, `rm`) is grep — a result exits 0,
+    an empty result exits 1, so `vocab list foo && …` means "if any".
+
+  Both are what a script author would expect from that shape of command; a
+  single rule would violate one of them. `2` is always an operational error,
+  never a verdict, so it's the one code that never needs disambiguating.
 
 ## Language and toolchain
 
@@ -70,16 +78,17 @@ vocabulist/
   src/
     main.rs       ← thin entry → cli::run()
     lib.rs        ← module wiring
-    cli.rs        ← Cli/Format, input resolution, dispatch, spool processing
+    cli.rs        ← Cli/Format, input resolution, dispatch
     types.rs      ← Provenance, Register, Finding (the serialized contract)
     output.rs     ← render each payload per format
     store.rs      ← SQLite schema, lexicon/ngram/spool/exemplar DAO
     seed.rs       ← ground-truth mining (repos, taps, binaries, manifests)
     check.rs      ← the checker, suggestion ranking, bounded edit distance
+    process.rs    ← spool → counts, and the authorship rule that governs it
     ngram.rs      ← collocations, log-likelihood, real-word confusion sets
     dict.rs       ← system word list + inflection folding (the backstop)
     frequency.rs  ← embedded core list + how common a word is in English
-    text.rs       ← tokenizing, masking, and the shared `prose_words` pipeline
+    text.rs       ← tokenizing, masking, and the shared prose pipeline
     contraction.rs← apostrophe-less contractions (`dont` → `don't`)
     complexity.rs ← vocabulary and readability metrics
     watermark.rs  ← assistant-authored detection
@@ -127,8 +136,10 @@ cargo test`.
 
 `store.rs` owns the schema and `SCHEMA_VERSION`. New *tables* come from the
 `CREATE TABLE IF NOT EXISTS` block; new *columns* need an explicit ALTER in
-`migrate`, because the create block silently won't add them to an existing
-database. Bump `SCHEMA_VERSION` and note the change in
+`migrate` via `add_column`, because the create block silently won't add them to
+an existing database. Tolerate the duplicate-column error there and nothing
+else — a blanket ignore hides typos and locked databases until a much later
+query fails. Bump `SCHEMA_VERSION` and note the change in
 [docs/PLAN.md](docs/PLAN.md) in the same commit.
 
 ## Landing changes

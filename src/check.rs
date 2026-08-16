@@ -447,12 +447,6 @@ impl<'a> Scanner<'a> {
 
         self.checker.check_line(line, self.line_no, evidence)
     }
-
-    /// True when the scanner is inside a region it's skipping — useful for
-    /// callers that want to report why nothing came back.
-    pub fn skipping(&self) -> bool {
-        self.fence.is_some() || self.in_front_matter
-    }
 }
 
 /// The fence marker a line opens, if it opens one.

@@ -17,6 +17,7 @@ pub mod inbound;
 pub mod ingest;
 pub mod ngram;
 pub mod output;
+pub mod process;
 pub mod profile;
 pub mod seed;
 pub mod store;

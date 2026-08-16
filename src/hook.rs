@@ -80,7 +80,7 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
             // uses the plugin — never the CLI — still gets a seeded lexicon
             // and, with it, the detected identities that read-capture needs.
             maybe_seed(store);
-            let _ = crate::cli::process_spool(store, STOP_PROCESS_LIMIT);
+            let _ = crate::process::process_spool(store, STOP_PROCESS_LIMIT);
         }
         _ => {}
     }
@@ -96,7 +96,7 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
 fn maybe_seed(store: &Store) {
     let stale = match store.seconds_since_seed() {
         Ok(None) => true,
-        Ok(Some(age)) => age > crate::cli::SEED_TTL_SECS,
+        Ok(Some(age)) => age > crate::seed::SEED_TTL_SECS,
         Err(_) => return,
     };
     if !stale {

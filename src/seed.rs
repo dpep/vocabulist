@@ -41,6 +41,11 @@ const PROJECT_DIRS: &[&str] = &[
     "repos",
 ];
 
+/// Re-seed after this long. The machine drifts — repos appear, tools get
+/// installed — and a lexicon reflecting last month's machine flags this
+/// month's vocabulary.
+pub const SEED_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
 pub struct SeedOptions {
     /// Directory trees to scan for repos and manifests.
     pub scan_roots: Vec<PathBuf>,

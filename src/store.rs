@@ -189,20 +189,34 @@ CREATE TABLE IF NOT EXISTS sentence_lengths (
 /// Bring an existing database up to the current schema.
 ///
 /// `CREATE TABLE IF NOT EXISTS` covers new tables but not new *columns*, so
-/// added columns need an explicit ALTER. Re-running one is a duplicate-column
-/// error rather than a real failure, so the result is deliberately ignored —
-/// that keeps this idempotent without having to introspect the table first.
+/// added columns need an explicit ALTER, and re-running one on an
+/// already-migrated database is expected.
 fn migrate(conn: &Connection) -> Result<()> {
-    let _ = conn.execute("ALTER TABLE spool ADD COLUMN author TEXT", []);
-    let _ = conn.execute(
+    add_column(conn, "ALTER TABLE spool ADD COLUMN author TEXT")?;
+    add_column(
+        conn,
         "ALTER TABLE identities ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
-        [],
-    );
-    let _ = conn.execute(
+    )?;
+    add_column(
+        conn,
         "ALTER TABLE identities ADD COLUMN denied INTEGER NOT NULL DEFAULT 0",
-        [],
-    );
+    )?;
     Ok(())
+}
+
+/// Run an idempotent `ADD COLUMN`, tolerating only the duplicate-column error.
+///
+/// Ignoring *every* error here would be simpler but hides the failures that
+/// matter — a typo'd column, a missing table, a locked or corrupt database —
+/// and the damage surfaces much later as a query against a column that was
+/// never added.
+fn add_column(conn: &Connection, sql: &str) -> Result<()> {
+    match conn.execute(sql, []) {
+        Ok(_) => Ok(()),
+        // SQLite reports this only as message text; there's no distinct code.
+        Err(e) if e.to_string().contains("duplicate column name") => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// One staged body awaiting processing.

@@ -297,19 +297,44 @@ fn mask_around(out: &mut [char], line: &str, needle: char) {
 /// a text counted URL fragments as vocabulary while the corpus path never saw
 /// them, despite the two claiming to be comparable.
 pub fn prose_words(line: &str) -> Vec<String> {
-    if !is_prose_line(line) {
-        return Vec::new();
-    }
-    let masked = mask_non_prose(&normalize_typography(line));
-    tokenize(&masked)
-        .iter()
-        .map(|t| normalize(&t.text))
-        .filter(|w| {
-            w.chars().count() >= 2
-                && w.chars()
-                    .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
-        })
+    prose_tokens(line)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| is_lexical(w))
         .collect()
+}
+
+/// One prose line's tokens, normalized, **in order and unfiltered** — the
+/// shared front half of every path that reads prose. `None` for a line that
+/// isn't prose at all (code, a table, front matter).
+///
+/// Callers that want words filter with [`is_lexical`]; callers that care about
+/// adjacency — n-grams, sentence shape — must not, since removing a token
+/// silently joins its neighbors.
+pub fn prose_tokens(line: &str) -> Option<Vec<String>> {
+    if !is_prose_line(line) {
+        return None;
+    }
+    // Normalize the way the checker does, so a word captured from Slack with a
+    // curly apostrophe counts as the word it is rather than a second spelling.
+    let masked = mask_non_prose(&normalize_typography(line));
+    Some(
+        tokenize(&masked)
+            .iter()
+            .map(|t| normalize(&t.text))
+            .filter(|t| t.chars().count() >= 2)
+            .collect(),
+    )
+}
+
+/// Whether a token can enter the lexicon: letters, with the apostrophes and
+/// hyphens that belong to ordinary words. Anything else is a number, an
+/// identifier, or punctuation debris.
+pub fn is_lexical(word: &str) -> bool {
+    word.chars().count() >= 2
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
 }
 
 /// Split an identifier into its parts: `rubocop_todo` → `rubocop`, `todo`;
