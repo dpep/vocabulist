@@ -377,6 +377,50 @@ derived index to the schema and to dictionary-file invalidation. These earn
 their keep in the Phase 4 LSP, which is a long-lived process worth amortizing
 into. Not before.
 
+## 12b. Cold start, and what didn't work **[open]**
+
+Context-aware correction needs collocation evidence, and a fresh corpus has
+none. Two approaches were tried; only one survives.
+
+**Frequency alone does not work.** Knowing `from` is far more common than
+`form` seems like enough to be suspicious, and it isn't. The quantity we want
+is P(you meant `from` | you typed `form`), and the frequency prior has to beat
+the typo rate to matter: P(typing `form` while meaning `from`) is maybe 1-in-50,
+while P(typing `form` while meaning `form`) is ~1. The posterior favors
+"correct as written" unless the frequency gap is enormous — and the test fires
+on *every* occurrence of the rarer word regardless of the sentence. Built,
+tested against this project's own README, where it flagged "the apostrophe
+form usually isn't…", and removed.
+
+**Discriminating collocates do work**, because they carry context. A small
+bundled table for the top ~50 confusions — `from` follows `apart`, `away`,
+`far`, `different`; `form` follows `the`, `a`, `fill in`, `order` — is a few
+hundred bytes per pair, works on day one, and stays silent where it has
+nothing to say. Personal collocations then supersede it, which is the same
+inversion the whole tool rests on: your evidence over the general prior.
+
+**Derived confusables.** The hardcoded confusion sets should become
+edit-distance-1 neighbors derived from the dictionary, so the set scales past
+what anyone would enumerate. That only identifies *candidates*, though — the
+collocate table is still what decides between them.
+
+## 12c. Code and comments **[open]**
+
+Prose inside code is a natural target — comments, docstrings, commit
+messages — and it's where a personal lexicon pays off most, since comments are
+dense with the identifiers and jargon a general checker flags.
+
+Code *lines* are a different problem and mostly not spell-checking: they're
+references to things that exist, in formats (`snake_case`, `camelCase`,
+`SCREAMING_SNAKE`) the tokenizer already declines to judge. But there may be a
+narrower play with code-specific semantics — a misspelled identifier is
+detectable *relative to the identifiers that exist in this project*, which is
+a symbol-table question rather than a dictionary one, and one an LSP is
+already positioned to answer.
+
+Sequencing: this lands after the VS Code integration and the LSP, which is
+where the parse tree needed to separate comment from code already lives.
+
 ## 13. Roadmap
 
 **Phase 1 — seed + check** ✅

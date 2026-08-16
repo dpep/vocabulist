@@ -115,6 +115,13 @@ pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
 /// Files worth reading for ordinary English, as opposed to code.
 const PROSE_FILES: &[&str] = &["README.md", "README", "CONTRIBUTING.md", "CHANGELOG.md"];
 
+/// Directories whose markdown is prose rather than generated output.
+const PROSE_DIRS: &[&str] = &["docs", "doc"];
+
+/// Cap on markdown files read per repo, so one docs-heavy project doesn't
+/// dominate the frequency table.
+const MAX_PROSE_FILES_PER_REPO: usize = 25;
+
 /// Bytes of any one file we'll read. A generated changelog can be enormous
 /// and adds nothing after the first few thousand words.
 const MAX_PROSE_BYTES: usize = 200_000;
@@ -129,8 +136,19 @@ fn harvest_prose_frequency(store: &Store, repos: &[PathBuf]) -> rusqlite::Result
     let mut counts: HashMap<String, i64> = HashMap::new();
 
     for repo in repos {
-        for name in PROSE_FILES {
-            let path = repo.join(name);
+        let mut paths: Vec<PathBuf> = PROSE_FILES.iter().map(|n| repo.join(n)).collect();
+        // Markdown under docs/ is written prose too, and it's where the
+        // vocabulary that isn't in a 1934 dictionary actually lives.
+        for dir in PROSE_DIRS {
+            for name in read_dir_names(&repo.join(dir)) {
+                if name.ends_with(".md") {
+                    paths.push(repo.join(dir).join(name));
+                }
+            }
+        }
+        paths.truncate(MAX_PROSE_FILES_PER_REPO);
+
+        for path in paths {
             let Ok(body) = std::fs::read_to_string(&path) else {
                 continue;
             };

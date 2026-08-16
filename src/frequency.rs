@@ -2,19 +2,22 @@
 //!
 //! The backstop dictionary is a flat membership set — 236k words, all equally
 //! weighted — which is why `smal` offered `small`, `smalm`, and `smalt` as
-//! peers. Frequency breaks those ties, and does two more jobs besides:
+//! peers. Frequency does two jobs, both proven out by measurement:
 //!
-//! - **Cold-start confusion detection.** Before there's any personal
-//!   collocation evidence, knowing `from` is vastly more common than `form`
-//!   is enough to be suspicious in the right direction.
-//! - **A fast path.** Most words in real prose are common words, so checking
-//!   a small frequent set first answers most lookups without touching the
-//!   large one.
+//! - **Ranking.** It breaks the ties edit distance leaves behind, so the
+//!   common word wins over the obscure one.
+//! - **A fast path.** Most words in real prose are common, so consulting a
+//!   small frequent set first answers nearly every lookup without reading the
+//!   large one at all — ordinary prose went from ~45ms to ~5ms, because the
+//!   system dictionary is never touched.
 //!
-//! Two sources, layered the same way the rest of the tool layers things:
-//! a small embedded core for day one, and counts mined from prose already on
-//! the machine. Personal evidence accumulates on top of the general prior
-//! rather than replacing it.
+//! Two sources, layered the way the rest of the tool layers things: a small
+//! embedded core for day one, and counts mined from prose already on the
+//! machine. The mined half also serves as a *membership* source, because the
+//! system dictionary is `web2` (1934) and lacks ordinary modern words.
+//!
+//! What frequency deliberately does *not* do is decide which of two real
+//! words belongs in a sentence — see the note further down.
 
 /// The most frequent English words, in descending order of frequency.
 ///
@@ -320,22 +323,25 @@ pub fn core_counts() -> Vec<(&'static str, i64)> {
         .collect()
 }
 
-/// How much more common `a` is than `b`, as a ratio. Used to decide whether a
-/// confusion is worth raising before there's any personal evidence.
-pub fn asymmetry(a: i64, b: i64) -> f64 {
-    (a as f64 + 1.0) / (b as f64 + 1.0)
-}
-
-/// How lopsided two candidates must be before frequency alone justifies
-/// suspicion. This fires with no context evidence at all, so it should only
-/// trigger on pairs that really are far apart.
-///
-/// Calibrated against what the embedded core can actually express, not
-/// against real English. A few hundred entries compress the range — `from`
-/// outranks `form` by three orders of magnitude in a real corpus but only
-/// tenfold here — so the core gives reliable *ordering* and approximate
-/// magnitudes. Mined prose widens the gaps as it accumulates.
-pub const MIN_ASYMMETRY: f64 = 8.0;
+// Deliberately absent: a "flag the rarer spelling" check driven by frequency
+// alone. It was built and removed, because it doesn't work and the reason is
+// instructive.
+//
+// We want P(you meant `from` | you typed `form`). Frequency supplies the
+// prior — `from` is far more common — but that prior has to beat the typo
+// rate to matter. P(typing `form` while meaning `from`) is perhaps one in
+// fifty; P(typing `form` while meaning `form`) is essentially one. So the
+// posterior favors "correct as written" unless the frequency gap is enormous,
+// and even then the test fires on *every* occurrence of the rarer word with
+// no knowledge of the sentence.
+//
+// In practice it flagged `the apostrophe form usually isn't...` in this
+// project's own README — a correct use, exactly the false positive the tool
+// exists to prevent.
+//
+// The cold-start fix that does work is context-bearing: a small bundled table
+// of discriminating collocates (`apart from`, `far from` versus `the form`,
+// `fill in the form`). See docs/PLAN.md.
 
 #[cfg(test)]
 mod tests {
@@ -358,32 +364,5 @@ mod tests {
         ] {
             assert!(words.contains(word), "{word} missing from the core list");
         }
-    }
-
-    #[test]
-    fn common_words_dominate_rare_ones() {
-        let counts = core_counts();
-        let lookup = |w: &str| {
-            counts
-                .iter()
-                .find(|(c, _)| *c == w)
-                .map(|(_, n)| *n)
-                .unwrap()
-        };
-        // The whole point: `from` should overwhelm `form`.
-        assert!(asymmetry(lookup("from"), lookup("form")) > MIN_ASYMMETRY);
-    }
-
-    #[test]
-    fn asymmetry_is_symmetric_in_the_other_direction() {
-        assert!(asymmetry(10, 1000) < 1.0);
-        assert!(asymmetry(1000, 10) > 1.0);
-    }
-
-    #[test]
-    fn asymmetry_handles_absent_words() {
-        // Zero counts must not divide by zero.
-        assert!(asymmetry(0, 0).is_finite());
-        assert_eq!(asymmetry(0, 0), 1.0);
     }
 }

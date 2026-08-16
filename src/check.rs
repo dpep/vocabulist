@@ -195,8 +195,9 @@ impl Checker {
                 continue;
             }
 
-            // Known word — but is it the right known word? Only collocation
-            // evidence can tell, and only for the confusion sets.
+            // Known word — but is it the right known word? Collocation
+            // evidence answers this best, and frequency answers it at all
+            // when the corpus is still empty.
             let prev = i.checked_sub(1).map(|j| normalized[j].as_str());
             let next = normalized.get(i + 1).map(|s| s.as_str());
             if let Some(hit) = ngram::check_real_word(prev, word, next, evidence) {
