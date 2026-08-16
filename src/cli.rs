@@ -132,7 +132,17 @@ pub enum Command {
         words: Vec<String>,
     },
     /// Remove a word from the lexicon.
-    Rm { word: String },
+    Rm {
+        /// The word, or with `--phrase`, the whole phrase.
+        word: Vec<String>,
+        /// Remove a phrase from the collocation tables instead of a word.
+        ///
+        /// Phrases have no other removal path: they are derived counts, and
+        /// the prose they came from was dropped. `vocab prune` handles what a
+        /// rule can recognize; this is for what only a reader can.
+        #[arg(long)]
+        phrase: bool,
+    },
     /// List lexicon entries, strongest first.
     List {
         filter: Option<String>,
@@ -426,8 +436,23 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
-        Some(Command::Rm { word }) => {
-            let removed = store.remove(&text::normalize(word))?;
+        Some(Command::Rm { word, phrase }) => {
+            if word.is_empty() {
+                return Err("nothing to remove".into());
+            }
+            let removed = if *phrase {
+                // Joined so both `rm --phrase "background command"` and
+                // `rm --phrase background command` work; a shell that already
+                // split the words shouldn't change the meaning.
+                let gram = word
+                    .iter()
+                    .map(|w| text::normalize(w))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                store.remove_ngram(&gram)? > 0
+            } else {
+                store.remove(&text::normalize(&word.join(" ")))?
+            };
             if !cli.quiet {
                 let msg = if removed { "removed" } else { "not found" };
                 output::status(&mut out, msg, format)?;

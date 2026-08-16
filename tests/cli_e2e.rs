@@ -380,3 +380,40 @@ fn prune_removes_ids_but_keeps_your_own_words() {
     // `evals` is in no dictionary, and the default prune must not touch it.
     assert!(phrases.stdout.contains("the evals"), "{}", phrases.stdout);
 }
+
+#[test]
+fn a_phrase_can_be_removed_by_hand() {
+    // Phrases have no other removal path: they are derived counts and the
+    // prose is gone, so what a rule cannot recognize needs a reader.
+    let db = scratch_db("rm-phrase");
+    vocab(
+        &db,
+        &[
+            "capture",
+            "-r",
+            "doc",
+            "the background command finished",
+            "-q",
+        ],
+    );
+    vocab(&db, &["process", "-q"]);
+
+    let before = vocab(&db, &["phrases", "--min-count", "1", "--limit", "20"]);
+    assert!(
+        before.stdout.contains("background command"),
+        "{}",
+        before.stdout
+    );
+
+    vocab(&db, &["rm", "--phrase", "background command", "-q"]);
+    let after = vocab(&db, &["phrases", "--min-count", "1", "--limit", "20"]);
+    assert!(
+        !after.stdout.contains("background command"),
+        "{}",
+        after.stdout
+    );
+
+    // Removing a word still works, and is a different thing.
+    let word = vocab(&db, &["rm", "finished"]);
+    assert_eq!(word.code, 0);
+}

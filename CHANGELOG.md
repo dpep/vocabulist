@@ -4,6 +4,9 @@
 
 ### Added
 
+- `vocab rm --phrase "..."` removes a phrase. Phrases had no removal path at
+  all: they are derived counts and the prose is gone, so anything a rule
+  cannot recognize was permanent.
 - `vocab prune` removes what today's capture rules would reject but an older
   version already learned — session ids, tool-call ids, path fragments. The
   default judges shape alone, which cannot take anything that was ever a word.
