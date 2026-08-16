@@ -62,12 +62,16 @@ pub struct Checker {
     /// milliseconds, and text whose words are all in the lexicon never needs
     /// it — which is the common case once the lexicon is seeded.
     dictionary: OnceCell<Option<crate::dict::Dictionary>>,
+    /// Contractions derived from the dictionary and your lexicon, beyond the
+    /// static table. Lazy, because building it needs the dictionary and the
+    /// static table already covers the common cases.
+    derived_contractions: OnceCell<std::collections::HashMap<String, String>>,
     profile: Rc<Profile>,
 }
 
 impl Checker {
     /// A checker over an explicit backstop — used by tests, which supply a
-    /// fixture dictionary rather than reading the system one.
+    /// fixture dictionary rather than the bundled one.
     pub fn new(lexicon: HashSet<String>, dictionary: Option<crate::dict::Dictionary>) -> Self {
         let cell = OnceCell::new();
         let _ = cell.set(dictionary);
@@ -75,16 +79,18 @@ impl Checker {
             lexicon,
             frequency: std::collections::HashMap::new(),
             dictionary: cell,
+            derived_contractions: OnceCell::new(),
             profile: Rc::new(Profile::disabled()),
         }
     }
 
-    /// A checker that reads the system word list on demand.
+    /// A checker that loads the bundled word list on demand.
     pub fn with_profile(lexicon: HashSet<String>, profile: Rc<Profile>) -> Self {
         Self {
             lexicon,
             frequency: std::collections::HashMap::new(),
             dictionary: OnceCell::new(),
+            derived_contractions: OnceCell::new(),
             profile,
         }
     }
@@ -129,6 +135,22 @@ impl Checker {
             return general.max(LEXICON_FLOOR);
         }
         general
+    }
+
+    /// Contractions this installation knows about beyond the static table.
+    fn derived_contraction(&self, word: &str) -> Option<&str> {
+        self.derived_contractions
+            .get_or_init(|| {
+                let dictionary = self
+                    .dictionary()
+                    .into_iter()
+                    .flatten()
+                    .map(|(w, _)| w.as_str());
+                let known = self.lexicon.iter().map(String::as_str).chain(dictionary);
+                crate::contraction::derive(known, |w| self.knows_atom(w))
+            })
+            .get(word)
+            .map(String::as_str)
     }
 
     /// The backstop, loading it on first use.
@@ -257,7 +279,9 @@ impl Checker {
             // Before the known-word gate, not after: `dont`, `didnt`, and
             // `thats` are all *in* the system word list, so gating on
             // "unknown" made this unreachable for the words it targets.
-            if let Some(fixed) = crate::contraction::expand(word) {
+            if let Some(fixed) =
+                crate::contraction::expand(word).or_else(|| self.derived_contraction(word))
+            {
                 findings.push(Finding {
                     kind: FindingKind::Contraction,
                     word: token.text.clone(),

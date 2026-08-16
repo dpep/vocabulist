@@ -17,6 +17,13 @@
 
   `vocab` no longer reads anything from the host, so it behaves the same on a
   machine with no word list installed.
+- **Contractions are derived rather than enumerated.** The hand-written table
+  of 35 covered the common cases and nothing else. The same rule — an
+  apostrophe form whose bare spelling is not itself a word — now runs over the
+  bundled dictionary *and* your lexicon, so `mightve`, `wholl`, and `shant`
+  work without anyone having listed them, and a form you personally write
+  (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
+  are still left alone, which is the whole safety property.
 - **Real-word errors are caught without a corpus.** The mechanism needed
   collocation evidence, and a new lexicon has none, so it caught nothing for
   weeks — measured, 0 of 19. A bundled table of discriminating collocates
