@@ -2,6 +2,10 @@
 
 A live personal dictionary, learned from the words you actually use.
 
+See [RESEARCH.md](RESEARCH.md) for the prior art behind these decisions, the
+methods they correspond to, and the word-list sources that would fix the
+largest measured source of false positives.
+
 This document is the design contract and the working plan. It captures why the
 tool exists, the decisions already made (and what they were made *against*),
 and what's still open. Sections marked **[open]** are decisions deferred on

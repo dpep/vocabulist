@@ -4,6 +4,8 @@
 you actually use — and checks text against it, with an ordinary dictionary as a
 backstop rather than the authority. Read [README.md](README.md) for the pitch
 and [docs/PLAN.md](docs/PLAN.md) for the design contract and roadmap.
+[docs/RESEARCH.md](docs/RESEARCH.md) holds the prior art behind those
+decisions — reach for it before inventing a method that has a name.
 
 > The plan doc is the contract — keep it in sync with the code, changing it in
 > the same commit when the design changes.
@@ -76,6 +78,7 @@ vocabulist/
     text.rs       ← tokenizing and the "don't even look at this" heuristics
     watermark.rs  ← assistant-authored detection
   docs/PLAN.md    ← design contract + roadmap
+  docs/RESEARCH.md← prior art, methods, and candidate data sources
   tests/          ← CLI e2e harness
 ```
 
