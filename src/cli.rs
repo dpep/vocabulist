@@ -434,7 +434,20 @@ fn dispatch_inner(
                 };
                 let scope =
                     register.map_or("lexicon".to_string(), |r| format!("lexicon:{}", r.as_str()));
-                let counts = store.word_counts(register)?;
+                // Names are excluded: `contextdb` and `polyid` are things
+                // you work on, not vocabulary you command, and counting them
+                // inflates every diversity measure here.
+                let names: std::collections::HashSet<String> = store
+                    .list(None, usize::MAX)?
+                    .into_iter()
+                    .filter(|e| e.kind == crate::types::Kind::Name)
+                    .map(|e| e.word)
+                    .collect();
+                let counts: std::collections::HashMap<String, u64> = store
+                    .word_counts(register)?
+                    .into_iter()
+                    .filter(|(word, _)| !names.contains(word))
+                    .collect();
                 let mut report = crate::complexity::from_counts(&scope, &counts);
 
                 // Sentence stats recorded during process, when the prose was

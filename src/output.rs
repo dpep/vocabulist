@@ -72,8 +72,9 @@ pub fn render_entries(
             for e in entries {
                 writeln!(
                     out,
-                    "{:<28} {:<12} {:>6}  {:.2}",
+                    "{:<28} {:<6} {:<12} {:>6}  {:.2}",
                     e.word,
+                    e.kind.as_str(),
                     e.provenance.as_str(),
                     e.count,
                     e.validity
@@ -563,6 +564,7 @@ mod tests {
             count: 3,
             sources: 2,
             validity: 0.96,
+            kind: crate::types::Kind::Name,
         }];
         render_entries(&mut buf, &entries, Format::Human).unwrap();
         let out = String::from_utf8(buf).unwrap();

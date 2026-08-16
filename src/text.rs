@@ -178,58 +178,48 @@ pub fn mask_non_prose(line: &str) -> String {
 
     // Inline code spans.
     mask_delimited(&mut out, line, '`', '`');
-    // URLs and bare paths run to the next whitespace.
-    for marker in ["http://", "https://", "www.", "/", "~/", "./"] {
+    // Filesystem paths, which aren't IRIs and so aren't iriq's job.
+    for marker in ["/", "~/", "./"] {
         mask_runs_from(&mut out, &lower, marker);
     }
     // Email addresses: mask the whole run around an '@'.
     mask_around(&mut out, line, '@');
-    // Bare domains, which is how URLs are actually written in chat:
-    // `github.com/dpep/polyid/pull/43` has no scheme, so nothing above
-    // catches it, and it contributed `com`, `dpep`, `github`, and `pull` to
-    // the lexicon as though they were words.
-    mask_bare_urls(&mut out, line);
+    // Everything URL-shaped, via iriq.
+    mask_iris(&mut out, line);
     out.into_iter().collect()
 }
 
-/// Common TLDs, for domains written without a scheme or path.
-const TLDS: &[&str] = &[
-    ".com", ".org", ".net", ".io", ".dev", ".ai", ".co", ".gov", ".edu", ".sh", ".rs", ".app",
-];
-
-/// Mask whitespace-delimited runs that are URLs rather than prose.
+/// Mask IRIs using `iriq` rather than hand-rolled patterns.
 ///
-/// Two tests, both requiring no internal whitespace. A run holding both a dot
-/// and a slash is a URL or a path — which cleanly excludes `e.g.` and a
-/// missing space after a full stop, since neither has a slash. A run ending
-/// in a known TLD covers bare domains with no path at all.
-fn mask_bare_urls(out: &mut [char], line: &str) {
-    let chars: Vec<char> = line.chars().collect();
-    let mut start = 0;
-
-    while start < chars.len() {
-        if chars[start].is_whitespace() {
-            start += 1;
+/// Two URL bugs shipped before this: paths only masked at token boundaries,
+/// then bare domains (`github.com/dpep/polyid/pull/43`) not masked at all,
+/// which put `com`, `dpep`, and `pull` in the lexicon as words. The tail kept
+/// going — ports, query strings, ticket keys — and a purpose-built extractor
+/// is simply better at it than accumulated regexes.
+///
+/// Uses `Extractor` rather than `parse` per token, deliberately: `parse`
+/// accepts `e.g.` and `etc.The` as IRIs, so per-token parsing would silently
+/// skip ordinary prose. The extractor applies context and doesn't.
+fn mask_iris(out: &mut [char], line: &str) {
+    for iri in iriq::Extractor::new().extract_strings(line) {
+        // The extractor normalizes (adding a scheme, among other things), so
+        // the string it returns may not appear verbatim in the source. Fall
+        // back to the scheme-less form to locate the original span.
+        let needle = if line.contains(&iri) {
+            Some(iri.clone())
+        } else {
+            iri.split_once("://")
+                .map(|(_, rest)| rest.to_string())
+                .filter(|rest| line.contains(rest.as_str()))
+        };
+        let Some(needle) = needle else { continue };
+        let Some(byte_start) = line.find(&needle) else {
             continue;
+        };
+        let start = line[..byte_start].chars().count();
+        for c in out.iter_mut().skip(start).take(needle.chars().count()) {
+            *c = ' ';
         }
-        let mut end = start;
-        while end < chars.len() && !chars[end].is_whitespace() {
-            end += 1;
-        }
-        let run: String = chars[start..end].iter().collect();
-        let lower = run.to_ascii_lowercase();
-        let looks_like_url = (lower.contains('.') && lower.contains('/'))
-            || TLDS.iter().any(|tld| {
-                lower
-                    .split_once(tld)
-                    .is_some_and(|(_, rest)| rest.is_empty() || rest.starts_with('/'))
-            });
-        if looks_like_url {
-            for c in out.iter_mut().take(end).skip(start) {
-                *c = ' ';
-            }
-        }
-        start = end;
     }
 }
 

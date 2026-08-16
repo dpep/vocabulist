@@ -338,8 +338,10 @@ impl Checker {
                 word: candidate.clone(),
                 // Normalized, so the scores read as a distribution over the
                 // candidates offered rather than as unrelated magnitudes.
+                // Rounded: these are estimates from a rough error model, and
+                // printing 0.8823529 implies a precision that isn't there.
                 score: if total > 0.0 {
-                    (weight / total) as f32
+                    round_to(weight / total, 3)
                 } else {
                     0.0
                 },
@@ -449,6 +451,14 @@ fn fence_marker(trimmed: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Round to `places` decimals. The scores come from a deliberately rough
+/// error model; carrying seventeen significant figures through the JSON
+/// claims a precision the model doesn't have.
+fn round_to(value: f64, places: u32) -> f32 {
+    let factor = 10f64.powi(places as i32);
+    ((value * factor).round() / factor) as f32
 }
 
 /// Do all of `needle`'s characters appear in `haystack`, in order?

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Result, params};
 
-use crate::types::{Entry, Provenance, Register, StatsPayload};
+use crate::types::{Entry, Kind, Provenance, Register, StatsPayload};
 
 /// How many exemplars we keep per register. A voice profile needs real quoted
 /// examples — adjectives like "semi-casual" are unfalsifiable — but keeping
@@ -323,6 +323,9 @@ impl Store {
     /// Lexicon entries matching an optional substring filter, strongest first.
     pub fn list(&self, filter: Option<&str>, limit: usize) -> Result<Vec<Entry>> {
         let pattern = format!("%{}%", filter.unwrap_or(""));
+        // Kind is derived rather than stored: provenance plus dictionary
+        // membership already determine it, and a stored copy would drift.
+        let dictionary = crate::dict::load();
         let mut stmt = self.conn.prepare(
             "SELECT l.word, l.provenance, l.count,
                     (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
@@ -337,6 +340,7 @@ impl Store {
             let count: i64 = r.get(2)?;
             let sources: i64 = r.get(3)?;
             Ok(Entry {
+                kind: classify(&word, prov, dictionary.as_ref()),
                 word,
                 provenance: prov,
                 validity: validity(prov, sources),
@@ -730,6 +734,36 @@ impl Store {
             by_provenance,
             by_register,
         })
+    }
+}
+
+/// Is this entry ordinary English or a name?
+///
+/// Derived, not stored. Provenance already answers most of it: anything
+/// learned from a repo, tap, binary, or manifest is a name by construction —
+/// those sources contain nothing else. What's left is settled by the
+/// dictionary, since a word an ordinary dictionary knows is an ordinary word
+/// however we happened to learn it.
+pub fn classify(
+    word: &str,
+    provenance: Provenance,
+    dictionary: Option<&std::collections::HashSet<String>>,
+) -> Kind {
+    // `rubocop` is a tool *and* a word to its users, but it isn't English.
+    // The dictionary is the arbiter, and it outranks provenance because a
+    // dependency named `parser` really is the ordinary word.
+    if let Some(d) = dictionary
+        && crate::dict::contains(d, word)
+    {
+        return Kind::Word;
+    }
+    match provenance {
+        Provenance::Owned | Provenance::Tap | Provenance::Installed | Provenance::Dependency => {
+            Kind::Name
+        }
+        // Typed by hand or seen in prose: assume ordinary unless the
+        // dictionary said otherwise above.
+        Provenance::User | Provenance::Observed => Kind::Word,
     }
 }
 

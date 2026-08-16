@@ -65,6 +65,37 @@ impl Provenance {
     }
 }
 
+/// Whether an entry is ordinary English or a name.
+///
+/// A second axis from [`Provenance`], which says *where we learned a word*
+/// rather than *what sort of thing it is*. Conflating them has costs:
+/// `polyid` could be offered as the correction for a mistyped ordinary word,
+/// and `contextdb` inflates lexical-diversity numbers that are supposed to
+/// describe vocabulary rather than the number of projects you have.
+///
+/// Two values rather than three. Splitting names from project jargon is the
+/// distinction a *shared* team vocabulary would need — jargon is shareable,
+/// colleagues' names are not — but that boundary is genuinely fuzzy (`dpep`
+/// is a handle, `polyid` a project, `rubocop` both a tool and a proper noun)
+/// and there's nothing yet to test a guess against.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// Ordinary English — in a dictionary, or used as a common word.
+    Word,
+    /// A name or piece of jargon: a project, tool, handle, or person.
+    Name,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Word => "word",
+            Kind::Name => "name",
+        }
+    }
+}
+
 /// Which voice a piece of text was written in. A single "writing style" is a
 /// fiction — prompts, commits, and email are different registers, and
 /// conflating them produces parody. The capture channel labels this for free.
@@ -182,6 +213,13 @@ pub struct Entry {
     pub sources: i64,
     /// Prior validity from provenance, folded with corroboration.
     pub validity: f32,
+    /// Ordinary English, or a name/jargon term.
+    #[serde(default = "default_kind")]
+    pub kind: Kind,
+}
+
+fn default_kind() -> Kind {
+    Kind::Word
 }
 
 /// What one `seed` run found, per source.

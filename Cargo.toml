@@ -21,6 +21,7 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 log = "0.4"
 env_logger = "0.11"
+iriq = { version = "0.34.0", default-features = false }
 
 # Release builds optimize for a small single binary: strip symbols/debug info
 # and let LTO + one codegen unit drop dead code.
