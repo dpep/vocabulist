@@ -130,6 +130,14 @@ cargo test`.
   produces findings for ordinary words and the test fails for the wrong reason.
 - Use generic, non-identifying test data (`zblorg`, `widget`, `Foo`). This is a
   public repo — never commit real corpus content, and never commit a lexicon.
+  `tests/corpus/prose.md` is the exception and not a counterexample: it is
+  written-for-purpose prose containing nobody's words, proofread to be free of
+  misspellings so that anything flagged in it is the checker's error.
+- **A new false positive on that corpus fails the suite.** The assertion
+  compares the flagged *set* against `KNOWN_COLD_START_MISSES`, not a count, so
+  a regression can't hide behind an unrelated fix. When a change legitimately
+  removes one, delete it from the list in the same commit — the list only ever
+  shrinks.
 - Spec descriptions stay simple and resilient ("raises an error", not a brittle
   exact-string match).
 

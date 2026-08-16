@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **Real-word errors are caught without a corpus.** The mechanism needed
+  collocation evidence, and a new lexicon has none, so it caught nothing for
+  weeks — measured, 0 of 19. A bundled table of discriminating collocates
+  covers the day-one case: `apart from` is idiomatic and `apart form` is
+  always a slip, so `apart` settles that confusion in any sentence. Recall
+  0% → 26%, no new false positives. Your own corpus still overrules it.
+- `vocab eval --kind` targets one class of error. Unrestricted sampling
+  produced one real-word injection in a 1,658-line corpus, which measured
+  nothing. Eval also reports false positives per thousand words, which is
+  comparable across corpora as precision is not.
+
 ### Fixed
 
 - **URLs were only sometimes masked**, so `voidlinux`, `mdbook`, and

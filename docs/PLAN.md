@@ -359,6 +359,21 @@ The backstop is loaded lazily for exactly this reason — it's the single
 largest cost and it's usually unnecessary. What remains is two problems worth
 separating:
 
+**The backstop is missing ordinary words.** This was assumed to be a
+1934-vocabulary problem — no `download`, no `inline` — and it is worse than
+that. `web2` is a *headword* list: it holds `begin` and `hold` but not `began`
+or `held`, and it has `boxberry`, `boxcar`, and `Boxer` but not `box`. The
+embedded frequency core is 276 words, so nothing covers the gap.
+
+Measured on `tests/corpus/prose.md` with an empty lexicon — the experience of
+a user's first minute, before seeding or capture — the checker flags 22 words,
+all of them correct: `began`, `held`, `box`, `database`, `email`, `debug`,
+`baseline`, `timeline`, `tradeoff`, `rewritten`, `payloads`. That is **8.1
+false positives per thousand words**, against 1.5 on a warm lexicon. Cold start
+is the demo, and the demo is the worst the tool ever looks.
+
+This is the same fix as the one below, which is why it goes first.
+
 **Loading 236k words is disproportionate.** A person's working vocabulary is
 a fraction of that, and the tail is words nobody writes. But the fix isn't
 only about speed — the huge list is also a *quality* problem. `/usr/share/dict/words`
@@ -369,7 +384,10 @@ the better win. That single change addresses both, and should come before any
 clever indexing.
 
 **Scanning every candidate per unknown word.** ~474k distance computations for
-two unknowns. The boring fixes are the right ones: bucket candidates by length
+two unknowns; 8.7M for the 37 unknowns in a cold-start pass over the reference
+corpus, which is the 1.6s that pass costs. Note that a better word list shrinks
+this too — most of those unknowns are only unknown because the list is bad — so
+the ordering above holds. The boring fixes are the right ones: bucket candidates by length
 (a ±2 filter applied *before* the scan, not inside it), band the DP to the
 |i−j| ≤ 2 diagonal since max distance is fixed, and hoist the per-candidate
 allocations. Together roughly an order of magnitude, with no new abstractions.
@@ -497,10 +515,14 @@ Hooks in the myclaude plugin: `UserPromptSubmit` (prompt register),
 uses: the writes here are short and infrequent, so a lock is enough and a
 socket would be machinery without a purpose.
 
-**Phase 3 — precision** *(in progress, per §12d)*
-Name detection ✅ — precision 0.77 → 0.92 at no cost in recall. Next: the
-modern word list, which is now the entire residual, and the collocate cue table
-from §12b to give real-word checking anything to say at all.
+**Phase 3 — precision** *(in progress)*
+Name detection ✅ — precision 0.77 → 0.92 at no cost in recall (§12d).
+Bundled collocate cues ✅ — real-word recall 0% → 26% on a corpus with no
+history, no new false positives (§12b).
+Next, and now the whole remaining term: **the frequency-ranked word list**. It
+is the entire precision residual on warm lexicons (§12d), the entire cold-start
+false-positive problem (§12a), the fix for unranked suggestions, and the reason
+a cold pass costs 1.6s. Four separate complaints, one cause.
 
 **Phase 4 — export + profile**
 `vocab sync` to the Tier 1 targets. The stylometry pass and the linguist persona

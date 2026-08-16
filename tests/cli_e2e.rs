@@ -213,3 +213,63 @@ fn naming_a_word_does_not_excuse_a_typo_elsewhere() {
     assert!(out.stdout.contains("teh"), "{}", out.stdout);
     assert_eq!(out.code, 1);
 }
+
+/// Words the checker gets wrong on `tests/corpus/prose.md` with an empty
+/// lexicon — the cold-start experience, before any seeding or capture.
+///
+/// Every one is ordinary modern English. They are here because the backstop
+/// dictionary is `web2`, Webster's Second International of 1934, which is a
+/// *headword* list: it holds `begin` and `hold` but not `began` or `held`,
+/// and it has `boxcar` and `boxberry` but not `box`. The embedded frequency
+/// core covers 276 words, so nothing catches the rest.
+///
+/// The list shrinking is the point — see `docs/PLAN.md` §12a. It must never
+/// grow, which is what the test below actually enforces.
+#[rustfmt::skip]
+const KNOWN_COLD_START_MISSES: &[&str] = &[
+    "Debugging", "I'm", "baseline", "began", "box", "database", "databases",
+    "debug", "debugger", "debugger's", "debugging", "email", "held", "partway",
+    "payloads", "pileup", "prioritized", "proactive", "proactively",
+    "rewritten", "timeline", "tradeoff",
+];
+
+#[test]
+fn no_new_false_positives_on_the_reference_corpus() {
+    // The corpus is generated prose, proofread to be free of misspellings, so
+    // anything flagged here is the checker's mistake. A count would let one
+    // regression hide behind one fix; comparing the *set* does not.
+    let db = scratch_db("corpus-fp");
+    let corpus = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/prose.md");
+    let out = vocab(&db, &["-j", "--file", corpus]);
+
+    // Indentation distinguishes a finding's own word from the words inside
+    // its `suggestions` array, which are nested one level deeper.
+    let flagged: Vec<String> = out
+        .stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("    \"word\": \""))
+        .filter_map(|l| l.strip_suffix("\","))
+        .map(str::to_string)
+        .collect();
+    assert!(!flagged.is_empty(), "parsed nothing from: {}", out.stdout);
+
+    let novel: Vec<&String> = flagged
+        .iter()
+        .filter(|w| !KNOWN_COLD_START_MISSES.contains(&w.as_str()))
+        .collect();
+    assert!(
+        novel.is_empty(),
+        "new false positives on correct prose: {novel:?}"
+    );
+}
+
+#[test]
+fn a_bundled_cue_catches_a_real_word_error_with_no_corpus() {
+    // The day-one case: nothing captured, nothing seeded, and `rather then`
+    // still has to be caught, because collocation evidence will never exist
+    // for a lexicon that was created a minute ago.
+    let db = scratch_db("cue-cold");
+    let out = run(&db, &["-j"], Some("we should ship this rather then that\n"));
+    assert!(out.stdout.contains("\"real-word\""), "{}", out.stdout);
+    assert!(out.stdout.contains("\"than\""), "{}", out.stdout);
+}
