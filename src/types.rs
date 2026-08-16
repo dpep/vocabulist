@@ -285,6 +285,17 @@ pub struct IntegrationStatus {
     pub total: usize,
 }
 
+/// Round to `places` decimals, for numbers that cross the output boundary.
+///
+/// Anything derived from a handful of counts has a few significant figures at
+/// most, and printing seventeen claims a precision the model does not have. Round
+/// where the value is built, not where it is displayed, or the JSON keeps the
+/// noise the human output was careful to hide.
+pub fn round(value: f64, places: u32) -> f64 {
+    let factor = 10f64.powi(places as i32);
+    (value * factor).round() / factor
+}
+
 /// A generic command result, so `--json` works on every command and not just
 /// analysis.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

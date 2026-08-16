@@ -453,7 +453,7 @@ pub fn render_phrases(
             for p in phrases {
                 writeln!(
                     out,
-                    "{:<34} {:>6} {:>9.1}",
+                    "{:<34} {:>6} {:>9.2}",
                     p.gram, p.count, p.log_likelihood
                 )?;
             }

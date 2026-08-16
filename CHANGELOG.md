@@ -4,6 +4,10 @@
 
 ### Added
 
+- `phrases` reports log-likelihood to two decimals. It is computed from a
+  handful of counts, so `61.08969673590383` was claiming evidence that isn't
+  there. Rounded where the value is built, so the JSON carries the same
+  precision the human output does.
 - `vocab rm --phrase "..."` removes a phrase. Phrases had no removal path at
   all: they are derived counts and the prose is gone, so anything a rule
   cannot recognize was permanent.

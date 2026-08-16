@@ -104,6 +104,9 @@ pub struct Collocation {
     pub count: i64,
     /// Dunning's G². Higher means the pairing is less explicable by how
     /// common each word is on its own.
+    ///
+    /// Rounded: it is computed from a handful of counts, and the digits past
+    /// the second are arithmetic residue rather than evidence.
     pub log_likelihood: f64,
 }
 
@@ -153,7 +156,7 @@ pub fn rank_collocations(bigrams: &[(String, i64)], min_count: i64) -> Vec<Collo
             Some(Collocation {
                 gram: gram.clone(),
                 count: *count,
-                log_likelihood: log_likelihood(k11, k12, k21, k22),
+                log_likelihood: crate::types::round(log_likelihood(k11, k12, k21, k22), 2),
             })
         })
         .collect();
