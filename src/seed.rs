@@ -92,6 +92,21 @@ pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
         upgraded += usize::from(was_upgraded);
     }
 
+    // Identities, so read-capture works without anyone remembering to
+    // configure it. Idempotent, so this re-runs freely.
+    //
+    // Two passes: local config and `gh` first, then commit authorship, which
+    // needs a trusted name to filter by and turns up the work addresses that
+    // `git config --get` never sees.
+    let mut names: Vec<String> = Vec::new();
+    for detected in crate::identity::detect_local() {
+        store.add_identity_from(&detected.handle, detected.source)?;
+        names.push(detected.handle);
+    }
+    for detected in crate::identity::detect_from_commits(&repos, &names) {
+        store.add_identity_from(&detected.handle, detected.source)?;
+    }
+
     // General-English frequency: the embedded core first, then real counts
     // mined from prose already on this machine. The core covers the head of
     // the distribution on day one; the mined counts fill in the tail with

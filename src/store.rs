@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS frequency (
 -- room.
 CREATE TABLE IF NOT EXISTS identities (
     handle TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'manual',
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -175,6 +176,10 @@ CREATE TABLE IF NOT EXISTS sentence_lengths (
 /// that keeps this idempotent without having to introspect the table first.
 fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE spool ADD COLUMN author TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE identities ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+        [],
+    );
     Ok(())
 }
 
@@ -469,13 +474,28 @@ impl Store {
         rows.collect()
     }
 
-    /// Record a handle that identifies the user. Idempotent.
-    pub fn add_identity(&self, handle: &str) -> Result<bool> {
+    /// Record a handle that identifies the user, noting where it came from.
+    /// Idempotent, and a manual entry is never overwritten by a detected one.
+    pub fn add_identity_from(&self, handle: &str, source: &str) -> Result<bool> {
         let changed = self.conn.execute(
-            "INSERT OR IGNORE INTO identities (handle) VALUES (?1)",
-            params![handle.to_lowercase()],
+            "INSERT OR IGNORE INTO identities (handle, source) VALUES (?1, ?2)",
+            params![handle.to_lowercase(), source],
         )?;
         Ok(changed > 0)
+    }
+
+    /// Record a handle the user named themselves.
+    pub fn add_identity(&self, handle: &str) -> Result<bool> {
+        self.add_identity_from(handle, "manual")
+    }
+
+    /// Handles with the reason each is believed, for display.
+    pub fn identities_with_source(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT handle, source FROM identities ORDER BY handle")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
     }
 
     pub fn remove_identity(&self, handle: &str) -> Result<bool> {

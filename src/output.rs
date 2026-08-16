@@ -447,7 +447,7 @@ pub fn render_eval(
 
 pub fn render_identities(
     out: &mut impl Write,
-    handles: &[String],
+    handles: &[(String, String)],
     format: Format,
 ) -> std::io::Result<()> {
     match format {
@@ -455,15 +455,21 @@ pub fn render_identities(
             if handles.is_empty() {
                 return writeln!(
                     out,
-                    "No identities set — capture from reads is off.\nAdd one with: vocab self <handle>"
+                    "No identities — capture from reads is off.\nRun `vocab seed` to detect them, or add one: vocab self <handle>"
                 );
             }
-            for handle in handles {
-                writeln!(out, "{handle}")?;
+            for (handle, source) in handles {
+                writeln!(out, "{handle:<34} {source}")?;
             }
             Ok(())
         }
-        _ => emit(out, &json!(handles), format),
+        _ => {
+            let rows: Vec<_> = handles
+                .iter()
+                .map(|(handle, source)| json!({ "handle": handle, "source": source }))
+                .collect();
+            emit(out, &json!(rows), format)
+        }
     }
 }
 

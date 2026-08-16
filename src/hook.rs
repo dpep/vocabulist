@@ -109,11 +109,28 @@ fn capture_tool(store: &Store, input: &HookInput) {
 /// which is the right default — guessing at who the user is would be the one
 /// mistake that poisons the voice profile.
 fn capture_own_messages(store: &Store, input: &HookInput) {
-    let Ok(selves) = store.identities() else {
+    let Ok(mut selves) = store.identities() else {
         return;
     };
     if selves.is_empty() {
         return;
+    }
+
+    // A service ID rendered beside an identity we already trust is that same
+    // person's ID on that service — which is how the Slack handle gets
+    // learned from an email that came out of git config. Done before the
+    // harvest so the messages in this very response can be attributed.
+    let rendered = match &input.tool_response {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    for learned in crate::identity::learn_from_response(&rendered, &selves) {
+        if store
+            .add_identity_from(&learned.handle, learned.source)
+            .unwrap_or(false)
+        {
+            selves.insert(learned.handle);
+        }
     }
 
     for message in crate::inbound::harvest(&input.tool_name, &input.tool_response, &selves) {

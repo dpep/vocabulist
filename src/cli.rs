@@ -555,8 +555,7 @@ fn dispatch_inner(
 
         Some(Command::Identity { handles, rm }) => {
             if handles.is_empty() {
-                let mut known: Vec<String> = store.identities()?.into_iter().collect();
-                known.sort();
+                let known = store.identities_with_source()?;
                 if !cli.quiet {
                     output::render_identities(&mut out, &known, format)?;
                 }
