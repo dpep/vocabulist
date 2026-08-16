@@ -21,7 +21,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -93,9 +93,26 @@ CREATE TABLE IF NOT EXISTS spool (
     source TEXT,
     body TEXT NOT NULL,
     authored_by TEXT NOT NULL DEFAULT 'user',
+    author TEXT,
     captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     processed_at TIMESTAMP
 );
+
+-- Which distinct documents a word turned up in.
+--
+-- Raw occurrence count is a poor test of whether a word is real: ten hits in
+-- one message is weaker evidence than three across three days, because typos
+-- are bursty -- they repeat inside the one message you typed fast. Real
+-- vocabulary recurs across contexts. So validity keys on this table's
+-- cardinality, not on lexicon.count.
+CREATE TABLE IF NOT EXISTS word_sources (
+    word TEXT NOT NULL,
+    doc TEXT NOT NULL,
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (word, doc)
+);
+
+CREATE INDEX IF NOT EXISTS idx_word_sources_word ON word_sources(word);
 
 CREATE INDEX IF NOT EXISTS idx_spool_unprocessed ON spool(processed_at)
     WHERE processed_at IS NULL;
@@ -121,6 +138,29 @@ CREATE TABLE IF NOT EXISTS sentence_lengths (
 );
 ";
 
+/// Bring an existing database up to the current schema.
+///
+/// `CREATE TABLE IF NOT EXISTS` covers new tables but not new *columns*, so
+/// added columns need an explicit ALTER. Re-running one is a duplicate-column
+/// error rather than a real failure, so the result is deliberately ignored —
+/// that keeps this idempotent without having to introspect the table first.
+fn migrate(conn: &Connection) -> Result<()> {
+    let _ = conn.execute("ALTER TABLE spool ADD COLUMN author TEXT", []);
+    Ok(())
+}
+
+/// One staged body awaiting processing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpoolRow {
+    pub id: i64,
+    pub register: Register,
+    pub body: String,
+    /// `user`, `other`, or `assistant` — who we believe wrote it.
+    pub authored_by: String,
+    /// Stable per-row document key, for source-diversity counting.
+    pub doc: String,
+}
+
 pub struct Store {
     conn: Connection,
     path: PathBuf,
@@ -135,6 +175,7 @@ impl Store {
         let conn = Connection::open(&path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn, path })
     }
@@ -254,20 +295,24 @@ impl Store {
     pub fn list(&self, filter: Option<&str>, limit: usize) -> Result<Vec<Entry>> {
         let pattern = format!("%{}%", filter.unwrap_or(""));
         let mut stmt = self.conn.prepare(
-            "SELECT word, provenance, count FROM lexicon
-              WHERE word LIKE ?1
-              ORDER BY count DESC, word ASC
+            "SELECT l.word, l.provenance, l.count,
+                    (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
+               FROM lexicon l
+              WHERE l.word LIKE ?1
+              ORDER BY l.count DESC, l.word ASC
               LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![pattern, limit as i64], |r| {
             let word: String = r.get(0)?;
             let prov = Provenance::parse(&r.get::<_, String>(1)?).unwrap_or(Provenance::Observed);
             let count: i64 = r.get(2)?;
+            let sources: i64 = r.get(3)?;
             Ok(Entry {
                 word,
                 provenance: prov,
-                validity: validity(prov, count),
+                validity: validity(prov, sources),
                 count,
+                sources,
             })
         })?;
         rows.collect()
@@ -310,24 +355,48 @@ impl Store {
         body: &str,
         authored_by: &str,
     ) -> Result<i64> {
+        self.spool_with_author(register, source, body, authored_by, None)
+    }
+
+    /// Stage text with an attributed author.
+    pub fn spool_with_author(
+        &self,
+        register: Register,
+        source: Option<&str>,
+        body: &str,
+        authored_by: &str,
+        author: Option<&str>,
+    ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO spool (register, source, body, authored_by)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![register.as_str(), source, body, authored_by],
+            "INSERT INTO spool (register, source, body, authored_by, author)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![register.as_str(), source, body, authored_by, author],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
 
     /// Unprocessed spool rows, oldest first.
-    pub fn pending_spool(&self, limit: usize) -> Result<Vec<(i64, Register, String, String)>> {
+    ///
+    /// The `doc` field identifies the row as a *document* for
+    /// source-diversity counting. Each spooled body is its own context — two
+    /// Slack messages are independent evidence even though they share a
+    /// source label — so the row id is part of the key.
+    pub fn pending_spool(&self, limit: usize) -> Result<Vec<SpoolRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, register, body, authored_by FROM spool
+            "SELECT id, register, body, authored_by, source FROM spool
               WHERE processed_at IS NULL
               ORDER BY id ASC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |r| {
-            let register = Register::parse(&r.get::<_, String>(1)?).unwrap_or(Register::Other);
-            Ok((r.get(0)?, register, r.get(2)?, r.get(3)?))
+            let id: i64 = r.get(0)?;
+            let source: Option<String> = r.get(4)?;
+            Ok(SpoolRow {
+                id,
+                register: Register::parse(&r.get::<_, String>(1)?).unwrap_or(Register::Other),
+                body: r.get(2)?,
+                authored_by: r.get(3)?,
+                doc: format!("{}#{id}", source.as_deref().unwrap_or("capture")),
+            })
         })?;
         rows.collect()
     }
@@ -365,6 +434,25 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![register.as_str()], |r| r.get::<_, String>(0))?;
         rows.collect()
+    }
+
+    /// Note that `word` appeared in document `doc`. Idempotent — a word seen
+    /// five times in one document still counts as one context.
+    pub fn record_word_source(&self, word: &str, doc: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO word_sources (word, doc) VALUES (?1, ?2)",
+            params![word, doc],
+        )?;
+        Ok(())
+    }
+
+    /// How many distinct documents a word has appeared in.
+    pub fn source_count(&self, word: &str) -> Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM word_sources WHERE word = ?1",
+            params![word],
+            |r| r.get(0),
+        )
     }
 
     /// Add to a running prose total (`sentences`, `words`, `syllables`).
@@ -552,13 +640,20 @@ impl Store {
     }
 }
 
-/// Fold provenance and recurrence into one validity score. Recurrence can lift
-/// a merely-observed word but never past a deliberate source, so seeing a typo
-/// twice doesn't outrank an installed binary.
-pub fn validity(provenance: Provenance, count: i64) -> f32 {
+/// Fold provenance and corroboration into one validity score.
+///
+/// `sources` is the number of *distinct documents* a word appeared in, not
+/// how many times it appeared. That's the whole point: a typo hammered five
+/// times into one message is one context and stays weak, while a word seen
+/// once each in three places is corroborated. Corroboration can lift a
+/// merely-observed word but never past a deliberate source, so no amount of
+/// repetition outranks an installed binary.
+pub fn validity(provenance: Provenance, sources: i64) -> f32 {
     let base = provenance.validity();
-    let recurrence = (count as f32 / (count as f32 + 5.0)).min(1.0);
-    (base + (1.0 - base) * recurrence * 0.5).min(1.0)
+    // Saturates faster than a count-based curve would, because independent
+    // contexts are much scarcer — and much stronger — than raw occurrences.
+    let corroboration = (sources as f32 / (sources as f32 + 2.0)).min(1.0);
+    (base + (1.0 - base) * corroboration * 0.5).min(1.0)
 }
 
 /// Default database location: `$XDG_DATA_HOME/vocabulist/lexicon.db`, else
@@ -678,6 +773,45 @@ mod tests {
     fn validity_never_exceeds_a_stronger_provenance() {
         let observed = validity(Provenance::Observed, 1000);
         assert!(observed < Provenance::Installed.validity());
+    }
+
+    #[test]
+    fn one_document_counts_once_however_often_the_word_repeats() {
+        let s = store();
+        for _ in 0..8 {
+            s.record_word_source("zblorg", "slack#1").unwrap();
+        }
+        // Bursty repetition inside one message is one context, not eight.
+        assert_eq!(s.source_count("zblorg").unwrap(), 1);
+
+        s.record_word_source("zblorg", "slack#2").unwrap();
+        assert_eq!(s.source_count("zblorg").unwrap(), 2);
+    }
+
+    #[test]
+    fn corroboration_beats_repetition() {
+        // A typo hammered into one message versus a word seen in three
+        // separate places: the second is the one that should be trusted.
+        let bursty = validity(Provenance::Observed, 1);
+        let corroborated = validity(Provenance::Observed, 3);
+        assert!(corroborated > bursty);
+    }
+
+    #[test]
+    fn spool_rows_are_distinct_documents_even_from_one_source() {
+        let s = store();
+        s.spool(Register::Slack, Some("slack"), "first message", "user")
+            .unwrap();
+        s.spool(Register::Slack, Some("slack"), "second message", "user")
+            .unwrap();
+        let docs: Vec<String> = s
+            .pending_spool(10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.doc)
+            .collect();
+        assert_eq!(docs.len(), 2);
+        assert_ne!(docs[0], docs[1], "two messages are independent evidence");
     }
 
     #[test]

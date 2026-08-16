@@ -151,6 +151,20 @@ pub enum Command {
         #[arg(short, long)]
         register: Option<String>,
     },
+    /// Bulk-load text from JSON on stdin — NDJSON or an array of
+    /// `{body, author?, register?, source?}`.
+    ///
+    /// Text attributed to someone else corroborates that a word is real but
+    /// never shapes your voice.
+    Ingest {
+        /// A handle that is you. Repeatable; matched case-insensitively.
+        /// Records with no author are treated as yours.
+        #[arg(long = "self", value_name = "HANDLE")]
+        selves: Vec<String>,
+        /// Register for records that don't name one.
+        #[arg(short, long, default_value = "other")]
+        register: String,
+    },
     /// Rank the phrases you actually use, by association strength rather than
     /// raw frequency.
     Phrases {
@@ -435,6 +449,20 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
+        Some(Command::Ingest { selves, register }) => {
+            let default_register =
+                Register::parse(register).ok_or_else(|| format!("unknown register: {register}"))?;
+            let selves: std::collections::HashSet<String> =
+                selves.iter().map(|s| s.to_lowercase()).collect();
+            let records = crate::ingest::parse(&read_stdin()?)?;
+            let report = store
+                .transaction(|| crate::ingest::run(&store, &records, &selves, default_register))?;
+            if !cli.quiet {
+                output::render_ingest(&mut out, &report, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
         Some(Command::Phrases {
             register,
             min_count,
@@ -542,12 +570,19 @@ pub fn process_spool(store: &Store, limit: usize) -> Result<usize, Box<dyn std::
     let pending = store.pending_spool(limit)?;
     let mut processed = 0;
 
-    for (id, register, body, authored_by) in pending {
+    for row in pending {
         // One transaction per row: the counts and the retirement land together
         // or not at all, so an interrupted run can't re-apply a row it already
         // half-counted.
         store.transaction(|| -> Result<(), Box<dyn std::error::Error>> {
-            process_one(store, id, register, &body, &authored_by)
+            process_one(
+                store,
+                row.id,
+                row.register,
+                &row.body,
+                &row.authored_by,
+                &row.doc,
+            )
         })?;
         processed += 1;
     }
@@ -561,14 +596,29 @@ fn process_one(
     register: Register,
     body: &str,
     authored_by: &str,
+    doc: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Staged for the record, but it isn't your voice — learning from it
-    // would drift the lexicon toward the assistant's diction.
-    if authored_by != "user" {
+    // An assistant draft is nobody's vocabulary evidence — it was generated,
+    // not observed in the wild — so it contributes nothing at all.
+    if authored_by == "assistant" {
         store.retire_spool(id)?;
         return Ok(());
     }
     let body = watermark::strip_trailer(body);
+
+    // Someone else's writing corroborates that a word is real without
+    // saying anything about how *you* write. It reaches the lexicon and the
+    // source-diversity table, and stops there — no register counts, no
+    // collocations, no exemplars, no prose stats. Otherwise the voice
+    // profile drifts toward an average of everyone you correspond with.
+    if authored_by != "user" {
+        for word in prose_words(body) {
+            store.upsert_word(&word, &word, crate::types::Provenance::Observed, 0)?;
+            store.record_word_source(&word, doc)?;
+        }
+        store.retire_spool(id)?;
+        return Ok(());
+    }
 
     {
         for line in body.lines() {
@@ -594,6 +644,7 @@ fn process_one(
                 }
                 store.upsert_word(word, word, crate::types::Provenance::Observed, 1)?;
                 store.bump_register(word, register, 1)?;
+                store.record_word_source(word, doc)?;
             }
             for n in [2usize, 3] {
                 for gram in ngram::ngrams(&tokens, n) {
@@ -611,6 +662,30 @@ fn process_one(
     }
     store.retire_spool(id)?;
     Ok(())
+}
+
+/// The prose words of a body, normalized — the shared front half of both
+/// processing paths.
+fn prose_words(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        if !text::is_prose_line(line) {
+            continue;
+        }
+        let normalized = text::normalize_typography(line);
+        let masked = text::mask_non_prose(&normalized);
+        for token in text::tokenize(&masked) {
+            let word = text::normalize(&token.text);
+            if word.chars().count() >= 2
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+            {
+                out.push(word);
+            }
+        }
+    }
+    out
 }
 
 /// Fold one body's sentence shape into the running per-register stats.
@@ -722,6 +797,47 @@ mod tests {
         process_spool(&store, 10).unwrap();
         assert!(store.contains("focused").unwrap());
         assert_eq!(store.ngram_count("small focused").unwrap(), 1);
+    }
+
+    #[test]
+    fn text_from_others_corroborates_without_shaping_voice() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .spool_with_author(
+                Register::Pr,
+                Some("pr"),
+                "the zblorg handles retries",
+                "other",
+                Some("colleague"),
+            )
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+
+        // Their word counts as evidence the word is real...
+        assert!(store.contains("zblorg").unwrap());
+        assert_eq!(store.source_count("zblorg").unwrap(), 1);
+        // ...but says nothing about how *you* write.
+        assert_eq!(store.ngram_count("the zblorg").unwrap(), 0);
+        let totals = store.prose_totals(None).unwrap();
+        assert_eq!(totals.get("sentences").copied().unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn your_own_text_feeds_both_evidence_and_voice() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .spool(
+                Register::Slack,
+                Some("slack"),
+                "the zblorg ships today",
+                "user",
+            )
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+
+        assert_eq!(store.source_count("zblorg").unwrap(), 1);
+        assert_eq!(store.ngram_count("the zblorg").unwrap(), 1);
+        assert!(store.prose_totals(None).unwrap()["sentences"] > 0);
     }
 
     #[test]

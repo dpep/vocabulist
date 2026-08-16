@@ -347,6 +347,46 @@ pub fn render_phrases(
     }
 }
 
+pub fn render_ingest(
+    out: &mut impl Write,
+    report: &crate::ingest::IngestReport,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            writeln!(out, "ingested {}", report.ingested)?;
+            if report.others > 0 {
+                writeln!(
+                    out,
+                    "  {} from others (corroboration only — not your voice)",
+                    report.others
+                )?;
+            }
+            if report.assistant > 0 {
+                writeln!(
+                    out,
+                    "  {} assistant-authored (not learned from)",
+                    report.assistant
+                )?;
+            }
+            if report.skipped > 0 {
+                writeln!(out, "  {} skipped (empty)", report.skipped)?;
+            }
+            Ok(())
+        }
+        _ => emit(
+            out,
+            &json!({
+                "ingested": report.ingested,
+                "others": report.others,
+                "assistant": report.assistant,
+                "skipped": report.skipped,
+            }),
+            format,
+        ),
+    }
+}
+
 /// A command result — success or failure — in the caller's format.
 pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::Result<()> {
     match format {
@@ -439,6 +479,7 @@ mod tests {
             word: "contextdb".into(),
             provenance: Provenance::Owned,
             count: 3,
+            sources: 2,
             validity: 0.96,
         }];
         render_entries(&mut buf, &entries, Format::Human).unwrap();

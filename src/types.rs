@@ -159,8 +159,13 @@ pub struct Finding {
 pub struct Entry {
     pub word: String,
     pub provenance: Provenance,
+    /// Total occurrences.
     pub count: i64,
-    /// Prior validity from provenance, folded with recurrence.
+    /// Distinct documents this word appeared in. The evidence that matters —
+    /// see [`crate::store::validity`].
+    #[serde(default)]
+    pub sources: i64,
+    /// Prior validity from provenance, folded with corroboration.
     pub validity: f32,
 }
 

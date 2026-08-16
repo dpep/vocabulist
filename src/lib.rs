@@ -10,6 +10,7 @@ pub mod complexity;
 pub mod contraction;
 pub mod dict;
 pub mod hook;
+pub mod ingest;
 pub mod ngram;
 pub mod output;
 pub mod profile;

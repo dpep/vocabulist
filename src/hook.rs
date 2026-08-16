@@ -186,7 +186,7 @@ mod tests {
             },
         );
         let pending = s.pending_spool(10).unwrap();
-        assert_eq!(pending[0].3, "assistant");
+        assert_eq!(pending[0].authored_by, "assistant");
     }
 
     #[test]
