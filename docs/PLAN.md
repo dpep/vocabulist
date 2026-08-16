@@ -410,6 +410,22 @@ Everything moved at once, which is what "four complaints, one cause" predicted:
 Bundling also removed the last thing the crate wanted from the host, so it now
 behaves identically on a machine with no word list installed.
 
+**And it retired the stemmer.** Lookup used to peel suffixes to a base form,
+because a headword list left `shipping` and `focused` unrecognized. SCOWL
+carries the inflections, so the stripper stopped paying for itself and started
+costing: it over-generated deliberately, and every spurious base that happened
+to be a real word accepted a typo. Removing it took recall on the reference
+corpus from 87.5% to **95.8%** and left the false-positive set byte-identical.
+
+Worth stating plainly, because the intuition runs the other way: **stemming was
+never free, it was subsidized** by a dictionary bad enough to need it. If a
+future word list lacks inflections the morphology comes back — but measured
+against `vocab eval`, not assumed.
+
+Note this is separate from `text::normalize`, which strips possessive `'s`
+before lookup and is still right: `debugger's` is a form of `debugger`, not a
+word to be listed.
+
 **Deliberately not doing yet:** BK-trees and SymSpell-style deletion
 neighborhoods. `vocab` is a per-invocation CLI, so any index dies with the
 process — a distance-2 delete neighborhood over 236k words costs seconds to

@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn a_curly_apostrophe_reads_as_the_same_word() {
         // What macOS, Slack, and Gmail actually emit.
-        let c = checker(&[], &["we", "do", "ship", "that"]);
+        let c = checker(&[], &["we", "don't", "ship", "that"]);
         assert!(
             c.check_line_alone("we don\u{2019}t ship that", 1, &mut no_evidence)
                 .is_empty()

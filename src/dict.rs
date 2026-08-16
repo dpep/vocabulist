@@ -74,60 +74,20 @@ pub fn level(dict: &Dictionary, word: &str) -> Option<u8> {
     dict.get(word).copied()
 }
 
-/// Is `word` known, allowing for regular inflection? Checks the surface form
-/// first, then peels common suffixes back to a base form.
+/// Is `word` in the list?
+///
+/// This used to peel suffixes to a base form — `shipping` to `ship` — because
+/// the old backstop carried headwords and few inflections. SCOWL carries the
+/// inflections, so the stripper stopped paying for itself and started costing:
+/// it over-generated on purpose, and every spurious base that happened to be a
+/// real word accepted a typo. Removing it raised recall on the reference
+/// corpus from 87.5% to 95.8% and left the false-positive set identical.
+///
+/// If a future word list lacks inflections, this is where morphology goes
+/// back — but measure it against `vocab eval` first, because the intuition
+/// that stemming can only help is what made the old version look free.
 pub fn contains(words: &Dictionary, word: &str) -> bool {
-    if words.contains_key(word) {
-        return true;
-    }
-    base_forms(word).iter().any(|b| words.contains_key(b))
-}
-
-/// Candidate base forms for an inflected word. Over-generates on purpose —
-/// a spurious base that happens to be a real word means we accept a word we
-/// might have flagged, which is the direction we want to err in.
-fn base_forms(word: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut push = |s: String| {
-        if s.chars().count() >= 2 {
-            out.push(s);
-        }
-    };
-
-    // Contractions. The apostrophe isn't the morpheme boundary in the `n't`
-    // family — `don't` splits to `don`, not `do` — so that case comes first.
-    if let Some(stem) = word.strip_suffix("n't") {
-        push(stem.to_string());
-    }
-    if let Some((head, _)) = word.split_once('\'') {
-        push(head.to_string());
-    }
-
-    for suffix in ["s", "es", "ed", "ing", "ly", "er", "est", "ers", "ings"] {
-        let Some(stem) = word.strip_suffix(suffix) else {
-            continue;
-        };
-        if stem.is_empty() {
-            continue;
-        }
-        push(stem.to_string());
-        // `shipped` → `ship`, `running` → `run`: undo consonant doubling.
-        let mut chars = stem.chars().rev();
-        if let (Some(a), Some(b)) = (chars.next(), chars.next())
-            && a == b
-            && !"aeiou".contains(a)
-        {
-            push(stem[..stem.len() - a.len_utf8()].to_string());
-        }
-        // `shipping` → `ship` via the `e` that was dropped: `focusing` → `focuse`
-        // is nonsense, but `focus` + `e` covers `larger` → `large`.
-        push(format!("{stem}e"));
-        // `carries` → `carry`, `happily` → `happy`.
-        if let Some(without_i) = stem.strip_suffix('i') {
-            push(format!("{without_i}y"));
-        }
-    }
-    out
+    words.contains_key(word)
 }
 
 #[cfg(test)]
@@ -145,19 +105,29 @@ mod tests {
     }
 
     #[test]
-    fn folds_regular_inflections_back_to_the_base() {
-        let d = dict(&["ship", "focus", "large", "carry"]);
-        assert!(contains(&d, "ships"));
-        assert!(contains(&d, "shipped"));
-        assert!(contains(&d, "shipping"));
-        assert!(contains(&d, "focused"));
-        assert!(contains(&d, "larger"));
-        assert!(contains(&d, "carries"));
+    fn the_bundled_list_carries_inflections_itself() {
+        // This is the guarantee that replaced suffix stripping, so it is worth
+        // asserting rather than assuming: the irregular forms are the ones the
+        // old backstop lacked and no stripper would have recovered.
+        let d = load().expect("bundled list");
+        for word in [
+            "ships", "shipped", "shipping", "focused", "carries", "began", "held", "wrote", "box",
+            "don't",
+            // Not `debugger's`: possessives never reach here, because
+            // `text::normalize` strips the `'s` before lookup.
+            "debugger",
+        ] {
+            assert!(contains(&d, word), "{word} missing from the bundled list");
+        }
     }
 
     #[test]
-    fn handles_contractions() {
-        assert!(contains(&dict(&["do"]), "don't"));
+    fn the_bundled_list_omits_the_obscure_tail() {
+        // `smalt` is level 70 and excluded on purpose — it is what made `smal`
+        // ambiguous between three corrections.
+        let d = load().expect("bundled list");
+        assert!(!contains(&d, "smalt"));
+        assert!(contains(&d, "small"));
     }
 
     #[test]
