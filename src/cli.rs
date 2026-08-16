@@ -20,22 +20,29 @@ const AFTER_HELP: &str = "\
 The lexicon is yours: words you've used, tools you've installed, repos you own.
 An ordinary dictionary sits underneath it as a backstop, never as the authority.
 
-Findings come in two kinds:
-  unknown     not in your lexicon and not in the backstop dictionary
-  real-word   spelled fine, wrong here -- `form` for `from`, caught by the
-              company the word keeps rather than by any dictionary
+Findings come in three kinds:
+  unknown       not in your lexicon and not in the backstop dictionary
+  contraction   an apostrophe left out -- `dont` for `don't`
+  real-word     spelled fine, wrong here -- `form` for `from`, caught by the
+                company the word keeps rather than by any dictionary
+
+Each finding scores how sure we are the word is *wrong*; each suggestion
+carries its own share of \"this is what you meant\".
 
 Checking is deliberately reluctant: a false alarm teaches you to ignore the
 tool, a missed typo costs almost nothing. -j/--json and -J/--ndjson switch to
-machine output on every command.
+machine output on every command, and clean input exits 0 while findings exit 1.
 
 Examples:
-  vocab seed                       mine repos, taps, binaries, and manifests
   vocab \"ship the small change\"     check one string
   cat notes.md | vocab -J          stream stdin as NDJSON
-  vocab capture -r slack \"...\"      stage text for learning
-  vocab process                    fold staged text into counts, drop the prose
-  vocab list rubo                  lexicon entries matching \"rubo\"";
+  vocab list rubo                  lexicon entries matching \"rubo\"
+  vocab sync                       export into cSpell and the macOS dictionary
+  vocab phrases                    the phrases you actually use
+  vocab analyze --lexicon          vocabulary and readability of your corpus
+  vocab self                       the handles believed to be yours
+
+The lexicon seeds itself on first use; `vocab seed` re-runs it by hand.";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -300,7 +307,7 @@ fn ensure_seeded(store: &Store, quiet: bool) -> Result<(), Box<dyn std::error::E
     if !quiet {
         eprintln!("vocab: first run — learning your vocabulary from this machine (once)");
     }
-    store.transaction(|| seed::run(store, &seed::SeedOptions::default()))?;
+    seed::run(store, &seed::SeedOptions::default())?;
     store.mark_seeded()?;
     Ok(())
 }
@@ -334,7 +341,7 @@ fn dispatch_inner(
                     .clone()
                     .unwrap_or_else(|| seed::SeedOptions::default().scan_root),
             };
-            let report = profile.time("seed", || store.transaction(|| seed::run(&store, &opts)))?;
+            let report = profile.time("seed", || seed::run(&store, &opts))?;
             store.mark_seeded()?;
             if !cli.quiet {
                 output::render_seed(&mut out, &report, format)?;

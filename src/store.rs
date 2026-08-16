@@ -21,7 +21,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -118,9 +118,17 @@ CREATE INDEX IF NOT EXISTS idx_word_sources_word ON word_sources(word);
 -- use it (which lives in lexicon.count). Seeded from a small embedded core
 -- and grown by mining prose already on the machine. Breaks suggestion ties
 -- and lets confusion detection work before any personal evidence exists.
+-- Keyed by source, which is not incidental. Mined counts are *replaced* on
+-- each seed while core counts take a MAX, because seeding recurs — by hand
+-- and every 30 days from the Stop hook. Accumulating instead meant a word
+-- appearing once in local markdown reached a count of 2 after the second
+-- seed, so MIN_CORPUS_EVIDENCE quietly became 1 and every typo in every
+-- README graduated to a real word.
 CREATE TABLE IF NOT EXISTS frequency (
-    word TEXT PRIMARY KEY,
-    count INTEGER NOT NULL DEFAULT 0
+    word TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'mined',
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (word, source)
 );
 
 -- The handles that are *you*, across services. Reading a channel surfaces
@@ -570,19 +578,31 @@ impl Store {
         )? > 0)
     }
 
-    /// Add to a word's general-English frequency.
-    pub fn bump_frequency(&self, word: &str, by: i64) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO frequency (word, count) VALUES (?1, ?2)
-             ON CONFLICT(word) DO UPDATE SET count = count + ?2",
-            params![word, by],
-        )?;
+    /// Replace the mined half of the frequency table.
+    ///
+    /// A replace rather than an accumulate: the same markdown is re-read on
+    /// every seed, and adding to the old counts inflates them without bound.
+    pub fn replace_mined_frequencies(
+        &self,
+        counts: &std::collections::HashMap<String, i64>,
+    ) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM frequency WHERE source = 'mined'", [])?;
+        for (word, count) in counts {
+            self.conn.execute(
+                "INSERT INTO frequency (word, source, count) VALUES (?1, 'mined', ?2)
+                 ON CONFLICT(word, source) DO UPDATE SET count = ?2",
+                params![word, count],
+            )?;
+        }
         Ok(())
     }
 
-    /// The whole frequency table, for loading into memory once per run.
+    /// The whole frequency table, summed across sources.
     pub fn frequencies(&self) -> Result<std::collections::HashMap<String, i64>> {
-        let mut stmt = self.conn.prepare("SELECT word, count FROM frequency")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT word, SUM(count) FROM frequency GROUP BY word")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         rows.collect()
     }
@@ -594,8 +614,8 @@ impl Store {
         let core = crate::frequency::core_counts();
         for (word, count) in &core {
             self.conn.execute(
-                "INSERT INTO frequency (word, count) VALUES (?1, ?2)
-                 ON CONFLICT(word) DO UPDATE SET count = MAX(count, ?2)",
+                "INSERT INTO frequency (word, source, count) VALUES (?1, 'core', ?2)
+                 ON CONFLICT(word, source) DO UPDATE SET count = MAX(count, ?2)",
                 params![word, count],
             )?;
         }
@@ -944,6 +964,21 @@ mod tests {
         s.remove_identity("dpep").unwrap();
         s.add_identity("dpep").unwrap();
         assert!(s.identities().unwrap().contains("dpep"));
+    }
+
+    #[test]
+    fn re_mining_the_same_corpus_does_not_inflate_counts() {
+        // Seeding recurs — by hand and monthly from the Stop hook. Adding to
+        // the previous counts made a word seen once reach the evidence
+        // threshold on the second pass, quietly turning every README typo
+        // into a real word.
+        let s = store();
+        let counts: std::collections::HashMap<String, i64> =
+            [("zzzunique".to_string(), 1i64)].into_iter().collect();
+        s.replace_mined_frequencies(&counts).unwrap();
+        s.replace_mined_frequencies(&counts).unwrap();
+        s.replace_mined_frequencies(&counts).unwrap();
+        assert_eq!(s.frequencies().unwrap()["zzzunique"], 1);
     }
 
     #[test]

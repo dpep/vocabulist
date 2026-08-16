@@ -85,12 +85,20 @@ pub fn run(store: &Store, opts: &SeedOptions) -> rusqlite::Result<SeedReport> {
         }
     }
 
+    // Everything above was pure scanning — subprocesses, disk walks, seconds
+    // of it. The writes go in their own short transaction rather than the
+    // caller wrapping the whole scan, which would hold SQLite's single write
+    // lock long enough for a concurrent capture hook to exhaust its busy
+    // timeout and silently drop a prompt.
     let (mut added, mut upgraded) = (0, 0);
-    for (word, (provenance, display)) in best {
-        let (is_new, was_upgraded) = store.upsert_word(&word, &display, provenance, 0)?;
-        added += usize::from(is_new);
-        upgraded += usize::from(was_upgraded);
-    }
+    store.transaction(|| -> rusqlite::Result<()> {
+        for (word, (provenance, display)) in &best {
+            let (is_new, was_upgraded) = store.upsert_word(word, display, *provenance, 0)?;
+            added += usize::from(is_new);
+            upgraded += usize::from(was_upgraded);
+        }
+        Ok(())
+    })?;
 
     // Identities, so read-capture works without anyone remembering to
     // configure it. Idempotent, so this re-runs freely.
@@ -172,9 +180,7 @@ fn harvest_prose_frequency(store: &Store, repos: &[PathBuf]) -> rusqlite::Result
     let counts = in_parallel(repos, |repo, counts| count_repo_prose(repo, counts));
 
     let distinct = counts.len();
-    for (word, count) in counts {
-        store.bump_frequency(&word, count)?;
-    }
+    store.replace_mined_frequencies(&counts)?;
     Ok(distinct)
 }
 

@@ -125,6 +125,32 @@ pub fn detect_from_commits(repos: &[std::path::PathBuf], known: &[String]) -> Ve
         .collect()
 }
 
+/// Does `needle` appear in `haystack` delimited by non-word characters?
+fn appears_bounded(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = haystack[from..].find(needle) {
+        let start = from + offset;
+        let end = start + needle.len();
+        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_word_byte(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
+/// Word characters for boundary purposes. `.` and `@` count, so an email
+/// stays one token rather than three.
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'.' || b == b'@' || b == b'_' || b == b'-'
+}
+
 fn push(out: &mut Vec<Detected>, handle: &str, source: &'static str) {
     if handle.is_empty() || handle.len() > 128 {
         return;
@@ -160,7 +186,11 @@ pub fn learn_from_response(
 
     for line in response.lines() {
         let lower = line.to_lowercase();
-        if !known.iter().any(|k| lower.contains(k.as_str())) {
+        // Bounded, not substring. `contains` let a bare first name from git
+        // config match a *different* person's line — `daniel` inside
+        // `daniela` — and the ID learned there becomes a fully trusted
+        // identity whose messages are then captured as the user's.
+        if !known.iter().any(|k| appears_bounded(&lower, k)) {
             continue;
         }
         // `(ID: U0E48AHQA)` — the service's own identifier for this person.
@@ -225,6 +255,17 @@ mod tests {
         let found =
             learn_from_response(response, &known(&["pepper.daniel@gmail.com", "u0e48ahqa"]));
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_near_miss_handle_does_not_bridge() {
+        // `daniel` must not match `daniela` — the ID learned from a different
+        // person's line becomes a fully trusted identity.
+        let response = "From: Daniela Rossi <daniela@example.com> (ID: U999OTHER)";
+        assert!(learn_from_response(response, &known(&["daniel"])).is_empty());
+        // The same name, properly delimited, still bridges.
+        let mine = "From: Daniel Pepper (ID: U0E48AHQA)";
+        assert_eq!(learn_from_response(mine, &known(&["daniel"])).len(), 1);
     }
 
     #[test]

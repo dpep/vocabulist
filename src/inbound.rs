@@ -36,10 +36,16 @@ pub fn harvest(
     selves: &std::collections::HashSet<String>,
 ) -> Vec<Message> {
     let name = tool_name.to_lowercase();
-    let found = if name.contains("slack") {
+    let found = if is_slack_tool(&name) {
         from_slack(response)
-    } else {
+    } else if is_github_tool(&name) {
         from_github_json(response)
+    } else {
+        // Anything else is not a source of the user's messages. Walking every
+        // tool's JSON meant a fetched page containing `{"body": …,
+        // "user":{"login":"dpep"}}` — a public login — could inject text into
+        // the voice tables.
+        Vec::new()
     };
 
     found
@@ -47,6 +53,17 @@ pub fn harvest(
         .filter(|m| selves.contains(&m.author.to_lowercase()))
         .filter(|m| !m.body.trim().is_empty())
         .collect()
+}
+
+/// Tools whose results carry Slack messages.
+fn is_slack_tool(name: &str) -> bool {
+    name.contains("slack")
+}
+
+/// Tools whose results carry GitHub comments. `gh` runs through Bash, so the
+/// command has to be trusted as well as the shape.
+fn is_github_tool(name: &str) -> bool {
+    name.contains("github") || name == "bash"
 }
 
 /// Slack's MCP responses are formatted text rather than structured data, so
@@ -121,6 +138,11 @@ fn from_slack(response: &Value) -> Vec<Message> {
             flush(&mut out, &author, &key, &body);
             body = None;
             key = None;
+            // Author resets too. Leaving it set means a block with a missing
+            // or reordered `From:` inherits the previous author — attributing
+            // a colleague's message to the user, which is the failure this
+            // module exists to prevent.
+            author = None;
             continue;
         }
         if let Some(lines) = body.as_mut() {
@@ -238,6 +260,25 @@ a colleague wrote this one
         assert_eq!(found[0].body, "a colleague wrote this one");
         // ...and with no identities configured, nothing at all.
         assert!(harvest("slack_read_channel", &response, &selves(&[])).is_empty());
+    }
+
+    #[test]
+    fn a_block_without_an_author_inherits_nobody() {
+        // Author must reset at the separator: if Slack's rendering ever drops
+        // a `From:` line, the previous author must not adopt the new text.
+        let response = json!({ "results": "### Result 1\nFrom: dpepper (ID: U0E48AHQA)\nMessage_ts: 1.1\nText:\nmine\n\n---\n\n### Result 2\nMessage_ts: 2.2\nText:\nsomeone else's, unattributed\n\n---\n" });
+        let found = harvest("slack_read_channel", &response, &selves(&["u0e48ahqa"]));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].body, "mine");
+    }
+
+    #[test]
+    fn only_slack_and_github_tools_are_harvested() {
+        // A fetched page carrying a public login must not inject voice data.
+        let payload = json!([{ "body": "not yours", "user": { "login": "dpep" } }]);
+        assert!(harvest("WebFetch", &payload, &selves(&["dpep"])).is_empty());
+        assert!(harvest("Read", &payload, &selves(&["dpep"])).is_empty());
+        assert_eq!(harvest("Bash", &payload, &selves(&["dpep"])).len(), 1);
     }
 
     #[test]

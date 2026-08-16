@@ -12,14 +12,15 @@ one of them until you give up and turn it off.
 dictionary sits underneath as a backstop.
 
 ```sh
-$ vocab seed
+$ vocab seed                 # runs itself on first use; this re-runs it
 repos          owned           312 terms
-tap            tap              12 terms
+tap            tap              13 terms
 brew           installed       140 terms
-binaries       installed       663 terms
+binaries       installed       664 terms
 dependencies   dependency     1031 terms
+frequency      observed      20732 terms
 
-2807 words added, 0 upgraded
+2808 words added, 0 upgraded
 
 $ vocab "the contextdb rubocop and iriq tooling shp a smal change"
 1:40   shp     unknown   shap, ship, shop     0.70

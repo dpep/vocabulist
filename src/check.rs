@@ -312,29 +312,41 @@ impl Checker {
         // word is at all, times how likely this typo is given that word.
         // Frequency supplies the first term; edit distance stands in for the
         // second, since a second edit is far rarer than a first.
-        let mut weighted: Vec<(f64, &String)> = kept
+        let mut weighted: Vec<(f64, &String, usize)> = kept
             .iter()
             .map(|(distance, candidate)| {
-                let prior = (self.frequency_of(candidate) + 1) as f64;
+                // Log-compressed, because these counts are not probabilities
+                // and their raw range is enormous: synthetic core counts reach
+                // a million while mined counts sit in the tens. Multiplied
+                // raw, frequency swamps every other term — `part` outscored
+                // `apart` for `aparat` despite needing an extra edit.
+                // Compressed, an edit is worth more than a hundredfold
+                // frequency difference, which is the intended ordering.
+                let prior = ((self.frequency_of(candidate) + 1) as f64).ln() + 1.0;
                 let mut weight = prior * EDIT_PENALTY.powi(*distance as i32);
                 if is_subsequence(word, candidate) {
                     weight *= SUBSEQUENCE_BONUS;
                 }
-                (weight, *candidate)
+                (weight, *candidate, *distance)
             })
             .collect();
 
-        // Rank by the score, not by the candidate-generation order. They
-        // disagree — generation orders by edit distance then shape, while the
-        // score weighs how likely the word is against how likely the slip is —
-        // and a list whose order contradicts its own numbers is worse than
-        // either alone.
-        weighted.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Distance first, score within a tier. Letting the score cross tiers
+        // put `part` above `apart` for `aparat` — two edits beating one —
+        // because the two frequency sources aren't on a common scale: core
+        // words carry synthetic Zipf counts up to a million while mined words
+        // carry real counts in the tens, so a common word missing from the
+        // core looks a hundred times rarer than it is. Until those are
+        // calibrated, frequency isn't entitled to outweigh an extra edit.
+        weighted.sort_by(|a, b| {
+            a.2.cmp(&b.2)
+                .then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
+        });
 
-        let total: f64 = weighted.iter().map(|(w, _)| w).sum();
+        let total: f64 = weighted.iter().map(|(w, _, _)| w).sum();
         let mut out: Vec<Suggestion> = weighted
             .into_iter()
-            .map(|(weight, candidate)| Suggestion {
+            .map(|(weight, candidate, _)| Suggestion {
                 word: candidate.clone(),
                 // Normalized, so the scores read as a distribution over the
                 // candidates offered rather than as unrelated magnitudes.

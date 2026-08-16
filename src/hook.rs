@@ -102,8 +102,7 @@ fn maybe_seed(store: &Store) {
     if !stale {
         return;
     }
-    let seeded =
-        store.transaction(|| crate::seed::run(store, &crate::seed::SeedOptions::default()));
+    let seeded = crate::seed::run(store, &crate::seed::SeedOptions::default());
     if seeded.is_ok() {
         let _ = store.mark_seeded();
     }
@@ -148,9 +147,18 @@ fn capture_own_messages(store: &Store, input: &HookInput) {
     // person's ID on that service — which is how the Slack handle gets
     // learned from an email that came out of git config. Done before the
     // harvest so the messages in this very response can be attributed.
+    // Only Slack renders `From: name <email> (ID: U…)`, and only as text.
+    // Serializing a JSON response with to_string() collapses it to a single
+    // line, which destroys the "same line" requirement that makes this safe —
+    // any known handle anywhere in the payload would co-occur with any ID.
     let rendered = match &input.tool_response {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+        Value::String(s) if input.tool_name.to_lowercase().contains("slack") => s.clone(),
+        Value::Object(map) if input.tool_name.to_lowercase().contains("slack") => map
+            .get("results")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
     };
     for learned in crate::identity::learn_from_response(&rendered, &selves) {
         if store
