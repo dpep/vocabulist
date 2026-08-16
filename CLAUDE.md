@@ -30,9 +30,12 @@ decisions — reach for it before inventing a method that has a name.
   deterministic, explainable, and need no download. Reach for embeddings only
   where counting provably cannot work (semantic substitution), and keep the
   default path offline.
-- **Never learn from text the user didn't write.** Assistant-authored bodies
-  are retired unprocessed. If you add a capture path, it goes through the
-  watermark check.
+- **Only the user's own text shapes voice.** Text written by anyone else — a
+  colleague, an assistant — corroborates that a *word* is real and stops
+  there: no register counts, no collocations, no exemplars, no prose stats.
+  Vocabulary and voice are separate axes, and conflating them feeds the
+  assistant's diction back as the user's. Any new capture path goes through
+  the watermark check.
 - **stdout is for data, stderr is for logs.** All logging goes through
   `env_logger` to stderr so a consumer piping `vocab` gets clean output.
 - **Every command is agent/script-friendly.** *All* output honors the format —
