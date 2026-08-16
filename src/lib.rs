@@ -8,6 +8,7 @@ pub mod check;
 pub mod cli;
 pub mod complexity;
 pub mod contraction;
+pub mod cue;
 pub mod dict;
 pub mod eval;
 pub mod frequency;

@@ -267,6 +267,21 @@ impl Checker {
                         score: 1.0,
                     }],
                 });
+            } else if let Some(fixed) = crate::cue::check(prev, word, next, evidence) {
+                // Only once the corpus has nothing to say. A bundled rule is
+                // the fallback for a lexicon that hasn't seen enough yet, not
+                // a second opinion about a writer it already knows.
+                findings.push(Finding {
+                    kind: FindingKind::RealWord,
+                    word: token.text.clone(),
+                    line: line_no,
+                    col: token.col,
+                    confidence: crate::cue::CONFIDENCE,
+                    suggestions: vec![Suggestion {
+                        word: fixed,
+                        score: 1.0,
+                    }],
+                });
             }
         }
         findings
