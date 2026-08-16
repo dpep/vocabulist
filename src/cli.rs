@@ -151,6 +151,18 @@ pub enum Command {
         #[arg(short, long)]
         register: Option<String>,
     },
+    /// Rank the phrases you actually use, by association strength rather than
+    /// raw frequency.
+    Phrases {
+        /// Limit to one register.
+        #[arg(short, long)]
+        register: Option<String>,
+        /// Ignore pairings seen fewer than this many times.
+        #[arg(long, default_value_t = 2)]
+        min_count: i64,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
     /// Claude Code hook handler. Reads the hook payload on stdin; always
     /// exits 0 so a hook never blocks the user.
     Hook {
@@ -384,7 +396,24 @@ fn dispatch_inner(
                 let scope =
                     register.map_or("lexicon".to_string(), |r| format!("lexicon:{}", r.as_str()));
                 let counts = store.word_counts(register)?;
-                crate::complexity::from_counts(&scope, &counts)
+                let mut report = crate::complexity::from_counts(&scope, &counts);
+
+                // Sentence stats recorded during process, when the prose was
+                // still around. Absent only if nothing has been processed.
+                let totals = store.prose_totals(register)?;
+                let sentences = totals.get("sentences").copied().unwrap_or(0);
+                if sentences > 0 {
+                    let histogram = store.sentence_lengths(register)?;
+                    let mut readability = crate::complexity::readability_from_totals(
+                        sentences as u64,
+                        totals.get("words").copied().unwrap_or(0) as u64,
+                        totals.get("syllables").copied().unwrap_or(0) as u64,
+                    );
+                    readability.sentence_length_stddev =
+                        crate::complexity::sentence_length_stddev(&histogram);
+                    report.readability = Some(readability);
+                }
+                report
             } else {
                 let body = match text {
                     Some(t) => t.clone(),
@@ -404,6 +433,30 @@ fn dispatch_inner(
                 output::render_analysis(&mut out, &report, format)?;
             }
             Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Phrases {
+            register,
+            min_count,
+            limit,
+        }) => {
+            let register = match register {
+                Some(r) => {
+                    Some(Register::parse(r).ok_or_else(|| format!("unknown register: {r}"))?)
+                }
+                None => None,
+            };
+            let bigrams = store.ngrams(2, register)?;
+            let mut ranked = ngram::rank_collocations(&bigrams, *min_count);
+            ranked.truncate(*limit);
+            if !cli.quiet {
+                output::render_phrases(&mut out, &ranked, format)?;
+            }
+            Ok(if ranked.is_empty() {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
         }
 
         Some(Command::Hook { event }) => {
@@ -551,8 +604,48 @@ fn process_one(
                 store.add_exemplar(register, line.trim(), tokens.len() as f64)?;
             }
         }
+
+        // Sentence-level facts, recorded now because the prose is about to be
+        // deleted and none of this can be derived from word counts later.
+        record_prose_shape(store, register, body)?;
     }
     store.retire_spool(id)?;
+    Ok(())
+}
+
+/// Fold one body's sentence shape into the running per-register stats.
+fn record_prose_shape(
+    store: &Store,
+    register: Register,
+    body: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut words = 0i64;
+    let mut syllables = 0i64;
+    let mut sentences = 0i64;
+
+    for sentence in crate::complexity::split_sentences(body) {
+        let normalized = text::normalize_typography(&sentence);
+        let masked = text::mask_non_prose(&normalized);
+        let length: Vec<String> = text::tokenize(&masked)
+            .iter()
+            .map(|t| text::normalize(&t.text))
+            .filter(|w| w.chars().any(char::is_alphabetic))
+            .collect();
+        if length.is_empty() {
+            continue;
+        }
+        sentences += 1;
+        words += length.len() as i64;
+        syllables += length
+            .iter()
+            .map(|w| crate::complexity::count_syllables(w) as i64)
+            .sum::<i64>();
+        store.bump_sentence_length(register, length.len() as i64)?;
+    }
+
+    store.bump_prose(register, "sentences", sentences)?;
+    store.bump_prose(register, "words", words)?;
+    store.bump_prose(register, "syllables", syllables)?;
     Ok(())
 }
 

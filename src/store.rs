@@ -21,7 +21,12 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// Sentence lengths above this are counted in the top bucket. Bounds the
+/// histogram against a pathological line (a minified file, a wall of text)
+/// without distorting the range real prose lives in.
+pub const MAX_SENTENCE_BUCKET: i64 = 60;
 
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
@@ -94,6 +99,26 @@ CREATE TABLE IF NOT EXISTS spool (
 
 CREATE INDEX IF NOT EXISTS idx_spool_unprocessed ON spool(processed_at)
     WHERE processed_at IS NULL;
+
+-- Running prose totals per register. Recorded while the text is still here,
+-- because processing deletes it -- sentence-level facts cannot be recovered
+-- from word counts afterward.
+CREATE TABLE IF NOT EXISTS prose_stats (
+    register TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (register, metric)
+);
+
+-- Distribution, not just the mean. Uniform sentence length reads as monotone
+-- and high variance reads as conversational, so the shape is the signal --
+-- a running average would throw away the interesting half.
+CREATE TABLE IF NOT EXISTS sentence_lengths (
+    register TEXT NOT NULL,
+    length INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (register, length)
+);
 ";
 
 pub struct Store {
@@ -340,6 +365,113 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![register.as_str()], |r| r.get::<_, String>(0))?;
         rows.collect()
+    }
+
+    /// Add to a running prose total (`sentences`, `words`, `syllables`).
+    pub fn bump_prose(&self, register: Register, metric: &str, by: i64) -> Result<()> {
+        if by == 0 {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO prose_stats (register, metric, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT(register, metric) DO UPDATE SET value = value + ?3",
+            params![register.as_str(), metric, by],
+        )?;
+        Ok(())
+    }
+
+    /// Record one sentence's length, bucketed at [`MAX_SENTENCE_BUCKET`].
+    pub fn bump_sentence_length(&self, register: Register, length: i64) -> Result<()> {
+        let bucket = length.min(MAX_SENTENCE_BUCKET);
+        self.conn.execute(
+            "INSERT INTO sentence_lengths (register, length, count) VALUES (?1, ?2, 1)
+             ON CONFLICT(register, length) DO UPDATE SET count = count + 1",
+            params![register.as_str(), bucket],
+        )?;
+        Ok(())
+    }
+
+    /// Running prose totals, optionally scoped to one register.
+    pub fn prose_totals(
+        &self,
+        register: Option<Register>,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        let mut out = std::collections::HashMap::new();
+        let mut collect = |mut rows: rusqlite::Rows<'_>| -> Result<()> {
+            while let Some(row) = rows.next()? {
+                let metric: String = row.get(0)?;
+                let value: i64 = row.get(1)?;
+                *out.entry(metric).or_insert(0) += value;
+            }
+            Ok(())
+        };
+        match register {
+            Some(r) => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT metric, value FROM prose_stats WHERE register = ?1")?;
+                collect(stmt.query(params![r.as_str()])?)?;
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT metric, SUM(value) FROM prose_stats GROUP BY metric")?;
+                collect(stmt.query([])?)?;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Sentence-length histogram as `(length, count)`, optionally scoped.
+    pub fn sentence_lengths(&self, register: Option<Register>) -> Result<Vec<(i64, i64)>> {
+        let mut out: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        let mut collect = |mut rows: rusqlite::Rows<'_>| -> Result<()> {
+            while let Some(row) = rows.next()? {
+                *out.entry(row.get(0)?).or_insert(0) += row.get::<_, i64>(1)?;
+            }
+            Ok(())
+        };
+        match register {
+            Some(r) => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT length, count FROM sentence_lengths WHERE register = ?1")?;
+                collect(stmt.query(params![r.as_str()])?)?;
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT length, SUM(count) FROM sentence_lengths GROUP BY length")?;
+                collect(stmt.query([])?)?;
+            }
+        }
+        Ok(out.into_iter().collect())
+    }
+
+    /// Every n-gram of size `n` with its total count, optionally scoped.
+    pub fn ngrams(&self, n: usize, register: Option<Register>) -> Result<Vec<(String, i64)>> {
+        let mut out: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        let mut collect = |mut rows: rusqlite::Rows<'_>| -> Result<()> {
+            while let Some(row) = rows.next()? {
+                *out.entry(row.get(0)?).or_insert(0) += row.get::<_, i64>(1)?;
+            }
+            Ok(())
+        };
+        match register {
+            Some(r) => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT gram, count FROM ngrams WHERE n = ?1 AND register = ?2")?;
+                collect(stmt.query(params![n as i64, r.as_str()])?)?;
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT gram, SUM(count) FROM ngrams WHERE n = ?1 GROUP BY gram")?;
+                collect(stmt.query(params![n as i64])?)?;
+            }
+        }
+        Ok(out.into_iter().collect())
     }
 
     /// Word → occurrence count, optionally scoped to one register.

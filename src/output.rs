@@ -293,6 +293,11 @@ pub fn render_analysis(
                     writeln!(
                         out,
                         "  {:<22} {:>10.2}",
+                        "sentence length sd", r.sentence_length_stddev
+                    )?;
+                    writeln!(
+                        out,
+                        "  {:<22} {:>10.2}",
                         "syllables per word", r.mean_syllables_per_word
                     )?;
                     writeln!(
@@ -310,6 +315,35 @@ pub fn render_analysis(
         }
         Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(report).unwrap()),
         Format::Ndjson => writeln!(out, "{}", serde_json::to_string(report).unwrap()),
+    }
+}
+
+pub fn render_phrases(
+    out: &mut impl Write,
+    phrases: &[crate::ngram::Collocation],
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            if phrases.is_empty() {
+                return writeln!(out, "No phrases yet — capture and process some text first.");
+            }
+            for p in phrases {
+                writeln!(
+                    out,
+                    "{:<34} {:>6} {:>9.1}",
+                    p.gram, p.count, p.log_likelihood
+                )?;
+            }
+            Ok(())
+        }
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(phrases).unwrap()),
+        Format::Ndjson => {
+            for p in phrases {
+                writeln!(out, "{}", serde_json::to_string(p).unwrap())?;
+            }
+            Ok(())
+        }
     }
 }
 

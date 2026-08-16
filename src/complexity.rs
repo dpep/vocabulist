@@ -41,6 +41,10 @@ pub struct Vocabulary {
 pub struct Readability {
     pub sentences: u64,
     pub mean_sentence_length: f64,
+    /// Spread of sentence length. Two writers can share a mean and read
+    /// nothing alike — this is the half that tells them apart.
+    #[serde(default)]
+    pub sentence_length_stddev: f64,
     pub mean_syllables_per_word: f64,
     /// Flesch Reading Ease. Roughly: 90+ very easy, 60-70 plain English,
     /// 30 and below heavy going. Approximate — the syllable count is a
@@ -108,18 +112,83 @@ pub fn from_text(scope: &str, text: &str) -> Report {
     }
 
     let mut report = from_counts(scope, &counts);
-    let sentences = count_sentences(text);
-    let tokens = report.vocabulary.tokens;
 
-    let words_per_sentence = ratio(tokens, sentences);
-    let syllables_per_word = ratio(syllables, tokens);
-    report.readability = Some(Readability {
+    // Per-sentence lengths, so the text path reports the same spread the
+    // corpus path does.
+    let mut histogram: HashMap<i64, i64> = HashMap::new();
+    for sentence in split_sentences(text) {
+        let words = crate::text::tokenize(&crate::text::normalize_typography(&sentence))
+            .iter()
+            .filter(|t| t.text.chars().any(char::is_alphabetic))
+            .count() as i64;
+        if words > 0 {
+            *histogram.entry(words).or_insert(0) += 1;
+        }
+    }
+    let histogram: Vec<(i64, i64)> = histogram.into_iter().collect();
+    let sentences: u64 = histogram.iter().map(|(_, c)| *c as u64).sum();
+
+    let mut readability = readability_from_totals(sentences, report.vocabulary.tokens, syllables);
+    readability.sentence_length_stddev = sentence_length_stddev(&histogram);
+    report.readability = Some(readability);
+    report
+}
+
+/// Split prose into sentences on terminal punctuation. Used by `process` to
+/// record sentence shape before the text is dropped.
+pub fn split_sentences(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?') && current.chars().any(char::is_alphanumeric) {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if current.chars().any(char::is_alphanumeric) {
+        out.push(current);
+    }
+    out
+}
+
+/// Readability from running totals rather than from text — the corpus path,
+/// where the prose is long gone and only these sums remain.
+pub fn readability_from_totals(sentences: u64, words: u64, syllables: u64) -> Readability {
+    let words_per_sentence = ratio(words, sentences);
+    let syllables_per_word = ratio(syllables, words);
+    Readability {
         sentences,
         mean_sentence_length: words_per_sentence,
+        sentence_length_stddev: 0.0,
         mean_syllables_per_word: syllables_per_word,
         flesch_reading_ease: 206.835 - 1.015 * words_per_sentence - 84.6 * syllables_per_word,
-    });
-    report
+    }
+}
+
+/// Standard deviation of sentence length from a `(length, count)` histogram.
+///
+/// The distribution is the point, not the mean: uniform sentence length reads
+/// as monotone, high variance as conversational. A running average would have
+/// discarded exactly the half that carries the style signal.
+pub fn sentence_length_stddev(histogram: &[(i64, i64)]) -> f64 {
+    let n: i64 = histogram.iter().map(|(_, c)| *c).sum();
+    if n < 2 {
+        return 0.0;
+    }
+    let mean = histogram
+        .iter()
+        .map(|(len, c)| (*len * *c) as f64)
+        .sum::<f64>()
+        / n as f64;
+    let variance = histogram
+        .iter()
+        .map(|(len, c)| {
+            let d = *len as f64 - mean;
+            d * d * *c as f64
+        })
+        .sum::<f64>()
+        / n as f64;
+    variance.sqrt()
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -130,27 +199,9 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
     }
 }
 
-/// Sentences, by terminal punctuation. A trailing fragment counts as one, so
-/// a single unpunctuated line isn't reported as zero sentences.
-fn count_sentences(text: &str) -> u64 {
-    let mut sentences = 0u64;
-    let mut pending = false;
-    for ch in text.chars() {
-        if matches!(ch, '.' | '!' | '?') {
-            if pending {
-                sentences += 1;
-                pending = false;
-            }
-        } else if ch.is_alphanumeric() {
-            pending = true;
-        }
-    }
-    sentences + u64::from(pending)
-}
-
 /// Vowel-group syllable count with a silent-`e` correction. A heuristic, and
 /// the weakest input to Flesch — good enough to trend, not to grade.
-fn count_syllables(word: &str) -> u64 {
+pub fn count_syllables(word: &str) -> u64 {
     let chars: Vec<char> = word.chars().collect();
     let is_vowel = |c: char| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
 
@@ -225,13 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn counts_a_trailing_fragment_as_a_sentence() {
-        assert_eq!(count_sentences("no terminal punctuation here"), 1);
-        assert_eq!(count_sentences("One. Two! Three?"), 3);
-        assert_eq!(count_sentences(""), 0);
-    }
-
-    #[test]
     fn syllable_heuristic_is_roughly_right() {
         assert_eq!(count_syllables("ship"), 1);
         assert_eq!(count_syllables("the"), 1);
@@ -241,6 +285,42 @@ mod tests {
         // Silent 'e' still drops where it genuinely is silent.
         assert_eq!(count_syllables("shape"), 1);
         assert_eq!(count_syllables("ship"), 1);
+    }
+
+    #[test]
+    fn stddev_separates_uniform_prose_from_varied_prose() {
+        let uniform = [(10, 4)];
+        let varied = [(2, 2), (10, 1), (24, 1)];
+        assert_eq!(sentence_length_stddev(&uniform), 0.0);
+        assert!(sentence_length_stddev(&varied) > 5.0);
+    }
+
+    #[test]
+    fn stddev_needs_more_than_one_sentence() {
+        assert_eq!(sentence_length_stddev(&[(12, 1)]), 0.0);
+        assert_eq!(sentence_length_stddev(&[]), 0.0);
+    }
+
+    #[test]
+    fn splits_prose_into_sentences() {
+        let parts = split_sentences("One thing. Then another! And a third?");
+        assert_eq!(parts.len(), 3);
+        // A trailing fragment still counts.
+        assert_eq!(split_sentences("no punctuation").len(), 1);
+        assert!(split_sentences("   ").is_empty());
+    }
+
+    #[test]
+    fn readability_from_totals_matches_the_text_path() {
+        let text = "We ship small changes. They are easier to review.";
+        let from_prose = from_text("t", text).readability.unwrap();
+        let from_sums = readability_from_totals(
+            from_prose.sentences,
+            from_text("t", text).vocabulary.tokens,
+            (from_prose.mean_syllables_per_word * from_text("t", text).vocabulary.tokens as f64)
+                .round() as u64,
+        );
+        assert!((from_prose.flesch_reading_ease - from_sums.flesch_reading_ease).abs() < 1.0);
     }
 
     #[test]

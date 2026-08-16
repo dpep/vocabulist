@@ -97,6 +97,71 @@ pub fn log_likelihood(k11: f64, k12: f64, k21: f64, k22: f64) -> f64 {
         + term(k22, row2 * col2 / n))
 }
 
+/// A collocation and how strongly its words attract each other.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+pub struct Collocation {
+    pub gram: String,
+    pub count: i64,
+    /// Dunning's G². Higher means the pairing is less explicable by how
+    /// common each word is on its own.
+    pub log_likelihood: f64,
+}
+
+/// Rank bigrams by association strength.
+///
+/// Raw frequency would just return "of the" and "in the" — pairs that are
+/// common because their words are common. G² asks a better question: given
+/// how often each word appears alone, is appearing *together* surprising?
+/// That's what separates a phrase you actually use from two ordinary words
+/// that happened to be adjacent.
+pub fn rank_collocations(bigrams: &[(String, i64)], min_count: i64) -> Vec<Collocation> {
+    use std::collections::HashMap;
+
+    let total: f64 = bigrams.iter().map(|(_, c)| *c as f64).sum();
+    if total == 0.0 {
+        return Vec::new();
+    }
+
+    // Marginals: how often each word leads, and how often each word follows.
+    let mut leads: HashMap<&str, f64> = HashMap::new();
+    let mut follows: HashMap<&str, f64> = HashMap::new();
+    for (gram, count) in bigrams {
+        let Some((first, second)) = gram.split_once(' ') else {
+            continue;
+        };
+        *leads.entry(first).or_insert(0.0) += *count as f64;
+        *follows.entry(second).or_insert(0.0) += *count as f64;
+    }
+
+    let mut out: Vec<Collocation> = bigrams
+        .iter()
+        .filter(|(_, count)| *count >= min_count)
+        .filter_map(|(gram, count)| {
+            let (first, second) = gram.split_once(' ')?;
+            let k11 = *count as f64;
+            // The 2x2 table: this pair, this word with any other, any other
+            // word with this one, and everything else.
+            let k12 = leads.get(first).copied().unwrap_or(0.0) - k11;
+            let k21 = follows.get(second).copied().unwrap_or(0.0) - k11;
+            let k22 = total - k11 - k12 - k21;
+            Some(Collocation {
+                gram: gram.clone(),
+                count: *count,
+                log_likelihood: log_likelihood(k11, k12, k21, k22),
+            })
+        })
+        .collect();
+
+    out.sort_by(|a, b| {
+        b.log_likelihood
+            .partial_cmp(&a.log_likelihood)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.count.cmp(&a.count))
+            .then(a.gram.cmp(&b.gram))
+    });
+    out
+}
+
 /// One candidate real-word correction, with the evidence behind it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RealWordHit {
@@ -221,6 +286,35 @@ mod tests {
             suggested_evidence: 10_000,
         };
         assert!(hit.confidence() <= 0.85);
+    }
+
+    #[test]
+    fn ranks_a_real_phrase_above_two_common_words() {
+        // "of the" is frequent but unremarkable — both words are everywhere.
+        // "high signal" is rarer yet nearly always co-occurs, which is what
+        // makes it a phrase rather than an accident.
+        let bigrams = vec![
+            ("of the".to_string(), 30),
+            ("of a".to_string(), 25),
+            ("in the".to_string(), 25),
+            ("on the".to_string(), 20),
+            ("high signal".to_string(), 8),
+        ];
+        let ranked = rank_collocations(&bigrams, 2);
+        assert_eq!(ranked[0].gram, "high signal");
+    }
+
+    #[test]
+    fn min_count_filters_one_off_pairings() {
+        let bigrams = vec![("seen once".to_string(), 1), ("seen often".to_string(), 9)];
+        let ranked = rank_collocations(&bigrams, 2);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].gram, "seen often");
+    }
+
+    #[test]
+    fn ranking_an_empty_corpus_yields_nothing() {
+        assert!(rank_collocations(&[], 1).is_empty());
     }
 
     #[test]
