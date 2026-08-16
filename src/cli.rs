@@ -185,6 +185,10 @@ pub enum Command {
         /// Seed, so a run is reproducible and two runs are comparable.
         #[arg(long, default_value_t = 1)]
         seed: u64,
+        /// Inject only this class of error. Unrestricted sampling barely
+        /// produces real-word errors, so measuring them needs targeting.
+        #[arg(long, value_name = "KIND")]
+        kind: Option<crate::eval::ErrorKind>,
     },
     /// Rank the phrases you actually use, by association strength rather than
     /// raw frequency.
@@ -536,7 +540,12 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
-        Some(Command::Eval { corpus, rate, seed }) => {
+        Some(Command::Eval {
+            corpus,
+            rate,
+            seed,
+            kind,
+        }) => {
             let text = match corpus {
                 Some(path) => std::fs::read_to_string(path)?,
                 None => read_stdin()?,
@@ -545,7 +554,7 @@ fn dispatch_inner(
                 return Err("nothing to evaluate (pass --corpus or pipe stdin)".into());
             }
 
-            let (mutated, injections) = crate::eval::inject(&text, *rate, *seed);
+            let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
             let lexicon: std::collections::HashSet<String> = store.words()?.into_iter().collect();
             let checker = Checker::with_profile(lexicon, Rc::clone(profile))
                 .with_frequency(store.frequencies()?);
@@ -557,7 +566,11 @@ fn dispatch_inner(
                 findings.extend(scanner.feed(line, &mut evidence));
             }
 
-            let report = crate::eval::score(&findings, &injections, mutated.lines().count());
+            let words = mutated
+                .lines()
+                .map(|l| crate::text::prose_words(l).len())
+                .sum();
+            let report = crate::eval::score(&findings, &injections, mutated.lines().count(), words);
             if !cli.quiet {
                 output::render_eval(&mut out, &report, format)?;
             }

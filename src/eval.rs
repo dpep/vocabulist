@@ -54,8 +54,9 @@ const NEIGHBORS: &[(char, &str)] = &[
 ];
 
 /// How a word was corrupted.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
 pub enum ErrorKind {
     Transposition,
     Deletion,
@@ -115,19 +116,38 @@ impl Rng {
 
 /// Corrupt one word, or return `None` if it's too short to corrupt sensibly.
 pub fn corrupt(word: &str, rng: &mut Rng) -> Option<(String, ErrorKind)> {
+    corrupt_kind(word, rng, None)
+}
+
+/// Corrupt a word, optionally forcing one class of damage.
+pub fn corrupt_kind(
+    word: &str,
+    rng: &mut Rng,
+    only: Option<ErrorKind>,
+) -> Option<(String, ErrorKind)> {
     // A real-word swap when the word has a confusable — the case no
     // dictionary can catch, so it's worth over-sampling relative to chance.
     let confusables = crate::ngram::confusables(word);
-    if !confusables.is_empty() && rng.below(2) == 0 {
+    if !confusables.is_empty() && (only == Some(ErrorKind::RealWord) || rng.below(2) == 0) {
         let pick = confusables[rng.below(confusables.len())];
         return Some((pick.to_string(), ErrorKind::RealWord));
+    }
+    if only == Some(ErrorKind::RealWord) {
+        return None;
     }
 
     let chars: Vec<char> = word.chars().collect();
     if chars.len() < 4 {
         return None;
     }
-    match rng.below(4) {
+    let roll = match only {
+        Some(ErrorKind::Transposition) => 0,
+        Some(ErrorKind::Deletion) => 1,
+        Some(ErrorKind::Insertion) => 2,
+        Some(ErrorKind::Substitution) => 3,
+        _ => rng.below(4),
+    };
+    match roll {
         0 => {
             // Transposition: swap an adjacent pair.
             let i = rng.below(chars.len() - 1);
@@ -169,6 +189,24 @@ pub fn corrupt(word: &str, rng: &mut Rng) -> Option<(String, ErrorKind)> {
 /// At most one corruption per line, which keeps every other token on that
 /// line a known-clean control and avoids two injections interacting.
 pub fn inject(text: &str, rate: usize, seed: u64) -> (String, Vec<Injection>) {
+    inject_kind(text, rate, seed, None)
+}
+
+/// Inject, optionally restricted to one class of error.
+///
+/// Restriction exists because unrestricted sampling cannot measure real-word
+/// errors at all. A line is picked, then a word within it, and only then is a
+/// confusable looked for — so with ordinary prose the harness produced *one*
+/// real-word injection in a 1,658-line corpus. One sample measures nothing.
+/// Targeting the class picks from the words that have a confusable, which is
+/// the only way to put a number on the capability the checker is least sure
+/// of.
+pub fn inject_kind(
+    text: &str,
+    rate: usize,
+    seed: u64,
+    only: Option<ErrorKind>,
+) -> (String, Vec<Injection>) {
     let mut rng = Rng::new(seed);
     let mut injections = Vec::new();
     let mut out_lines = Vec::new();
@@ -182,11 +220,19 @@ pub fn inject(text: &str, rate: usize, seed: u64) -> (String, Vec<Injection>) {
                 .into_iter()
                 .map(|t| t.text)
                 .filter(|t| crate::text::is_checkable(t))
+                .filter(|t| match only {
+                    // Only words that *can* be damaged this way are eligible,
+                    // or the run mostly produces nothing.
+                    Some(ErrorKind::RealWord) => {
+                        !crate::ngram::confusables(&t.to_lowercase()).is_empty()
+                    }
+                    _ => true,
+                })
                 .collect();
 
             if !candidates.is_empty() {
                 let word = &candidates[rng.below(candidates.len())];
-                if let Some((mutated, kind)) = corrupt(&word.to_lowercase(), &mut rng) {
+                if let Some((mutated, kind)) = corrupt_kind(&word.to_lowercase(), &mut rng, only) {
                     // Replace the first standalone occurrence only.
                     if let Some(replaced) = replace_word(&mutated_line, word, &mutated) {
                         mutated_line = replaced;
@@ -216,10 +262,25 @@ fn replace_word(line: &str, word: &str, replacement: &str) -> Option<String> {
     Some(format!("{}{replacement}{}", &line[..start], &line[end..]))
 }
 
+/// How one class of injected error fared.
+///
+/// A named struct rather than a tuple: this crosses the JSON boundary, and
+/// `["transposition", 44, 31]` makes a consumer count positions to read it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct KindScore {
+    pub kind: String,
+    pub injected: usize,
+    pub caught: usize,
+    /// caught / injected, for this class alone.
+    pub recall: f64,
+}
+
 /// Scores for one run.
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
 pub struct EvalReport {
     pub lines: usize,
+    /// Prose words the checker actually looked at.
+    pub words: usize,
     pub injected: usize,
     pub findings: usize,
     /// Injected errors the checker flagged.
@@ -228,14 +289,17 @@ pub struct EvalReport {
     pub corrected: usize,
     /// Findings on words nobody corrupted.
     pub false_positives: usize,
+    /// False positives per thousand words — comparable across corpora, which
+    /// precision is not.
+    pub false_positive_rate: f64,
     /// caught / injected.
     pub recall: f64,
     /// caught / findings.
     pub precision: f64,
     /// corrected / caught — a flag with the wrong fix is only half a catch.
     pub correction_rate: f64,
-    /// Per error kind: (kind, injected, caught).
-    pub by_kind: Vec<(String, usize, usize)>,
+    /// Per error kind — which classes of damage the checker actually sees.
+    pub by_kind: Vec<KindScore>,
     /// A sample of false positives, for reading rather than counting.
     pub false_positive_sample: Vec<String>,
 }
@@ -244,9 +308,15 @@ pub struct EvalReport {
 const FP_SAMPLE: usize = 15;
 
 /// Compare findings against the known injections.
-pub fn score(findings: &[Finding], injections: &[Injection], lines: usize) -> EvalReport {
+pub fn score(
+    findings: &[Finding],
+    injections: &[Injection],
+    lines: usize,
+    words: usize,
+) -> EvalReport {
     let mut report = EvalReport {
         lines,
+        words,
         injected: injections.len(),
         findings: findings.len(),
         ..Default::default()
@@ -305,11 +375,22 @@ pub fn score(findings: &[Finding], injections: &[Injection], lines: usize) -> Ev
                 })
             })
             .count();
-        report
-            .by_kind
-            .push((kind.as_str().to_string(), of_kind.len(), caught));
+        report.by_kind.push(KindScore {
+            kind: kind.as_str().to_string(),
+            injected: of_kind.len(),
+            caught,
+            recall: ratio(caught, of_kind.len()),
+        });
     }
 
+    // Per thousand words rather than per finding, because precision moves
+    // with the injection rate and this doesn't. It's also the quantity a user
+    // actually feels: interruptions per page of prose.
+    report.false_positive_rate = if words == 0 {
+        0.0
+    } else {
+        report.false_positives as f64 * 1000.0 / words as f64
+    };
     report.recall = ratio(report.caught, report.injected);
     report.precision = ratio(report.caught, report.findings);
     report.correction_rate = ratio(report.corrected, report.caught);
@@ -415,7 +496,7 @@ mod tests {
                 confidence: 0.35,
             },
         ];
-        let report = score(&findings, &injections, 2);
+        let report = score(&findings, &injections, 2, 20);
         assert_eq!(report.caught, 1);
         assert_eq!(report.corrected, 1);
         assert_eq!(report.false_positives, 1);
@@ -442,7 +523,7 @@ mod tests {
             }],
             confidence: 0.7,
         }];
-        let report = score(&findings, &injections, 1);
+        let report = score(&findings, &injections, 1, 10);
         assert_eq!(report.caught, 1);
         assert_eq!(report.corrected, 0);
         assert_eq!(report.correction_rate, 0.0);
@@ -450,7 +531,7 @@ mod tests {
 
     #[test]
     fn an_empty_run_does_not_divide_by_zero() {
-        let report = score(&[], &[], 0);
+        let report = score(&[], &[], 0, 0);
         assert_eq!(report.recall, 0.0);
         assert_eq!(report.precision, 0.0);
     }

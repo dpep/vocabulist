@@ -402,6 +402,7 @@ pub fn render_eval(
     match format {
         Format::Human => {
             writeln!(out, "  {:<22} {:>8}", "lines", report.lines)?;
+            writeln!(out, "  {:<22} {:>8}", "words checked", report.words)?;
             writeln!(out, "  {:<22} {:>8}", "injected errors", report.injected)?;
             writeln!(out, "  {:<22} {:>8}", "findings", report.findings)?;
             writeln!(out)?;
@@ -410,6 +411,11 @@ pub fn render_eval(
                 out,
                 "  {:<22} {:>8}",
                 "false positives", report.false_positives
+            )?;
+            writeln!(
+                out,
+                "  {:<22} {:>8.2}",
+                "  per 1k words", report.false_positive_rate
             )?;
             writeln!(out)?;
             writeln!(out, "  {:<22} {:>8.1}%", "recall", report.recall * 100.0)?;
@@ -428,8 +434,15 @@ pub fn render_eval(
 
             if !report.by_kind.is_empty() {
                 writeln!(out, "\n  by error kind (caught/injected):")?;
-                for (kind, injected, caught) in &report.by_kind {
-                    writeln!(out, "    {kind:<20} {caught:>4}/{injected:<4}")?;
+                for k in &report.by_kind {
+                    writeln!(
+                        out,
+                        "    {:<16} {:>4}/{:<4} {:>5.0}%",
+                        k.kind,
+                        k.caught,
+                        k.injected,
+                        k.recall * 100.0
+                    )?;
                 }
             }
             if !report.false_positive_sample.is_empty() {
