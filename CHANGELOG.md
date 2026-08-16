@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.0 — 2026-08-16
+
+### Added
+
+- `vocab eval` — measure the checker against a labeled corpus. Known-good
+  prose is corrupted in known places (Damerau's four single-character
+  operations plus real-word swaps, with QWERTY-adjacent substitutions),
+  seeded so runs are comparable. Reports recall, precision, correction rate,
+  and a false-positive sample.
+- `vocab phrases` — collocations ranked by Dunning's log-likelihood rather
+  than raw frequency, which is the difference between "of the" and the
+  phrases you actually use.
+- `vocab ingest` — bulk-load `{body, author?, register?, source?}` as NDJSON
+  or an array on stdin. Text attributed to someone else corroborates that a
+  word is real but never shapes your voice.
+- `vocab analyze` reports sentence metrics for the corpus, not just for a
+  text, because `process` now records sentence shape while the prose still
+  exists. Includes sentence-length spread, since two writers can share a mean
+  and read nothing alike.
+- General-English frequency, from a small embedded core plus counts mined
+  from local prose. Ranks suggestions, and doubles as a fast path — ordinary
+  text now resolves without reading the system dictionary at all.
+- `make link` installs a symlink at `~/.claude/bin/vocab` that tracks the
+  build, so a rebuild is immediately live.
+
+### Fixed
+
+- **Suggestions were often wrong.** Transpositions now cost one edit rather
+  than two (`aviod` → `avoid`, not `avid`), and frequency breaks the ties an
+  unweighted 236k-word list can't (`smal` → `small`, not `smalm`).
+- **Fenced code blocks were being checked.** Only the fence marker was
+  skipped, so a comment inside a block looked like prose. Front matter too.
+- Mid-sentence capitals are treated as proper nouns, and pluralized acronyms
+  (`URLs`, `PRs`) as acronyms.
+- Modern vocabulary is no longer flagged. The backstop is `web2` — Webster's
+  Second International, 1934 — with no `inline`, `download`, or `roadmap`, so
+  words seen repeatedly in local prose now count as real.
+- Word validity keys on how many distinct documents a word appeared in rather
+  than raw occurrences: a typo repeated in one message is one piece of
+  evidence, not three. The export gate uses the same test.
+
 ## 0.2.0 — 2026-08-15
 
 ### Added
