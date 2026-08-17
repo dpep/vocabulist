@@ -165,10 +165,21 @@ fetch() {
         }
         END { for (g in total) print g "\t" total[g] }
     ' "$WORK/words.txt" - >"$dest.tmp" || {
-        # A shard with no confusable at all would exit 1 from grep, but every
-        # prefix here holds one by construction, so this really is a failure.
+        # Keep the download. Decompression is minutes of local CPU and the
+        # transfer is an hour of network, so throwing the gz away because the
+        # cheap stage was interrupted is the wrong trade — and deleting it on
+        # every failure is exactly what a kill mid-decompress used to do.
+        #
+        # A complete file that still will not decompress is genuinely corrupt,
+        # and only then is re-fetching right.
         echo "  $prefix DECOMPRESS FAILED" >&2
-        rm -f "$dest.tmp" "$raw"
+        rm -f "$dest.tmp"
+        local now
+        now=$(wc -c <"$raw" 2>/dev/null | tr -d " ")
+        if [ -n "$want" ] && [ "$now" = "$want" ] && ! gzcat "$raw" >/dev/null 2>&1; then
+            echo "  $prefix is corrupt, discarding for re-fetch" >&2
+            rm -f "$raw"
+        fi
         return 1
     }
     rm -f "$raw"
