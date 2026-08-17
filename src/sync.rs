@@ -33,6 +33,9 @@ pub struct Target {
     /// True when the file is ours alone, so uninstall can just delete it.
     /// False when it's shared with the user's own additions.
     pub owned: bool,
+    /// Most words the destination will accept, if it says so. `None` for the
+    /// files we simply write.
+    pub limit: Option<usize>,
     pub note: &'static str,
 }
 
@@ -60,7 +63,30 @@ pub fn targets() -> Vec<Target> {
         path: data_dir().join("vocabulist.txt"),
         manifest: manifest_path("vscode"),
         owned: true,
+        limit: None,
         note: "add to settings.json under cSpell.customDictionaries",
+    });
+
+    // A single column of ordinary words is already valid CSV — ours contain no
+    // commas or quotes — so this needs no separate writer, only the extension
+    // Flow's importer expects.
+    //
+    // Wispr Flow keeps its dictionary in the cloud and imports from a CSV, so
+    // this writes a file for you to hand it rather than one it reads. That
+    // makes it the one target `unsync` cannot undo — deleting our CSV does
+    // nothing to what Flow already learned.
+    //
+    // Dictation has more to gain from this than a spell checker does: a
+    // checker only has to recognize a word you typed, while dictation has to
+    // *choose* it from audio, and a name it has never heard is unrecoverable
+    // rather than merely underlined.
+    out.push(Target {
+        name: "wisprflow",
+        path: data_dir().join("wisprflow.csv"),
+        manifest: manifest_path("wisprflow"),
+        owned: true,
+        limit: Some(1000),
+        note: "import from Flow's Dictionary tab; deleting this file won't un-teach it",
     });
 
     if let Some(home) = &home {
@@ -74,6 +100,7 @@ pub fn targets() -> Vec<Target> {
                 .join("LocalDictionary"),
             manifest: manifest_path("macos"),
             owned: false,
+            limit: None,
             note: "restart an app to pick up changes",
         });
     }
@@ -161,12 +188,38 @@ pub fn exportable(store: &Store) -> rusqlite::Result<Vec<String>> {
 }
 
 /// Write the lexicon into one target, recording what we wrote.
+/// The `limit` most-established exportable words, strongest first.
+fn strongest(store: &Store, limit: usize) -> rusqlite::Result<Vec<String>> {
+    let keep: std::collections::HashSet<String> = exportable(store)?.into_iter().collect();
+    let mut ranked: Vec<_> = store
+        .list(None, usize::MAX)?
+        .into_iter()
+        .filter(|e| keep.contains(&e.word))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.validity
+            .partial_cmp(&a.validity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.sources.cmp(&a.sources))
+            .then(a.word.cmp(&b.word))
+    });
+    ranked.truncate(limit);
+    Ok(ranked.into_iter().map(|e| e.word).collect())
+}
+
 pub fn install(
     store: &Store,
     target: &Target,
     dry_run: bool,
 ) -> Result<SyncReport, Box<dyn std::error::Error>> {
-    let words = exportable(store)?;
+    let mut words = exportable(store)?;
+    if let Some(limit) = target.limit
+        && words.len() > limit
+    {
+        // Strongest first, so a cap keeps the words most worth teaching
+        // rather than the alphabetically luckiest.
+        words = strongest(store, limit)?;
+    }
     let mut report = SyncReport {
         target: target.name.to_string(),
         path: target.path.display().to_string(),
@@ -279,6 +332,7 @@ mod tests {
             path: dir.join("LocalDictionary"),
             manifest: dir.join("manifest.txt"),
             owned: false,
+            limit: None,
             note: "",
         }
     }
@@ -326,10 +380,41 @@ mod tests {
             path: dir.join("nope"),
             manifest: dir.join("manifest.txt"),
             owned: false,
+            limit: None,
             note: "",
         };
         let report = uninstall(&target, false).unwrap();
         assert!(report.skipped.is_some());
+    }
+
+    #[test]
+    fn a_capped_target_keeps_the_strongest_words() {
+        let store = Store::open(":memory:").unwrap();
+        // Deliberate provenance outranks merely-observed corroboration.
+        store
+            .upsert_word("polyid", "polyid", Provenance::Owned, 1)
+            .unwrap();
+        for doc in ["a", "b"] {
+            store
+                .upsert_word("zblorg", "zblorg", Provenance::Observed, 1)
+                .unwrap();
+            store.record_word_source("zblorg", doc).unwrap();
+        }
+
+        let dir = scratch("capped");
+        let target = Target {
+            name: "capped",
+            path: dir.join("out.csv"),
+            manifest: dir.join("manifest.txt"),
+            owned: true,
+            limit: Some(1),
+            note: "",
+        };
+        let report = install(&store, &target, false).unwrap();
+        assert_eq!(report.total, 1);
+
+        let written = std::fs::read_to_string(&target.path).unwrap();
+        assert_eq!(written.trim(), "polyid", "the cap must keep the strongest");
     }
 
     #[test]

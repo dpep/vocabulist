@@ -11,6 +11,15 @@
 - `vocab rm --phrase "..."` removes a phrase. Phrases had no removal path at
   all: they are derived counts and the prose is gone, so anything a rule
   cannot recognize was permanent.
+- **A Wispr Flow target for `vocab sync`.** Dictation has more to gain from a
+  personal lexicon than a spell checker does: a checker only has to recognize
+  a word you typed, while dictation has to *choose* it from audio, so a name
+  it has never heard is unrecoverable rather than merely underlined.
+
+  Flow keeps its dictionary in the cloud and imports from CSV, so this writes
+  a file for you to hand it rather than one it reads — which makes it the one
+  target `unsync` cannot undo. It caps at Flow's 1,000-item import limit,
+  strongest words first.
 - `vocab prune` removes what today's capture rules would reject but an older
   version already learned — session ids, tool-call ids, path fragments. The
   default judges shape alone, which cannot take anything that was ever a word.

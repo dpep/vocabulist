@@ -57,6 +57,39 @@ EXTRA_PREFIXES="${EXTRA_PREFIXES:-ap ra ev aw fa mo le be ot gr}"
 
 mkdir -p "$WORK" "$ROOT/data"
 
+# Kill our own children on the way out, and refuse to run twice over one work
+# directory.
+#
+# Both learned the hard way: killing this script left its xargs workers running,
+# so a restart put two runs on the same shards and the same disk — load 19 on
+# eight cores with every process at 0% CPU, thrashing rather than working.
+# Walk the child tree rather than signalling a process group: run from a
+# harness this script is not its own group leader, so `kill -- -$$` would
+# either miss the workers or reach something that isn't ours.
+kill_tree() {
+    local pid=$1 child
+    for child in $(pgrep -P "$pid" 2>/dev/null); do
+        kill_tree "$child"
+    done
+    kill -9 "$pid" 2>/dev/null
+}
+
+cleanup() {
+    trap - EXIT INT TERM
+    local child
+    for child in $(pgrep -P $$ 2>/dev/null); do
+        kill_tree "$child"
+    done
+}
+trap cleanup EXIT INT TERM
+
+LOCK="$WORK/.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "another build is using $WORK (remove $LOCK if it is stale)" >&2
+    exit 1
+fi
+trap 'rm -rf "$LOCK"; cleanup' EXIT INT TERM
+
 # The confusion sets come from the source, not a copy. A cue for a word that is
 # no longer confusable is dead weight, and cue.rs asserts against exactly that.
 python3 - "$ROOT/src/ngram.rs" >"$WORK/sets.txt" <<'PY'
