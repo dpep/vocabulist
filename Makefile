@@ -40,7 +40,7 @@ BIN   := vocab
 CLAUDE_BIN_DIR ?= $(HOME)/.claude/bin
 
 .DEFAULT_GOAL := help
-.PHONY: help build release link unlink install uninstall test lint fmt clean data data-words data-cues
+.PHONY: help build release link unlink install uninstall test lint fmt clean data data-words data-cues data-cue-counts
 
 help:
 	@echo "vocabulist targets:"
@@ -58,7 +58,8 @@ help:
 	@echo "maintainer only (network, slow, output is committed):"
 	@echo "  make data       regenerate data/wordlist.txt and data/cues.txt"
 	@echo "  make data-words SCOWL word list only"
-	@echo "  make data-cues  Google Books cue table only (~20 min, ~39 GB)"
+	@echo "  make data-cues  re-derive cues from committed counts (seconds)"
+	@echo "  make data-cue-counts  refetch counts from Google Books (~39 GB)"
 
 build:
 	$(CARGO) build
@@ -109,5 +110,12 @@ data: data-words data-cues
 data-words:
 	./script/build-wordlist.sh
 
+# Re-derive cues from the committed counts. Seconds, no network.
 data-cues:
+	python3 script/derive-cues.py data/cue-counts.tsv data/cue-sets.txt \
+	    data/wordlist.txt data/cues.txt 2000 150 24
+
+# Rebuild the counts themselves from Google Books. ~39 GB, and only needed
+# when the confusion sets change.
+data-cue-counts:
 	./script/build-cues.sh

@@ -53,35 +53,60 @@ pub enum Position {
 /// Built by `script/build-cues.sh`; see it for provenance and thresholds.
 const CUE_DATA: &str = include_str!("../data/cues.txt");
 
-type Table = std::collections::HashMap<(&'static str, Position), &'static str>;
+/// A cue can decide more than one confusion set — `can` selects `field` for
+/// {filed, field}, `manager` for {manger, manager}, and `there` for {their,
+/// there}, all in the same position. Keying to a single word silently kept
+/// whichever happened to land first and dropped the rest.
+type ByCue = std::collections::HashMap<&'static str, Vec<&'static str>>;
+
+/// Keyed by position, then by cue — rather than by a `(cue, position)` tuple,
+/// so a lookup can borrow the token being checked instead of owning it.
+type Table = std::collections::HashMap<Position, ByCue>;
 
 fn table() -> &'static Table {
     static TABLE: std::sync::OnceLock<Table> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
-        CUE_DATA
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| {
-                let mut field = line.split('\t');
-                let position = match field.next()? {
-                    "before" => Position::Before,
-                    "after" => Position::After,
-                    _ => return None,
-                };
-                Some(((field.next()?, position), field.next()?))
-            })
-            .collect()
+        let mut out = Table::new();
+        for line in CUE_DATA.lines().filter(|l| !l.starts_with('#')) {
+            let mut field = line.split('\t');
+            let Some(position) = field.next().and_then(|p| match p {
+                "before" => Some(Position::Before),
+                "after" => Some(Position::After),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let (Some(cue), Some(word)) = (field.next(), field.next()) else {
+                continue;
+            };
+            out.entry(position)
+                .or_default()
+                .entry(cue)
+                .or_default()
+                .push(word);
+        }
+        out
     })
 }
 
 /// Every cue in the table, as `(cue, position, selected word)`.
 pub fn all() -> impl Iterator<Item = (&'static str, Position, &'static str)> {
-    table().iter().map(|((cue, p), word)| (*cue, *p, *word))
+    table().iter().flat_map(|(position, by_cue)| {
+        by_cue
+            .iter()
+            .flat_map(move |(cue, words)| words.iter().map(move |w| (*cue, *position, *w)))
+    })
 }
 
 /// The word a cue selects, if this token is a cue in this position.
-fn selects(token: &str, position: Position) -> Option<&'static str> {
-    table().get(&(token, position)).copied()
+/// The words this token decides for, in this position — one per confusion set
+/// it happens to discriminate.
+fn selects(token: &str, position: Position) -> &'static [&'static str] {
+    table()
+        .get(&position)
+        .and_then(|by_cue| by_cue.get(token))
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 /// Judge `word` against its confusables using a bundled discriminating
@@ -107,16 +132,18 @@ pub fn check(
 
     for (neighbor, position) in [(prev, Before), (next, After)] {
         let Some(neighbor) = neighbor else { continue };
-        let Some(selected) = selects(neighbor, position) else {
-            continue;
-        };
+        let candidates = selects(neighbor, position);
         // The cue picks the word that was written: this is right, not wrong.
-        if selected == word {
+        if candidates.contains(&word) {
             return None;
         }
-        if !alternatives.contains(&selected) {
+        let Some(selected) = candidates
+            .iter()
+            .copied()
+            .find(|c| alternatives.contains(c))
+        else {
             continue;
-        }
+        };
         // The user writes it this way. Their corpus outranks the table.
         let written = match position {
             Before => format!("{neighbor} {word}"),
@@ -161,9 +188,11 @@ mod tests {
 
     #[test]
     fn a_cue_after_the_word_decides_it() {
+        // `affect adults` — the cue follows the word it decides. Things get
+        // affected; nothing "effects adults".
         assert_eq!(
-            check(None, "weather", Some("or"), &mut no_evidence),
-            Some("whether".to_string())
+            check(None, "effect", Some("adults"), &mut no_evidence),
+            Some("affect".to_string())
         );
     }
 
@@ -204,17 +233,31 @@ mod tests {
     }
 
     #[test]
+    fn one_cue_can_decide_several_confusion_sets() {
+        // `can` selects `field`, `manager`, and `there` — one per set. Keying
+        // the table to a single word per (cue, position) silently kept
+        // whichever landed first and dropped 71 of 891 cues.
+        let decided = selects("can", After);
+        assert!(decided.len() > 1, "{decided:?}");
+    }
+
+    #[test]
     fn no_cue_selects_two_members_of_one_set_in_the_same_position() {
-        // The exclusivity the table's whole safety rests on. The derivation
-        // enforces it by construction — a context word is only emitted when
-        // one member takes it overwhelmingly — so this guards the *format*
-        // and the parse as much as the data.
-        let mut seen: std::collections::HashMap<(&str, Position), &str> =
+        // The exclusivity the table's whole safety rests on. One cue may
+        // decide several *different* sets — `can` picks `field`, `manager`,
+        // and `there` — but never two members of one set, which would make
+        // the correction a coin flip.
+        let mut seen: std::collections::HashMap<(&str, Position), Vec<&str>> =
             std::collections::HashMap::new();
         for (cue, position, word) in all() {
-            if let Some(previous) = seen.insert((cue, position), word) {
-                assert_eq!(previous, word, "{cue:?} selects two words");
+            let decided = seen.entry((cue, position)).or_default();
+            for other in decided.iter() {
+                assert!(
+                    !ngram::confusables(word).contains(other),
+                    "{cue:?} selects both {word:?} and {other:?}"
+                );
             }
+            decided.push(word);
         }
     }
 
@@ -235,9 +278,23 @@ mod tests {
         // If the corpus cannot find `apart from` and `rather than`, the
         // thresholds in the build script are wrong and everything else the
         // table says is suspect.
-        assert_eq!(selects("apart", Before), Some("from"));
-        assert_eq!(selects("rather", Before), Some("than"));
-        assert_eq!(selects("or", After), Some("whether"));
+        assert!(selects("apart", Before).contains(&"from"));
+        assert!(selects("rather", Before).contains(&"than"));
+    }
+
+    #[test]
+    fn a_cue_whose_runner_up_is_real_english_is_left_out() {
+        // These were both in the hand-written table and both were mistakes.
+        // `even though` outnumbers `even through` 90 to 1, which sounds
+        // decisive until you notice that `even through the night` is ordinary
+        // English — so the cue would fire on correct text. Same for `weather
+        // or the traffic` against `whether or not`.
+        //
+        // A ratio high enough to exclude them is the difference between "the
+        // runner-up is noise" and "the runner-up is rarer but real", which is
+        // the whole judgement this table exists to encode.
+        assert!(!selects("even", Before).contains(&"though"));
+        assert!(!selects("or", After).contains(&"whether"));
     }
 
     #[test]

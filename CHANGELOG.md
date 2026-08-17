@@ -76,6 +76,16 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **The cue table is derived from a corpus rather than written by hand.**
+  891 cues from Google Books Ngrams, and real-word recall goes from 26.3% to
+  **68.4%** with precision and false positives unchanged.
+
+  The corpus overruled three of the hand-written cues. `relationship` was
+  listed as selecting `causal`, where `casual relationship` in fact outnumbers
+  it three to one; `even`→`though` and `or`→`whether` both looked decisive at
+  90:1 and 65:1 but would fire on `even through the night` and `the weather or
+  the traffic`. Judging that is not something a person holds steady across
+  fifty pairs.
 - **Real-word errors are caught without a corpus.** The mechanism needed
   collocation evidence, and a new lexicon has none, so it caught nothing for
   weeks — measured, 0 of 19. A bundled table of discriminating collocates

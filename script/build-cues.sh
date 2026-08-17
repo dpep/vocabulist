@@ -38,7 +38,7 @@ set -euo pipefail
 
 YEAR_MIN="${YEAR_MIN:-1960}"     # Books skews old; modern usage is the target.
 MIN_COUNT="${MIN_COUNT:-2000}"   # Below this the corpus isn't really speaking.
-RATIO="${RATIO:-40}"             # How much the winner must beat the runner-up.
+RATIO="${RATIO:-150}"             # How much the winner must beat the runner-up.
 MAX_PER_WORD="${MAX_PER_WORD:-24}"
 # Low on purpose. Six parallel multi-gigabyte streams got connection resets
 # from the CDN, and a reset mid-stream is the dangerous failure here, not the
@@ -229,6 +229,46 @@ fi
 cat "$WORK"/counts-*.tsv >"$WORK/all.tsv"
 echo "merged $(wc -l <"$WORK/all.tsv" | tr -d ' ') bigrams"
 
+# Keep the counts that can still affect the outcome, and commit those.
+#
+# A group — one context word against one confusion set — can only produce a
+# cue if some member of it clears MIN_COUNT. Keeping every row of such a group
+# preserves the ratios exactly while dropping the 85% that never mattered:
+# 19 MB becomes 2.8 MB, and the result is byte-identical.
+#
+# That is what makes this affordable to commit, and committing it is the
+# point: re-tuning RATIO then costs seconds and no network, instead of the
+# 38.6 GB that produced it.
+python3 - "$WORK/all.tsv" "$WORK/sets.txt" "$ROOT/data/cue-counts.tsv" "$MIN_COUNT" <<'FILTER'
+import sys
+from collections import defaultdict
+
+counts_path, sets_path, out_path, min_count = sys.argv[1:5]
+min_count = int(min_count)
+sets = [line.split() for line in open(sets_path) if line.split()]
+member_of = {w: i for i, s in enumerate(sets) for w in s}
+
+rows, best = [], defaultdict(int)
+for line in open(counts_path):
+    gram, _, n = line.rstrip("\n").rpartition("\t")
+    if not n.isdigit():
+        continue
+    a, _, b = gram.partition(" ")
+    for key in (
+        ("after", member_of[a], b) if a in member_of else None,
+        ("before", member_of[b], a) if b in member_of else None,
+    ):
+        if key is None:
+            continue
+        rows.append((key, line))
+        best[key] = max(best[key], int(n))
+
+keep = {k for k, v in best.items() if v >= min_count}
+with open(out_path, "w") as fh:
+    fh.writelines(sorted({line for key, line in rows if key in keep}))
+FILTER
+cp "$WORK/sets.txt" "$ROOT/data/cue-sets.txt"
+
 # Turn counts into cues.
-python3 "$ROOT/script/derive-cues.py" "$WORK/all.tsv" "$WORK/sets.txt" \
+python3 "$ROOT/script/derive-cues.py" "$ROOT/data/cue-counts.tsv" "$ROOT/data/cue-sets.txt" \
     "$ROOT/data/wordlist.txt" "$OUT" "$MIN_COUNT" "$RATIO" "$MAX_PER_WORD"

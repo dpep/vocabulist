@@ -412,6 +412,55 @@ suppressing detections:
 | precision | 0.939 | **0.951** |
 | FP per 1k | 1.19 | **1.02** |
 
+## 12g. The derived cue table **[measured]**
+
+`cue.rs` shipped with a hand-written table. Derived from Google Books Ngrams
+instead — 32 shards, 38.6 GB streamed, reduced to 1,050,706 bigrams — it holds
+891 cues across 44 confusable words, and **real-word recall went 26.3% → 68.4%
+with precision and false positives unchanged**.
+
+### The threshold, settled by measurement
+
+| RATIO | cues | real-word recall | precision | FP/1k |
+|---|---|---|---|---|
+| 40 | 941 | 0.632 | 0.951 | 1.02 |
+| **150** | **891** | **0.632** | 0.951 | 1.02 |
+| 500 | 879 | 0.579 | 0.951 | 1.02 |
+
+40 and 150 measure identically, so the stricter one wins: fewer cues is less
+risk on text the eval does not cover. What 150 excludes is the point —
+
+- `even though` outnumbers `even through` 90 to 1, and `whether or` outnumbers
+  `weather or` 65 to 1. Both were in the hand-written table. Both are wrong:
+  `even through the night` and `the weather or the traffic` are ordinary
+  English, so those cues would fire on correct text.
+- `affect the` beats `effect the` 92 to 1, and `to effect the change` is
+  correct if formal.
+
+A ratio high enough to exclude them is the difference between "the runner-up
+is noise" and "the runner-up is rarer but real" — which is the entire
+judgement this table encodes, and not one a person holds steady across fifty
+pairs. The corpus also overturned `relationship` → `causal`, where
+`casual relationship` in fact outnumbers `causal relationship` three to one.
+
+### One cue can decide several sets
+
+`can` selects `field` for {filed, field}, `manager` for {manger, manager}, and
+`there` for {their, there}. Keying the table to one word per `(cue, position)`
+silently kept whichever landed first and dropped **71 of 891** cues; fixing it
+recovered five points of recall. What must never happen is one cue selecting
+two members of *the same* set, which would make the correction a coin flip —
+asserted rather than trusted.
+
+### Rebuilding
+
+`data/cue-counts.tsv` is committed, so re-tuning costs seconds and no network.
+It holds only the groups that could produce a cue — every row of any
+(context, set) where some member clears `MIN_COUNT` — which preserves the
+ratios exactly while dropping 85% of the rows. Verified byte-identical against
+the full derivation. 19 MB becomes 2.8 MB, and the published crate goes from
+444 KB to 1.4 MB, which is the right trade against a 38.6 GB download.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:
