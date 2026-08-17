@@ -94,12 +94,23 @@ fetch() {
     # the failures that actually happen over tens of gigabytes are DNS
     # resolution and connection resets.
     local raw="$WORK/$prefix.gz"
-    curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
-        -C - -o "$raw" "$BASE-$prefix.gz" || {
-        echo "  $prefix DOWNLOAD FAILED" >&2
-        rm -f "$raw"
-        return 1
-    }
+    # Ask how big it should be first. `-C -` on an already-complete file asks
+    # the server to resume from EOF, which answers 416 and fails the run — so
+    # an interrupted job that had finished a download could never get past it.
+    local want
+    want=$(curl -fsSLI --retry 3 --retry-all-errors "$BASE-$prefix.gz" |
+        tr -d '\r' | awk 'tolower($1) == "content-length:" {n = $2} END {print n}')
+    local have=0
+    [ -f "$raw" ] && have=$(wc -c <"$raw" | tr -d ' ')
+
+    if [ -z "$want" ] || [ "$have" != "$want" ]; then
+        curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
+            -C - -o "$raw" "$BASE-$prefix.gz" || {
+            echo "  $prefix DOWNLOAD FAILED" >&2
+            rm -f "$raw"
+            return 1
+        }
+    fi
 
     set -o pipefail
     # grep before awk. Only about one line in 300 mentions a confusable, and
