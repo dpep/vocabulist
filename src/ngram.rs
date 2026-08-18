@@ -185,7 +185,7 @@ impl RealWordHit {
     pub fn confidence(&self) -> f32 {
         let ratio = self.suggested_evidence as f64 / (self.written_evidence as f64 + 1.0);
         let scaled = (ratio / (ratio + 8.0)) as f32;
-        (0.35 + scaled).min(0.85)
+        crate::types::round((0.35 + scaled).min(0.85) as f64, 2) as f32
     }
 }
 

@@ -461,6 +461,42 @@ ratios exactly while dropping 85% of the rows. Verified byte-identical against
 the full derivation. 19 MB becomes 2.8 MB, and the published crate goes from
 444 KB to 1.4 MB, which is the right trade against a 38.6 GB download.
 
+## 12h. Reaching across a filler — tried, rejected **[measured]**
+
+Bigrams encode adjacency and nothing else, so a cue can only ever speak about
+the word immediately beside the one it decides. That misses a real class:
+
+    will affect              cue fires
+    will greatly affect      cue is two away, silent
+
+The modal still selects a verb over a noun and the adverb does not touch that,
+so the linguistic signal survives the filler even though the lookup does not.
+Deriving true windowed statistics is priced out — the 3-gram shard for `th`
+alone is 79.9 GB — so the only cheap option was to apply the adjacency-derived
+table one step further and discount the confidence.
+
+Measured on held-out prose:
+
+| | real-word recall | precision | false positives |
+|---|---|---|---|
+| adjacent | 0.684 | 0.951 | 6 |
+| skip one word | 0.684 | 0.935 | **8** |
+
+**Zero extra catches, two new false positives.** Both were the word `from` in
+correct sentences — "the flag *from* above", "the package *from* the official
+sources" — and the mechanism is legible: `the` is a before-cue for `form` with
+a margin of 163, one of the weakest in the table. Beside the word it decides,
+`the form` is right. Two words out, `the` says nothing at all.
+
+That also disposes of the narrower variants without testing them. Restricting
+the skip — to `-ly` adverbs, or to high-margin cues only — fires on a *subset*
+of what the broad rule fired on, and the broad rule caught nothing extra. No
+subset can catch anything either.
+
+The general lesson is worth keeping: the weakest cues are function words, and
+function words carry their meaning only in adjacency. A rule that widens the
+window uniformly widens it most for the cues that can least afford it.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

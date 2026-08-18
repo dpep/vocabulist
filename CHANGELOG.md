@@ -76,6 +76,12 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **Real-word confidence reflects the evidence behind it.** Every cue used to
+  report a flat `0.6`, so `apart from` — which beats `apart form` by 1444 to 1
+  — was indistinguishable from a cue that scraped past the threshold. The
+  margin now sets the confidence, logarithmically, between 0.50 and 0.80. It
+  stays below what corroborated personal collocations earn, because a rule
+  about English is weaker evidence than a fact about you.
 - **The cue table is derived from a corpus rather than written by hand.**
   891 cues from Google Books Ngrams, and real-word recall goes from 26.3% to
   **68.4%** with precision and false positives unchanged.

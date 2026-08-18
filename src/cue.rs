@@ -57,11 +57,26 @@ const CUE_DATA: &str = include_str!("../data/cues.txt");
 /// {filed, field}, `manager` for {manger, manager}, and `there` for {their,
 /// there}, all in the same position. Keying to a single word silently kept
 /// whichever happened to land first and dropped the rest.
-type ByCue = std::collections::HashMap<&'static str, Vec<&'static str>>;
+/// One entry: the word this cue selects, and how far it beat the runner-up in
+/// the corpus. The margin is the only evidence we have about how sure to be.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Selection {
+    pub word: &'static str,
+    pub margin: f32,
+}
+
+type ByCue = std::collections::HashMap<&'static str, Vec<Selection>>;
 
 /// Keyed by position, then by cue — rather than by a `(cue, position)` tuple,
 /// so a lookup can borrow the token being checked instead of owning it.
 type Table = std::collections::HashMap<Position, ByCue>;
+
+/// What a cue concluded, and how sure it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cue {
+    pub word: String,
+    pub confidence: f32,
+}
 
 fn table() -> &'static Table {
     static TABLE: std::sync::OnceLock<Table> = std::sync::OnceLock::new();
@@ -79,11 +94,12 @@ fn table() -> &'static Table {
             let (Some(cue), Some(word)) = (field.next(), field.next()) else {
                 continue;
             };
+            let margin = field.next().and_then(|m| m.parse().ok()).unwrap_or(150.0);
             out.entry(position)
                 .or_default()
                 .entry(cue)
                 .or_default()
-                .push(word);
+                .push(Selection { word, margin });
         }
         out
     })
@@ -94,14 +110,14 @@ pub fn all() -> impl Iterator<Item = (&'static str, Position, &'static str)> {
     table().iter().flat_map(|(position, by_cue)| {
         by_cue
             .iter()
-            .flat_map(move |(cue, words)| words.iter().map(move |w| (*cue, *position, *w)))
+            .flat_map(move |(cue, words)| words.iter().map(move |s| (*cue, *position, s.word)))
     })
 }
 
 /// The word a cue selects, if this token is a cue in this position.
 /// The words this token decides for, in this position — one per confusion set
 /// it happens to discriminate.
-fn selects(token: &str, position: Position) -> &'static [&'static str] {
+fn selects(token: &str, position: Position) -> &'static [Selection] {
     table()
         .get(&position)
         .and_then(|by_cue| by_cue.get(token))
@@ -119,29 +135,39 @@ fn selects(token: &str, position: Position) -> &'static [&'static str] {
 /// written this pairing, they meant it, and a general rule doesn't get to
 /// overrule the person's own corpus. That inversion is the same one the whole
 /// tool rests on.
+/// Judge `word` against its confusables using a bundled discriminating
+/// collocate, for the corpus that hasn't learned any of its own yet.
+///
+/// Returns the word that should have been written and how sure that is, or
+/// nothing — which is the answer for everything the table doesn't cover.
+///
+/// `evidence` is consulted only to **stay quiet**: if the user has actually
+/// written this pairing, they meant it, and a general rule doesn't get to
+/// overrule the person's own corpus. That inversion is the same one the whole
+/// tool rests on.
 pub fn check(
     prev: Option<&str>,
     word: &str,
     next: Option<&str>,
     evidence: &mut impl FnMut(&str) -> i64,
-) -> Option<String> {
+) -> Option<Cue> {
     let alternatives = ngram::confusables(word);
     if alternatives.is_empty() {
         return None;
     }
 
+    // Adjacent only. Reaching across one intervening word was tried and
+    // measured — see `docs/PLAN.md` 12h — and it caught nothing extra while
+    // costing precision, because the weakest cues are function words that
+    // only mean anything immediately beside the word they decide.
     for (neighbor, position) in [(prev, Before), (next, After)] {
         let Some(neighbor) = neighbor else { continue };
         let candidates = selects(neighbor, position);
         // The cue picks the word that was written: this is right, not wrong.
-        if candidates.contains(&word) {
+        if candidates.iter().any(|s| s.word == word) {
             return None;
         }
-        let Some(selected) = candidates
-            .iter()
-            .copied()
-            .find(|c| alternatives.contains(c))
-        else {
+        let Some(selected) = candidates.iter().find(|s| alternatives.contains(&s.word)) else {
             continue;
         };
         // The user writes it this way. Their corpus outranks the table.
@@ -152,17 +178,38 @@ pub fn check(
         if evidence(&written) > 0 {
             return None;
         }
-        return Some(selected.to_string());
+        return Some(Cue {
+            word: selected.word.to_string(),
+            confidence: confidence(selected.margin),
+        });
     }
     None
 }
 
-/// Confidence in a cue-driven correction.
+/// How sure a cue is, from how far it beat the runner-up.
 ///
-/// Below what corroborated personal collocations earn, and well below
-/// certainty: the cue is a strong general rule, not evidence about this
-/// writer.
-pub const CONFIDENCE: f32 = 0.6;
+/// A flat constant was the first version and it was wrong in the way that
+/// matters most for a machine-readable result: `apart from` beats `apart form`
+/// by 1444 to 1 while the weakest cues here scrape past 150, and reporting
+/// both as the same number presents a guess as a fact.
+///
+/// Logarithmic, because the margins span three orders of magnitude and the
+/// difference between 150 and 300 means far more than between 60,000 and
+/// 100,000. The ceiling stays below what corroborated *personal* collocations
+/// earn: this is a rule about English, not evidence about this writer.
+fn confidence(margin: f32) -> f32 {
+    const FLOOR: f32 = 0.50;
+    const CEILING: f32 = 0.80;
+    const WEAKEST: f32 = 150.0;
+    const STRONGEST: f32 = 100_000.0;
+
+    let span = (STRONGEST / WEAKEST).log10();
+    let position = (margin.max(WEAKEST) / WEAKEST).log10() / span;
+    let raw = (FLOOR + (CEILING - FLOOR) * position.clamp(0.0, 1.0)).clamp(FLOOR, CEILING);
+    // Two decimals: this is a coarse judgement from a corpus margin, and
+    // `0.574501` would dress it up as a measurement.
+    crate::types::round(raw as f64, 2) as f32
+}
 
 #[cfg(test)]
 mod tests {
@@ -173,6 +220,11 @@ mod tests {
         0
     }
 
+    /// The words a cue decides, for assertions that only care about which.
+    fn decided(token: &str, position: Position) -> Vec<&'static str> {
+        selects(token, position).iter().map(|s| s.word).collect()
+    }
+
     fn evidence_from(pairs: &[(&str, i64)]) -> impl FnMut(&str) -> i64 + use<> {
         let map: HashMap<String, i64> = pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect();
         move |gram: &str| map.get(gram).copied().unwrap_or(0)
@@ -181,7 +233,7 @@ mod tests {
     #[test]
     fn a_cue_before_the_word_decides_it() {
         assert_eq!(
-            check(Some("apart"), "form", None, &mut no_evidence),
+            check(Some("apart"), "form", None, &mut no_evidence).map(|c| c.word),
             Some("from".to_string())
         );
     }
@@ -191,7 +243,7 @@ mod tests {
         // `affect adults` — the cue follows the word it decides. Things get
         // affected; nothing "effects adults".
         assert_eq!(
-            check(None, "effect", Some("adults"), &mut no_evidence),
+            check(None, "effect", Some("adults"), &mut no_evidence).map(|c| c.word),
             Some("affect".to_string())
         );
     }
@@ -199,7 +251,7 @@ mod tests {
     #[test]
     fn the_canonical_slip_is_caught() {
         assert_eq!(
-            check(Some("rather"), "then", None, &mut no_evidence),
+            check(Some("rather"), "then", None, &mut no_evidence).map(|c| c.word),
             Some("than".to_string())
         );
     }
@@ -233,11 +285,41 @@ mod tests {
     }
 
     #[test]
+    fn confidence_tracks_how_far_the_cue_beat_its_runner_up() {
+        // A flat constant was the first version, and it reported `apart from`
+        // — which wins by 1444 to 1 — identically to a cue that scraped past
+        // 150. Surfaced through --json, that presents a guess as a fact.
+        assert!(confidence(150.0) < confidence(1_000.0));
+        assert!(confidence(1_000.0) < confidence(50_000.0));
+
+        // Never certainty, and never above what corroborated personal
+        // collocations earn: this is a rule about English, not evidence about
+        // this writer.
+        assert!(confidence(f32::MAX) <= 0.80);
+        assert!(confidence(0.0) >= 0.50);
+    }
+
+    #[test]
+    fn a_strong_cue_reports_more_confidence_than_a_weak_one() {
+        // `apart` (1444) against `the` (163), both real entries.
+        let strong = check(Some("apart"), "form", None, &mut no_evidence).unwrap();
+        let weak = check(Some("the"), "from", None, &mut no_evidence).unwrap();
+        assert_eq!(strong.word, "from");
+        assert_eq!(weak.word, "form");
+        assert!(
+            strong.confidence > weak.confidence,
+            "{} vs {}",
+            strong.confidence,
+            weak.confidence
+        );
+    }
+
+    #[test]
     fn one_cue_can_decide_several_confusion_sets() {
         // `can` selects `field`, `manager`, and `there` — one per set. Keying
         // the table to a single word per (cue, position) silently kept
         // whichever landed first and dropped 71 of 891 cues.
-        let decided = selects("can", After);
+        let decided = decided("can", After);
         assert!(decided.len() > 1, "{decided:?}");
     }
 
@@ -278,8 +360,8 @@ mod tests {
         // If the corpus cannot find `apart from` and `rather than`, the
         // thresholds in the build script are wrong and everything else the
         // table says is suspect.
-        assert!(selects("apart", Before).contains(&"from"));
-        assert!(selects("rather", Before).contains(&"than"));
+        assert!(decided("apart", Before).contains(&"from"));
+        assert!(decided("rather", Before).contains(&"than"));
     }
 
     #[test]
@@ -293,8 +375,8 @@ mod tests {
         // A ratio high enough to exclude them is the difference between "the
         // runner-up is noise" and "the runner-up is rarer but real", which is
         // the whole judgement this table exists to encode.
-        assert!(!selects("even", Before).contains(&"though"));
-        assert!(!selects("or", After).contains(&"whether"));
+        assert!(!decided("even", Before).contains(&"though"));
+        assert!(!decided("or", After).contains(&"whether"));
     }
 
     #[test]
