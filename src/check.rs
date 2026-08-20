@@ -30,6 +30,11 @@ const MAX_SUGGESTIONS: usize = 3;
 /// Frequency credited to a lexicon word that no general source ranks.
 const LEXICON_FLOOR: i64 = 3;
 
+/// How much of the belief the single-word candidates keep when a clean split
+/// exists. Both halves being real words is far less likely by chance than one
+/// word sitting an edit away, but the alternatives are not worthless.
+const SPLIT_SHARE: f32 = 0.35;
+
 /// Shortest run worth judging as a name. Initials and two-letter tokens sit
 /// one edit from half the world.
 const MIN_NAME_LENGTH: usize = 4;
@@ -287,6 +292,52 @@ impl Checker {
             }
         }
         false
+    }
+
+    /// The two words this token would be if a space were restored.
+    ///
+    /// `alot` and `infact` are already caught — they are in no dictionary —
+    /// but the corrections offered were `lot` and `intact`, because a missing
+    /// space is not an edit this model has. It treats the token as a single
+    /// word and looks for another single word nearby, and no amount of that
+    /// reaches `a lot`.
+    ///
+    /// Only splits where **both** halves are known words count, which is
+    /// selective enough to be safe: `alot` yields `a lot` and nothing else,
+    /// since `al`, `ot`, `alo` and `t` are not words.
+    fn split_in_two(&self, word: &str) -> Option<String> {
+        let chars: Vec<char> = word.chars().collect();
+        if chars.len() < 3 {
+            return None;
+        }
+        let usable = |part: &str| {
+            // A one-letter half is only ever `a` or `I`. Allowing any single
+            // letter turns every unknown token into a split.
+            if part.chars().count() == 1 {
+                return matches!(part, "a" | "i");
+            }
+            // Common, not merely present. A word list deep enough to be
+            // useful contains `al`, `ot`, `ch`, and `inf`, and admitting
+            // those made `alot` ambiguous between `a lot` and `al ot` — so it
+            // offered neither — while `chail` became `ch ail`.
+            self.dictionary()
+                .and_then(|d| crate::dict::level(d, part))
+                .is_some_and(|level| level <= SHADOW_LEVEL)
+        };
+        let mut found = None;
+        for at in 1..chars.len() {
+            let head: String = chars[..at].iter().collect();
+            let tail: String = chars[at..].iter().collect();
+            if usable(&head) && usable(&tail) {
+                // More than one way to split it is not a correction, it is a
+                // coin flip.
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(format!("{head} {tail}"));
+            }
+        }
+        found
     }
 
     /// Is this a misspelling of someone we know?
@@ -705,6 +756,12 @@ impl Checker {
                 .then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
         });
 
+        // A restored space, offered ahead of the single-word candidates. It
+        // is a better explanation than any of them when it exists at all:
+        // both halves being real words is far less likely by chance than one
+        // word sitting one edit away.
+        let split = self.split_in_two(word);
+
         let total: f64 = weighted.iter().map(|(w, _, _)| w).sum();
         let mut out: Vec<Suggestion> = weighted
             .into_iter()
@@ -730,6 +787,25 @@ impl Checker {
             index += 1;
             index == 1 || s.score >= MIN_SUGGESTION_SCORE
         });
+
+        if let Some(split) = split {
+            // Placed first and given the largest share, then everything is
+            // renormalized so the scores still read as one distribution.
+            out.insert(
+                0,
+                Suggestion {
+                    word: split,
+                    score: 0.0,
+                },
+            );
+            out.truncate(MAX_SUGGESTIONS);
+            let others: f32 = out[1..].iter().map(|s| s.score).sum();
+            let head = (1.0 - others * SPLIT_SHARE).max(SPLIT_SHARE);
+            out[0].score = crate::types::round(head as f64, 3) as f32;
+            for s in out[1..].iter_mut() {
+                s.score = crate::types::round((s.score * SPLIT_SHARE) as f64, 3) as f32;
+            }
+        }
         out
     }
 }
@@ -925,6 +1001,12 @@ mod tests {
     }
 
     /// Just the words, for assertions that don't care about the scores.
+    /// A fixture dictionary of genuinely common words. `from_words` claims
+    /// only middling frequency, which several rules here rightly reject.
+    fn common(words: &[&str]) -> crate::dict::Dictionary {
+        words.iter().map(|w| (w.to_string(), 10u8)).collect()
+    }
+
     fn words(suggestions: &[Suggestion]) -> Vec<&str> {
         suggestions.iter().map(|s| s.word.as_str()).collect()
     }
@@ -1083,6 +1165,48 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn a_missing_space_is_offered_as_the_correction() {
+        // `alot` was already caught — it is in no dictionary — but the
+        // corrections were `lot`, `alt`, `slot`, because a missing space is
+        // not an edit this model has.
+        //
+        // The fixture states a level: a split needs its halves to be *common*,
+        // and `from_words` deliberately claims only middling frequency.
+        let c = Checker::new(HashSet::new(), Some(common(&["a", "lot", "alt", "slot"])));
+        let suggestions = c.suggest("alot");
+        assert_eq!(words(&suggestions)[0], "a lot");
+    }
+
+    #[test]
+    fn a_split_needs_both_halves_to_be_common() {
+        // A word list deep enough to be useful holds `al`, `ot`, and `ch`.
+        // Admitting those made `alot` ambiguous between `a lot` and `al ot`,
+        // so it offered neither, and turned `chail` into `ch ail`.
+        //
+        // Here `ch` and `ail` exist but are not common, so no split is found.
+        let mut dict = common(&["chain", "chair", "hail"]);
+        dict.insert("ch".into(), 50);
+        dict.insert("ail".into(), 50);
+        let c = Checker::new(HashSet::new(), Some(dict));
+        let suggestions = c.suggest("chail");
+        assert!(
+            !words(&suggestions).iter().any(|w| w.contains(' ')),
+            "{suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn a_word_that_splits_two_ways_is_not_split_at_all() {
+        // Two readings is a coin flip, not a correction: `alot` reads as
+        // `a lot` and `al ot` if the word list is deep enough.
+        let mut dict = common(&["a", "lot"]);
+        dict.insert("al".into(), 10);
+        dict.insert("ot".into(), 10);
+        let c = Checker::new(HashSet::new(), Some(dict));
+        assert!(c.split_in_two("alot").is_none());
     }
 
     #[test]

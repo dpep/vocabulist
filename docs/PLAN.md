@@ -565,6 +565,43 @@ name never becomes individually acceptable.
 Confidence follows the evidence, as everywhere else: days seen and name length,
 capped below the word paths, because this is a guess about a person.
 
+## 12k. A missing space, and a spurious one **[half done]**
+
+`alot` and `infact` were already *caught* — they are in no dictionary — but the
+corrections offered were `lot`, `alt`, `slot` and `intact`, `infant`, `infect`.
+A missing space is not an edit this model has: it treats the token as one word
+and looks for another single word nearby, and no amount of that reaches
+`a lot`.
+
+Restoring the space is now tried, and offered ahead of the single-word
+candidates when it exists, because both halves being real words is far less
+likely by chance than one word sitting an edit away.
+
+**Both halves must be *common*, not merely present.** A word list deep enough
+to be useful holds `al`, `ot`, `ch`, and `inf` — which made `alot` ambiguous
+between `a lot` and `al ot`, so it offered neither, and turned `chail` into
+`ch ail`. Requiring level 35 or better fixes all three at once. Two readings
+after that is a coin flip and yields nothing.
+
+Word accuracy is unchanged: 72.0% recall, 95.1% precision, 1.02 per thousand.
+
+### The other direction is not done
+
+`luke warm` for `lukewarm` is invisible, and it is the harder half. Both tokens
+are ordinary words, so nothing flags them — the same shape as a real-word
+error, and it needs the same kind of evidence.
+
+The naive test — is the concatenation a word? — is a false-positive machine.
+`may be`/`maybe`, `any way`/`anyway`, `some times`/`sometimes`, `in to`/`into`
+are all *legitimately both*, decided by the sentence rather than the pair. And
+`the rapist` concatenates to something a checker must never propose.
+
+What would settle it is what settled the cue table: a corpus margin. Is
+`lukewarm` overwhelmingly more common than `luke warm`, where `maybe` and
+`may be` are merely both common? That is derivable from the same Google Books
+bigrams — but the counts we committed cover only the confusion sets, so it
+would need another pass over the 38.6 GB. Worth doing, not worth guessing.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

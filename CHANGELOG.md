@@ -76,6 +76,11 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **A missing space is offered as a correction.** `alot` now suggests `a lot`
+  and `infact` suggests `in fact`. Both were already caught; the corrections
+  were `lot` and `intact`, because a missing space is not an edit the model
+  had. Both halves must be *common* words — a list deep enough to be useful
+  holds `al`, `ot`, and `ch`, which is why `chail` used to become `ch ail`.
 - **A misspelled colleague's name is caught.** `Ada Lovelacee` now suggests
   `Ada Lovelace`. This fires only on mid-sentence capitals, which the checker
   previously skipped outright, so ordinary word handling is untouched.
