@@ -210,6 +210,13 @@ fn capture_own_messages(store: &Store, input: &HookInput) {
         }
     }
 
+    // Everyone who wrote here, before the filter to your own messages throws
+    // them away. Names are the case a dictionary can never cover, and these
+    // arrive already parsed and already keyed for dedup.
+    for (display, key) in crate::inbound::authors(&input.tool_name, &input.tool_response) {
+        let _ = store.record_person(&display, &key);
+    }
+
     for message in crate::inbound::harvest(&input.tool_name, &input.tool_response, &selves) {
         let authored_by = if watermark::is_assistant_authored(&message.body) {
             "assistant"

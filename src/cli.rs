@@ -659,8 +659,9 @@ fn dispatch_inner(
             }
 
             let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
-            let (trusted, observed) = store.checkable()?;
-            let (lexicon, names) = split_trusted(trusted);
+            let (trusted, observed, people) = store.checkable()?;
+            let (lexicon, mut names) = split_trusted(trusted);
+            names.extend(people);
             let checker = Checker::with_profile(lexicon, Rc::clone(profile))
                 .with_observed(observed.into_iter().collect())
                 .with_naming_sources(names)
@@ -790,8 +791,12 @@ fn check_input(
     out: &mut impl Write,
     profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let (trusted, observed) = profile.time("lexicon_load", || store.checkable())?;
-    let (lexicon, names) = split_trusted(trusted);
+    let (trusted, observed, people) = profile.time("lexicon_load", || store.checkable())?;
+    let (lexicon, mut names) = split_trusted(trusted);
+    // People rank as names for suggestion purposes: a colleague's name is not
+    // a candidate correction for a lowercase ordinary word.
+    profile.count("people", people.len() as u64);
+    names.extend(people);
     let observed: std::collections::HashMap<String, i64> = observed.into_iter().collect();
     profile.count("lexicon_words", lexicon.len() as u64);
     profile.count("observed_words", observed.len() as u64);

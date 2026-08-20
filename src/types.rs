@@ -83,8 +83,12 @@ impl Provenance {
 pub enum Kind {
     /// Ordinary English — in a dictionary, or used as a common word.
     Word,
-    /// A name or piece of jargon: a project, tool, handle, or person.
+    /// A name or piece of jargon: a project, tool, or handle.
     Name,
+    /// A person. Kept apart from other names because the signals run the
+    /// opposite way — people are reliably capitalized where tools are
+    /// reliably not — and because a wrong suggestion costs more.
+    Person,
 }
 
 impl Kind {
@@ -92,6 +96,7 @@ impl Kind {
         match self {
             Kind::Word => "word",
             Kind::Name => "name",
+            Kind::Person => "person",
         }
     }
 }

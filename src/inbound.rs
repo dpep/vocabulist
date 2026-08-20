@@ -24,7 +24,13 @@ use crate::types::Register;
 pub struct Message {
     /// Stable per-message identity, for dedup across repeated reads.
     pub key: String,
+    /// The handle used to decide whether this message is the user's. Slack
+    /// renders a stable user ID, which is what identity matching needs.
     pub author: String,
+    /// The author as a human would write it. Slack's `From:` line carries a
+    /// display name beside the ID, and that — not `U0E48AHQA` — is the thing
+    /// worth learning as a name.
+    pub display: String,
     pub register: Register,
     pub body: String,
 }
@@ -52,6 +58,34 @@ pub fn harvest(
         .into_iter()
         .filter(|m| selves.contains(&m.author.to_lowercase()))
         .filter(|m| !m.body.trim().is_empty())
+        .collect()
+}
+
+/// Everyone who wrote in this response, yourself included.
+///
+/// `harvest` throws these away — it keeps the *messages* that are yours and
+/// discards the rest, author and all. But the discarded authors are the names
+/// of people you actually work with, already parsed and already keyed for
+/// dedup, and no dictionary will ever hold them.
+///
+/// Returned as `(display, key)` so the caller can corroborate a name the same
+/// way it corroborates a word: by how many separate days it turns up.
+pub fn authors(tool_name: &str, response: &Value) -> Vec<(String, String)> {
+    let name = tool_name.to_lowercase();
+    let found = if is_slack_tool(&name) {
+        from_slack(response)
+    } else if is_github_tool(&name) {
+        from_github_json(response)
+    } else {
+        // Same gate as `harvest`: only the two tool families whose shape is
+        // actually parsed here. Walking every response would let any page
+        // containing a login put a stranger in the lexicon.
+        Vec::new()
+    };
+    found
+        .into_iter()
+        .filter(|m| !m.author.trim().is_empty())
+        .map(|m| (m.display, m.key))
         .collect()
 }
 
@@ -83,11 +117,13 @@ fn from_slack(response: &Value) -> Vec<Message> {
 
     let mut out = Vec::new();
     let mut author: Option<String> = None;
+    let mut display: Option<String> = None;
     let mut key: Option<String> = None;
     let mut body: Option<Vec<String>> = None;
 
     let flush = |out: &mut Vec<Message>,
                  author: &Option<String>,
+                 display: &Option<String>,
                  key: &Option<String>,
                  body: &Option<Vec<String>>| {
         if let (Some(author), Some(lines)) = (author, body) {
@@ -98,6 +134,7 @@ fn from_slack(response: &Value) -> Vec<Message> {
                     // re-read still dedups.
                     key: key.clone().unwrap_or_else(|| format!("slack:{joined:.80}")),
                     author: author.clone(),
+                    display: display.clone().unwrap_or_else(|| author.clone()),
                     register: Register::Slack,
                     body: joined,
                 });
@@ -109,8 +146,14 @@ fn from_slack(response: &Value) -> Vec<Message> {
         let trimmed = line.trim();
 
         if let Some(rest) = trimmed.strip_prefix("From:") {
-            flush(&mut out, &author, &key, &body);
+            flush(&mut out, &author, &display, &key, &body);
             body = None;
+            // Everything before the address is how a person is named.
+            display = rest
+                .split('<')
+                .next()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty());
             // Prefer the parenthesised user ID; fall back to the display name.
             author = rest
                 .split_once("(ID:")
@@ -135,7 +178,7 @@ fn from_slack(response: &Value) -> Vec<Message> {
         }
         // A separator or a new result block ends the current message.
         if trimmed == "---" || trimmed.starts_with("### ") {
-            flush(&mut out, &author, &key, &body);
+            flush(&mut out, &author, &display, &key, &body);
             body = None;
             key = None;
             // Author resets too. Leaving it set means a block with a missing
@@ -143,13 +186,14 @@ fn from_slack(response: &Value) -> Vec<Message> {
             // a colleague's message to the user, which is the failure this
             // module exists to prevent.
             author = None;
+            display = None;
             continue;
         }
         if let Some(lines) = body.as_mut() {
             lines.push(line.to_string());
         }
     }
-    flush(&mut out, &author, &key, &body);
+    flush(&mut out, &author, &display, &key, &body);
     out
 }
 
@@ -201,6 +245,10 @@ fn walk_github(value: &Value, out: &mut Vec<Message>) {
                     .unwrap_or_else(|| format!("gh:{body:.80}"));
                 out.push(Message {
                     key,
+                    // GitHub's embedded user object carries only a login;
+                    // the real name needs a separate API call this crate
+                    // will not make.
+                    display: author.to_string(),
                     author: author.to_string(),
                     register: Register::Pr,
                     body: body.to_string(),

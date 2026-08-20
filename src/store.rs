@@ -21,7 +21,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -192,6 +192,11 @@ CREATE TABLE IF NOT EXISTS sentence_lengths (
 /// added columns need an explicit ALTER, and re-running one on an
 /// already-migrated database is expected.
 fn migrate(conn: &Connection) -> Result<()> {
+    // Kind used to be derived from provenance and the dictionary. That works
+    // while every name is a repo or a binary, and stops working the moment
+    // people arrive: a colleague's name has the same provenance as any other
+    // captured word and only the source knows the difference.
+    add_column(conn, "ALTER TABLE lexicon ADD COLUMN kind TEXT")?;
     add_column(conn, "ALTER TABLE spool ADD COLUMN author TEXT")?;
     add_column(
         conn,
@@ -220,9 +225,9 @@ fn add_column(conn: &Connection, sql: &str) -> Result<()> {
 }
 
 /// The lexicon split by how much it has earned: words from a deliberate
-/// source, and merely-observed words paired with the number of distinct
-/// documents backing each.
-pub type Checkable = (Vec<(String, Provenance)>, Vec<(String, i64)>);
+/// source, merely-observed words paired with the number of distinct days
+/// backing each, and the subset that are people.
+pub type Checkable = (Vec<(String, Provenance)>, Vec<(String, i64)>, Vec<String>);
 
 /// One staged body awaiting processing.
 #[derive(Debug, Clone, PartialEq)]
@@ -374,30 +379,35 @@ impl Store {
         // evidence wearing two hats. Counting days is the cheapest honest
         // version of "independent contexts".
         let mut stmt = self.conn.prepare(
-            "SELECT l.word, l.provenance,
+            "SELECT l.word, l.provenance, l.kind,
                     (SELECT COUNT(DISTINCT date(s.first_seen))
                        FROM word_sources s WHERE s.word = l.word)
              FROM lexicon l",
         )?;
         let mut trusted = Vec::new();
         let mut observed = Vec::new();
+        let mut people = Vec::new();
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, i64>(3)?,
             ))
         })?;
         for row in rows {
-            let (word, provenance, sources) = row?;
+            let (word, provenance, kind, sources) = row?;
             let provenance = Provenance::parse(&provenance).unwrap_or(Provenance::Observed);
+            if kind.as_deref() == Some("person") {
+                people.push(word.clone());
+            }
             if provenance > Provenance::Observed {
                 trusted.push((word, provenance));
             } else {
                 observed.push((word, sources));
             }
         }
-        Ok((trusted, observed))
+        Ok((trusted, observed, people))
     }
 
     pub fn words(&self) -> Result<Vec<String>> {
@@ -409,11 +419,14 @@ impl Store {
     /// Lexicon entries matching an optional substring filter, strongest first.
     pub fn list(&self, filter: Option<&str>, limit: usize) -> Result<Vec<Entry>> {
         let pattern = format!("%{}%", filter.unwrap_or(""));
-        // Kind is derived rather than stored: provenance plus dictionary
-        // membership already determine it, and a stored copy would drift.
+        // Kind is derived where nothing recorded it. Provenance plus
+        // dictionary membership settle tools and jargon, but they cannot
+        // settle a person: a colleague's name arrives with exactly the
+        // provenance of any other captured word, and only the source that
+        // captured it knows the difference. So a stored kind wins.
         let dictionary = crate::dict::load();
         let mut stmt = self.conn.prepare(
-            "SELECT l.word, l.provenance, l.count,
+            "SELECT l.word, l.provenance, l.count, l.kind,
                     (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
                FROM lexicon l
               WHERE l.word LIKE ?1
@@ -424,9 +437,15 @@ impl Store {
             let word: String = r.get(0)?;
             let prov = Provenance::parse(&r.get::<_, String>(1)?).unwrap_or(Provenance::Observed);
             let count: i64 = r.get(2)?;
-            let sources: i64 = r.get(3)?;
+            let stored: Option<String> = r.get(3)?;
+            let sources: i64 = r.get(4)?;
             Ok(Entry {
-                kind: classify(&word, prov, dictionary.as_ref()),
+                kind: match stored.as_deref() {
+                    Some("person") => Kind::Person,
+                    Some("name") => Kind::Name,
+                    Some("word") => Kind::Word,
+                    _ => classify(&word, prov, dictionary.as_ref()),
+                },
                 word,
                 provenance: prov,
                 validity: validity(prov, sources),
@@ -455,6 +474,32 @@ impl Store {
     }
 
     /// Total count for an n-gram across all registers.
+    /// Record a person seen in a captured message.
+    ///
+    /// People go in the lexicon rather than a table of their own so they
+    /// inherit corroboration, pruning, and export for free — the only thing
+    /// that differs is `kind`, and that a wrong suggestion about a person
+    /// costs more than one about a word.
+    ///
+    /// `doc` is the message key, so the same day-counting that governs words
+    /// governs people: a name seen once is as likely a typo as a colleague.
+    pub fn record_person(&self, display: &str, doc: &str) -> Result<()> {
+        let name = crate::text::normalize(display);
+        if name.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO lexicon (word, display, provenance, kind, count)
+             VALUES (?1, ?2, 'observed', 'person', 1)
+             ON CONFLICT(word) DO UPDATE SET
+                 count = count + 1,
+                 kind = 'person',
+                 last_seen = CURRENT_TIMESTAMP",
+            params![name, display],
+        )?;
+        self.record_word_source(&name, doc)
+    }
+
     /// Every distinct gram in the store, across orders and registers.
     pub fn all_ngrams(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT DISTINCT gram FROM ngrams")?;
@@ -1190,7 +1235,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let (_, observed) = s.checkable().unwrap();
+        let (_, observed, _) = s.checkable().unwrap();
         let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
         assert_eq!(sources, 1, "one sitting is one piece of evidence");
 
@@ -1202,9 +1247,27 @@ mod tests {
                 [],
             )
             .unwrap();
-        let (_, observed) = s.checkable().unwrap();
+        let (_, observed, _) = s.checkable().unwrap();
         let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
         assert_eq!(sources, 2);
+    }
+
+    #[test]
+    fn a_person_is_recorded_as_one() {
+        let s = store();
+        s.record_person("Ada Lovelace", "msg-1").unwrap();
+        let (_, _, people) = s.checkable().unwrap();
+        assert!(people.contains(&"ada lovelace".to_string()));
+
+        // And corroborates by day like everything else: one sighting is not
+        // yet evidence that this is how the name is spelled.
+        let (_, observed, _) = s.checkable().unwrap();
+        let days = observed
+            .iter()
+            .find(|(w, _)| w == "ada lovelace")
+            .map(|(_, d)| *d)
+            .unwrap();
+        assert_eq!(days, 1);
     }
 
     #[test]

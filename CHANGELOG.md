@@ -76,6 +76,20 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **People are learned from the messages you read.** Every Slack `From:` line
+  and GitHub login was already being parsed to decide which messages are
+  yours, and everyone else was discarded — authors included. Those are the
+  names of people you work with, and no dictionary will ever hold them.
+
+  A full name is stored as a unit (`ada lovelace`), because either half alone
+  is near-worthless as evidence while the pair is nearly unique. `Kind` is now
+  stored rather than derived, since a colleague's name arrives with exactly
+  the provenance of any other captured word and only the source knows the
+  difference.
+
+  This slice classifies only: people rank as names, so a colleague is never
+  offered as the correction for a lowercase word. Flagging *misspelled* names
+  is not in yet.
 - **Corroboration counts distinct days rather than distinct documents.** Typos
   are bursty in time as well as within a message, so two documents from one
   sitting was one piece of evidence counted twice. Nothing is ever forgotten —
