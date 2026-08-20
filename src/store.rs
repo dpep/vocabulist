@@ -368,9 +368,15 @@ impl Store {
     /// one sighting in one document made a word known forever — so a typo
     /// typed once was learned, and the checker went permanently blind to it.
     pub fn checkable(&self) -> Result<Checkable> {
+        // Distinct *days*, not distinct documents. Typos are bursty in time as
+        // well as within a message — you mistype a word twice in one sitting
+        // and never again — so two sightings in one afternoon is one piece of
+        // evidence wearing two hats. Counting days is the cheapest honest
+        // version of "independent contexts".
         let mut stmt = self.conn.prepare(
             "SELECT l.word, l.provenance,
-                    (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
+                    (SELECT COUNT(DISTINCT date(s.first_seen))
+                       FROM word_sources s WHERE s.word = l.word)
              FROM lexicon l",
         )?;
         let mut trusted = Vec::new();
@@ -1167,6 +1173,38 @@ mod tests {
             .collect();
         assert_eq!(docs.len(), 2);
         assert_ne!(docs[0], docs[1], "two messages are independent evidence");
+    }
+
+    #[test]
+    fn corroboration_counts_days_not_documents() {
+        let s = store();
+        s.upsert_word("zblorg", "zblorg", Provenance::Observed, 1)
+            .unwrap();
+        // Two documents, one afternoon: the shape a typo makes.
+        for doc in ["a", "b"] {
+            s.conn
+                .execute(
+                    "INSERT INTO word_sources (word, doc, first_seen)
+                     VALUES ('zblorg', ?1, '2026-01-01 09:00:00')",
+                    [doc],
+                )
+                .unwrap();
+        }
+        let (_, observed) = s.checkable().unwrap();
+        let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
+        assert_eq!(sources, 1, "one sitting is one piece of evidence");
+
+        // A separate day is a genuinely independent context.
+        s.conn
+            .execute(
+                "INSERT INTO word_sources (word, doc, first_seen)
+                 VALUES ('zblorg', 'c', '2026-03-14 11:00:00')",
+                [],
+            )
+            .unwrap();
+        let (_, observed) = s.checkable().unwrap();
+        let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
+        assert_eq!(sources, 2);
     }
 
     #[test]

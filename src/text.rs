@@ -389,6 +389,10 @@ pub fn prose_tokens(line: &str) -> Option<Vec<String>> {
 /// identifier, or punctuation debris.
 pub fn is_lexical(word: &str) -> bool {
     word.chars().count() >= 2
+        // A word has to contain a letter. Apostrophes and hyphens belong to
+        // ordinary words, but allowing them without this let a rule of dashes
+        // in a captured message become a lexicon entry.
+        && word.chars().any(|c| c.is_ascii_alphabetic())
         && word
             .chars()
             .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
@@ -475,6 +479,16 @@ mod tests {
                 .chars()
                 .count()
         );
+    }
+
+    #[test]
+    fn punctuation_alone_is_not_a_word() {
+        // A separator line in a captured message reached the lexicon as the
+        // "word" `-----------------`.
+        assert!(!is_lexical("-----------------"));
+        assert!(!is_lexical("--"));
+        assert!(is_lexical("re-word"));
+        assert!(is_lexical("don't"));
     }
 
     #[test]

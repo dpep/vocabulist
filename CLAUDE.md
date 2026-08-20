@@ -12,6 +12,19 @@ decisions — reach for it before inventing a method that has a name.
 
 ## First principles (do not drift from these)
 
+- **Evidence creates confidence.** Every number this tool reports is a guess,
+  and the only honest thing to do is say how good a guess. So confidence is
+  *derived* from what backs it — how far a cue beat its runner-up, how many
+  independent contexts corroborate a word, how distinctive a name is — never
+  a constant chosen to feel right. A flat score is a guess wearing the clothes
+  of a measurement, and it is worst exactly where it matters most: in `--json`,
+  where nobody can see the hedge.
+
+  The corollary is that **membership and confidence are separate questions**.
+  Whether a word is known enough to silence the checker is conservative and
+  binary; how sure we are about a correction is graded. Conflating them is
+  what produced both a lexicon full of typos and a table of cues that all
+  claimed 0.6.
 - **Reluctance is the product.** A false "misspelled" teaches the user to
   ignore the tool; a missed typo costs almost nothing. When a change trades
   precision for recall, it's probably wrong. New heuristics should default to

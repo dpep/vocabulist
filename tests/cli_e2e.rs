@@ -134,9 +134,12 @@ fn capture_then_process_teaches_the_lexicon() {
     say("first");
     assert_eq!(vocab(&db, &["zblorg shipped"]).code, 1);
 
-    // A second, independent context is what earns it.
+    // Nor is a second sighting the same day. Typos are bursty in time as well
+    // as within a message, so one sitting is one piece of evidence however
+    // many documents it spans. Earning standing takes another day — see
+    // `store::tests` for that half, which needs control of the clock.
     say("second");
-    assert_eq!(vocab(&db, &["zblorg shipped"]).code, 0);
+    assert_eq!(vocab(&db, &["zblorg shipped"]).code, 1);
 }
 
 #[test]

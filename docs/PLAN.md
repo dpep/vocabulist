@@ -497,6 +497,34 @@ The general lesson is worth keeping: the weakest cues are function words, and
 function words carry their meaning only in adjacency. A rule that widens the
 window uniformly widens it most for the cues that can least afford it.
 
+## 12i. Corroboration counts days, not documents **[measured]**
+
+A word earned its standing from the number of distinct documents it appeared
+in — the rule that keeps a typo hammered into one message from counting three
+times. But typos are bursty in *time* as well as within a message: you mistype
+a word twice in one sitting and never again, and two documents from that
+sitting satisfied the rule.
+
+Counting distinct days instead is the cheapest honest version of "independent
+contexts", and it needs no schema change — `word_sources` already carries a
+timestamp per document.
+
+On a real store it is a substantial tightening: 237 observed words qualified by
+document count, 139 by day. Almost all of the difference is harmless, because
+92 of the 98 are ordinary English the bundled dictionary vouches for anyway.
+The real cost is six words — `urls`, `permalink`, `recency`, `asc`,
+`claudomatic`, `re-word` — that are genuinely the user's and now wait a day.
+Self-correcting, and cheap against nine of that user's typos having been
+learned under the old rule.
+
+It also surfaced one: `-----------------` was a lexicon entry. `is_lexical`
+allowed hyphens, as it must for `re-word`, but never required a letter, so a
+separator line in a captured message became a word.
+
+**Decay is deliberately not part of this.** Forgetting a name or a word someone
+still uses is the most embarrassing false positive available, and recency
+should inform *confidence* rather than membership if it is ever used at all.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

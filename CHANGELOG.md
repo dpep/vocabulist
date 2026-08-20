@@ -76,6 +76,14 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **Corroboration counts distinct days rather than distinct documents.** Typos
+  are bursty in time as well as within a message, so two documents from one
+  sitting was one piece of evidence counted twice. Nothing is ever forgotten —
+  this is about what a word must earn before it silences the checker, not
+  about decay.
+- A run of punctuation is no longer a word. `is_lexical` allowed hyphens, as
+  it must for `re-word`, but never required a letter, so a separator line in a
+  captured message became the lexicon entry `-----------------`.
 - **A project name no longer outranks a word in suggestions.** 309 of the
   short names in a real lexicon sit one edit from an ordinary word, and
   lexicon membership carries a frequency floor — so `navv` offered the tools
