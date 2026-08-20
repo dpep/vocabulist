@@ -30,6 +30,16 @@ const MAX_SUGGESTIONS: usize = 3;
 /// Frequency credited to a lexicon word that no general source ranks.
 const LEXICON_FLOOR: i64 = 3;
 
+/// How sure a proposed join is. Higher than a bare unknown word, because both
+/// the compound existing and one half not being a word have to line up — and
+/// short of the contraction path, which is an exact mapping rather than a
+/// guess about what was meant.
+const JOIN_CONFIDENCE: f32 = 0.75;
+
+/// How common a compound must be before joining two tokens is proposed. The
+/// obscure tail of a word list is full of concatenations nobody wrote.
+const JOIN_LEVEL: u8 = 50;
+
 /// How much of the belief the single-word candidates keep when a clean split
 /// exists. Both halves being real words is far less likely by chance than one
 /// word sitting an edit away, but the alternatives are not worthless.
@@ -292,6 +302,43 @@ impl Checker {
             }
         }
         false
+    }
+
+    /// The compound this token and its neighbour would be if the space
+    /// between them were removed.
+    ///
+    /// Only reachable for a token that is *already* being flagged, which is
+    /// what makes it safe. The dangerous split-compounds are the ones where
+    /// both halves are ordinary words — `may be`/`maybe`, `any way`/`anyway`,
+    /// `in to`/`into`, and `the rapist`, which a checker must never propose
+    /// joining. Every one of those has two known halves, so neither token is
+    /// ever flagged and this is never consulted.
+    ///
+    /// What is left is the case where one half is not a word at all: `luke`
+    /// in `luke warm`. There the join is unambiguous, and the alternative on
+    /// offer today is `like`, `lake`, `lure`.
+    fn join_with_neighbour(
+        &self,
+        word: &str,
+        prev: Option<&str>,
+        next: Option<&str>,
+    ) -> Option<String> {
+        let common = |joined: &str| {
+            self.dictionary()
+                .and_then(|d| crate::dict::level(d, joined))
+                .is_some_and(|level| level <= JOIN_LEVEL)
+        };
+        for (a, b) in [(prev, Some(word)), (Some(word), next)] {
+            let (Some(a), Some(b)) = (a, b) else { continue };
+            if a.chars().count() < 2 || b.chars().count() < 2 {
+                continue;
+            }
+            let joined = format!("{a}{b}");
+            if common(&joined) {
+                return Some(joined);
+            }
+        }
+        None
     }
 
     /// The two words this token would be if a space were restored.
@@ -591,6 +638,28 @@ impl Checker {
                 // could have.
                 if names.contains(word) {
                     self.profile.count("names_skipped", 1);
+                    continue;
+                }
+                // A compound written as two words, where one half is not a
+                // word on its own. Offered ahead of the edit candidates,
+                // which for `luke` are `like`, `lake`, `lure`.
+                let neighbours = (
+                    i.checked_sub(1).map(|j| normalized[j].as_str()),
+                    normalized.get(i + 1).map(String::as_str),
+                );
+                if let Some(joined) = self.join_with_neighbour(word, neighbours.0, neighbours.1) {
+                    self.profile.count("joins_offered", 1);
+                    findings.push(Finding {
+                        kind: FindingKind::Unknown,
+                        word: token.text.clone(),
+                        line: line_no,
+                        col: token.col,
+                        suggestions: vec![Suggestion {
+                            word: joined,
+                            score: 1.0,
+                        }],
+                        confidence: JOIN_CONFIDENCE,
+                    });
                     continue;
                 }
                 findings.push(self.unknown_finding(token, word, line_no));
@@ -1165,6 +1234,51 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn a_compound_split_in_two_is_offered_joined() {
+        // `luke` is in no dictionary, so it is flagged either way — the
+        // question is what gets offered. Before, `like`, `lake`, `lure`.
+        let c = Checker::new(HashSet::new(), Some(common(&["warm", "lukewarm", "like"])));
+        assert_eq!(
+            c.join_with_neighbour("luke", None, Some("warm")),
+            Some("lukewarm".to_string())
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_pair_never_reaches_the_join() {
+        // `may be`/`maybe`, `in to`/`into`, and `the rapist` are all decided
+        // by the sentence rather than the pair, and a checker must never
+        // propose joining the last of them.
+        //
+        // Every one has two known halves, so neither token is flagged and the
+        // join is never consulted. The guarantee is structural, not a
+        // threshold — this asserts the structure holds.
+        let c = Checker::new(
+            HashSet::new(),
+            Some(common(&[
+                "may",
+                "be",
+                "maybe",
+                "the",
+                "rapist",
+                "therapist",
+            ])),
+        );
+        assert!(c.knows("may") && c.knows("be"));
+        assert!(c.knows("the") && c.knows("rapist"));
+    }
+
+    #[test]
+    fn a_join_must_produce_a_common_word() {
+        // The obscure tail of a word list is full of concatenations nobody
+        // wrote.
+        let mut dict = common(&["warm"]);
+        dict.insert("lukewarm".into(), 60);
+        let c = Checker::new(HashSet::new(), Some(dict));
+        assert!(c.join_with_neighbour("luke", None, Some("warm")).is_none());
     }
 
     #[test]

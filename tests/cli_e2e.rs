@@ -458,3 +458,22 @@ fn a_misspelled_colleague_is_caught_but_a_stranger_is_not() {
     let word = vocab(&db, &["the Field was empty"]);
     assert_eq!(word.code, 0, "{}", word.stdout);
 }
+
+#[test]
+fn a_compound_written_as_two_words_is_offered_joined() {
+    let db = scratch_db("join");
+    let out = vocab(&db, &["-j", "the water was luke warm"]);
+    assert!(out.stdout.contains("lukewarm"), "{}", out.stdout);
+
+    // The ambiguous pairs are decided by the sentence, not the pair, and one
+    // of them must never be proposed as a join at all. Each has two known
+    // halves, so neither token is flagged and the join is never reached.
+    for text in [
+        "may be we should go",
+        "the rapist was caught",
+        "it happens some times",
+    ] {
+        let clean = vocab(&db, &[text]);
+        assert_eq!(clean.code, 0, "{text}: {}", clean.stdout);
+    }
+}

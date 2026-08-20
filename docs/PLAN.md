@@ -565,7 +565,7 @@ name never becomes individually acceptable.
 Confidence follows the evidence, as everywhere else: days seen and name length,
 capped below the word paths, because this is a guess about a person.
 
-## 12k. A missing space, and a spurious one **[half done]**
+## 12k. A missing space, and a spurious one **[done]**
 
 `alot` and `infact` were already *caught* — they are in no dictionary — but the
 corrections offered were `lot`, `alt`, `slot` and `intact`, `infant`, `infect`.
@@ -585,22 +585,33 @@ after that is a coin flip and yields nothing.
 
 Word accuracy is unchanged: 72.0% recall, 95.1% precision, 1.02 per thousand.
 
-### The other direction is not done
+### The other direction, and why it needed no corpus at all
 
-`luke warm` for `lukewarm` is invisible, and it is the harder half. Both tokens
-are ordinary words, so nothing flags them — the same shape as a real-word
-error, and it needs the same kind of evidence.
+`luke warm` for `lukewarm` looked like the harder half, and the plan was a
+corpus margin: is `lukewarm` overwhelmingly more common than `luke warm`,
+where `maybe` and `may be` are merely both common? That meant another pass
+over 38.6 GB.
 
-The naive test — is the concatenation a word? — is a false-positive machine.
-`may be`/`maybe`, `any way`/`anyway`, `some times`/`sometimes`, `in to`/`into`
-are all *legitimately both*, decided by the sentence rather than the pair. And
-`the rapist` concatenates to something a checker must never propose.
+It was not needed, and the reason is worth recording because the estimate was
+wrong for an instructive reason. **`luke warm` was already being flagged.**
+`luke` is in no dictionary, so it is reported as an unknown word — the failure
+was never detection, it was that the corrections offered were `like`, `lake`,
+`lure`. Exactly the same mistake as `alot` offering `lot`.
 
-What would settle it is what settled the cue table: a corpus margin. Is
-`lukewarm` overwhelmingly more common than `luke warm`, where `maybe` and
-`may be` are merely both common? That is derivable from the same Google Books
-bigrams — but the counts we committed cover only the confusion sets, so it
-would need another pass over the 38.6 GB. Worth doing, not worth guessing.
+So the fix is the mirror of the split: when a token is *already* being
+flagged, try joining it with each neighbour and offer the compound if that is
+a common word.
+
+**The dangerous cases are excluded structurally rather than by a threshold.**
+`may be`/`maybe`, `any way`/`anyway`, `in to`/`into`, and `the rapist` — which
+a checker must never propose joining — all have two *known* halves. Neither
+token is ever flagged, so this code is never reached for any of them. That is
+a far stronger guarantee than a frequency ratio would have been, and it costs
+nothing.
+
+What stays invisible is a split compound where both halves are ordinary words
+and the join is nonetheless intended. Those are precisely the ambiguous ones,
+and silence is the right answer.
 
 ## 12a. Performance, and the size of the backstop **[open]**
 

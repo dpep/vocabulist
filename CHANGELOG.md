@@ -76,6 +76,14 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **A compound written as two words is offered joined.** `the water was luke
+  warm` now suggests `lukewarm`. `luke` was always being flagged — it is in no
+  dictionary — but the corrections were `like`, `lake`, `lure`.
+
+  The pairs that must *not* be joined — `may be`, `in to`, `some times`, and
+  `the rapist` — are excluded structurally rather than by a threshold: each
+  has two known halves, so neither token is ever flagged and the join is never
+  considered.
 - **A missing space is offered as a correction.** `alot` now suggests `a lot`
   and `infact` suggests `in fact`. Both were already caught; the corrections
   were `lot` and `intact`, because a missing space is not an edit the model
