@@ -87,6 +87,9 @@ pub struct Checker {
     /// Merely-observed words, and how many distinct documents back each.
     /// Kept apart from `lexicon` because they have not earned the same trust.
     observed: std::collections::HashMap<String, i64>,
+    /// Lexicon words that came from a source containing nothing but names —
+    /// repos, taps, installed binaries, dependency manifests.
+    from_naming_source: HashSet<String>,
     dictionary: OnceCell<Option<crate::dict::Dictionary>>,
     /// Contractions derived from the dictionary and your lexicon, beyond the
     /// static table. Lazy, because building it needs the dictionary and the
@@ -105,6 +108,7 @@ impl Checker {
             lexicon,
             frequency: std::collections::HashMap::new(),
             observed: std::collections::HashMap::new(),
+            from_naming_source: HashSet::new(),
             dictionary: cell,
             derived_contractions: OnceCell::new(),
             profile: Rc::new(Profile::disabled()),
@@ -117,10 +121,29 @@ impl Checker {
             lexicon,
             frequency: std::collections::HashMap::new(),
             observed: std::collections::HashMap::new(),
+            from_naming_source: HashSet::new(),
             dictionary: OnceCell::new(),
             derived_contractions: OnceCell::new(),
             profile,
         }
+    }
+
+    /// Mark which lexicon words arrived from a naming source.
+    pub fn with_naming_sources(mut self, names: HashSet<String>) -> Self {
+        self.from_naming_source = names;
+        self
+    }
+
+    /// Is this a name rather than an ordinary word?
+    ///
+    /// Provenance proposes and the dictionary disposes: a dependency called
+    /// `parser` really is the ordinary word, so anything the dictionary knows
+    /// is a word however we came by it.
+    fn is_name(&self, word: &str) -> bool {
+        self.from_naming_source.contains(word)
+            && !self
+                .dictionary()
+                .is_some_and(|d| crate::dict::contains(d, word))
     }
 
     /// Attach merely-observed words with their corroboration counts.
@@ -452,7 +475,15 @@ impl Checker {
     }
 
     fn unknown_finding(&self, token: &Token, word: &str, line_no: usize) -> Finding {
-        let suggestions = self.suggest(word);
+        // Capitalization is the only evidence available about whether a
+        // *name* was meant, and it is lost by normalization, so it has to be
+        // read off the token as written.
+        let looks_like_a_name = token
+            .text
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase());
+        let suggestions = self.suggest_for(word, looks_like_a_name);
         // A word with a near neighbour is more likely a typo than a coinage;
         // one with no neighbour at all is probably jargon we haven't met.
         let confidence = if suggestions.is_empty() { 0.35 } else { 0.70 };
@@ -469,6 +500,20 @@ impl Checker {
     /// Ranked replacements within `MAX_EDIT_DISTANCE`. Lexicon words rank
     /// above dictionary words — if you have a word for it, it's your word.
     pub fn suggest(&self, word: &str) -> Vec<Suggestion> {
+        self.suggest_for(word, false)
+    }
+
+    /// Ranked replacements, told whether a name or an ordinary word was meant.
+    ///
+    /// The distinction matters because a personal lexicon is full of short
+    /// project and binary names — 309 of them sit one edit from a real word on
+    /// this machine — and without it `navv` offered `navi` and `nav` above
+    /// `navy`. Two tools ranked over the English word, because lexicon
+    /// membership carries a frequency floor and `navy` is merely ordinary.
+    ///
+    /// A name is not a candidate correction for a lowercase word, and an
+    /// ordinary word is a poor one for something capitalized.
+    pub fn suggest_for(&self, word: &str, want_name: bool) -> Vec<Suggestion> {
         // (distance, -frequency, -prefix, -suffix, source rank, word) — every
         // field sorts ascending, so the values that should win are negated.
         //
@@ -480,7 +525,7 @@ impl Checker {
         // sit one edit from everything, and letting provenance win would bury
         // the obvious correction under them.
         self.profile.count("suggest_calls", 1);
-        let mut scored: Vec<(usize, i64, isize, isize, u8, &String)> = Vec::new();
+        let mut scored: Vec<(usize, u8, i64, isize, isize, u8, &String)> = Vec::new();
         let dictionary = self.dictionary().into_iter().flatten();
         for (candidate, rank) in self
             .lexicon
@@ -493,8 +538,11 @@ impl Checker {
             self.profile.count("candidates_scanned", 1);
             if let Some(d) = bounded_distance(word, candidate, MAX_EDIT_DISTANCE) {
                 let (prefix, suffix) = affinity(word, candidate);
+                // Sorts ascending, so 0 is "the kind that was asked for".
+                let wrong_kind = u8::from(self.is_name(candidate) != want_name);
                 scored.push((
                     d,
+                    wrong_kind,
                     -self.frequency_of(candidate),
                     -(prefix as isize),
                     -(suffix as isize),
@@ -506,11 +554,11 @@ impl Checker {
         self.profile.count("candidates_kept", scored.len() as u64);
 
         scored.sort();
-        scored.dedup_by(|a, b| a.5 == b.5);
+        scored.dedup_by(|a, b| a.6 == b.6);
         let kept: Vec<(usize, &String)> = scored
             .into_iter()
             .take(MAX_SUGGESTIONS)
-            .map(|(d, _, _, _, _, w)| (d, w))
+            .map(|(d, _, _, _, _, _, w)| (d, w))
             .collect();
 
         // Noisy channel, in miniature: weight each candidate by how likely the
@@ -955,6 +1003,52 @@ mod tests {
             Some(crate::dict::from_words(["the"])),
         );
         assert!(c.knows("contextdb"));
+    }
+
+    #[test]
+    fn a_name_does_not_outrank_a_word_for_a_lowercase_typo() {
+        // 309 of the short names in a real lexicon sit one edit from an
+        // ordinary word, and lexicon membership carries a frequency floor —
+        // so `navv` offered the tools `navi` and `nav` above `navy`.
+        let c = Checker::new(
+            HashSet::from(["navi".to_string()]),
+            Some(crate::dict::from_words(["navy", "nave"])),
+        )
+        .with_naming_sources(HashSet::from(["navi".to_string()]));
+
+        let suggestions = c.suggest("navv");
+        let ranked = words(&suggestions);
+        assert!(!ranked.is_empty());
+        assert_ne!(ranked[0], "navi", "a tool name beat the English word");
+    }
+
+    #[test]
+    fn a_capitalized_typo_prefers_a_name() {
+        let c = Checker::new(
+            HashSet::from(["iriq".to_string()]),
+            Some(crate::dict::from_words(["iris"])),
+        )
+        .with_naming_sources(HashSet::from(["iriq".to_string()]));
+
+        let suggestions = c.suggest_for("iriqq", true);
+        assert_eq!(words(&suggestions)[0], "iriq");
+    }
+
+    #[test]
+    fn kind_only_breaks_ties_it_does_not_outrank_distance() {
+        // Kind sorts after distance on purpose. Leading with it cost three
+        // points of correction rate, because technical names are written
+        // lowercase — `ripgrep`, `nixpkgs` — so demoting names for a
+        // lowercase token demotes exactly the corrections that were wanted.
+        let c = Checker::new(
+            HashSet::from(["iriq".to_string()]),
+            Some(crate::dict::from_words(["irises"])),
+        )
+        .with_naming_sources(HashSet::from(["iriq".to_string()]));
+
+        // `iriq` is one edit away and a name; `irises` is further and a word.
+        let suggestions = c.suggest("iriqq");
+        assert_eq!(words(&suggestions)[0], "iriq");
     }
 
     #[test]

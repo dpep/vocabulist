@@ -660,8 +660,10 @@ fn dispatch_inner(
 
             let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
             let (trusted, observed) = store.checkable()?;
-            let checker = Checker::with_profile(trusted.into_iter().collect(), Rc::clone(profile))
+            let (lexicon, names) = split_trusted(trusted);
+            let checker = Checker::with_profile(lexicon, Rc::clone(profile))
                 .with_observed(observed.into_iter().collect())
+                .with_naming_sources(names)
                 .with_frequency(store.frequencies()?);
             let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
 
@@ -754,6 +756,31 @@ fn resolve_targets(name: Option<&str>) -> Result<Vec<sync::Target>, Box<dyn std:
     }
 }
 
+/// Split trusted lexicon entries into every word, and the subset that came
+/// from a source containing nothing but names.
+fn split_trusted(
+    trusted: Vec<(String, crate::types::Provenance)>,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    use crate::types::Provenance;
+    let mut all = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    for (word, provenance) in trusted {
+        // Repos, taps, binaries and manifests hold names and nothing else.
+        // Hand-added words are whatever the user meant, so they stay neutral.
+        if matches!(
+            provenance,
+            Provenance::Owned | Provenance::Tap | Provenance::Installed | Provenance::Dependency
+        ) {
+            names.insert(word.clone());
+        }
+        all.insert(word);
+    }
+    (all, names)
+}
+
 /// Check a positional string as one blob, or stream stdin/`--file` line by
 /// line. A bare invocation with no input prints help rather than erroring.
 fn check_input(
@@ -764,14 +791,16 @@ fn check_input(
     profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let (trusted, observed) = profile.time("lexicon_load", || store.checkable())?;
-    let lexicon: std::collections::HashSet<String> = trusted.into_iter().collect();
+    let (lexicon, names) = split_trusted(trusted);
     let observed: std::collections::HashMap<String, i64> = observed.into_iter().collect();
     profile.count("lexicon_words", lexicon.len() as u64);
     profile.count("observed_words", observed.len() as u64);
+    profile.count("names", names.len() as u64);
 
     let frequency = profile.time("frequency_load", || store.frequencies())?;
     let checker = Checker::with_profile(lexicon, Rc::clone(profile))
         .with_observed(observed)
+        .with_naming_sources(names)
         .with_frequency(frequency);
     let mut evidence = |gram: &str| {
         profile.count("ngram_queries", 1);

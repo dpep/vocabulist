@@ -76,6 +76,16 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **A project name no longer outranks a word in suggestions.** 309 of the
+  short names in a real lexicon sit one edit from an ordinary word, and
+  lexicon membership carries a frequency floor — so `navv` offered the tools
+  `navi` and `nav` above `navy`. Suggestions now know whether a name or a word
+  was meant, from how the token was capitalized.
+
+  Kind sorts *after* distance, deliberately. Leading with it cost three points
+  of correction rate, because technical names are written lowercase —
+  `ripgrep`, `nixpkgs` — so demoting names for a lowercase token demotes
+  exactly the corrections that were wanted.
 - **Real-word confidence reflects the evidence behind it.** Every cue used to
   report a flat `0.6`, so `apart from` — which beats `apart form` by 1444 to 1
   — was indistinguishable from a cue that scraped past the threshold. The

@@ -222,7 +222,7 @@ fn add_column(conn: &Connection, sql: &str) -> Result<()> {
 /// The lexicon split by how much it has earned: words from a deliberate
 /// source, and merely-observed words paired with the number of distinct
 /// documents backing each.
-pub type Checkable = (Vec<String>, Vec<(String, i64)>);
+pub type Checkable = (Vec<(String, Provenance)>, Vec<(String, i64)>);
 
 /// One staged body awaiting processing.
 #[derive(Debug, Clone, PartialEq)]
@@ -384,9 +384,9 @@ impl Store {
         })?;
         for row in rows {
             let (word, provenance, sources) = row?;
-            if Provenance::parse(&provenance).unwrap_or(Provenance::Observed) > Provenance::Observed
-            {
-                trusted.push(word);
+            let provenance = Provenance::parse(&provenance).unwrap_or(Provenance::Observed);
+            if provenance > Provenance::Observed {
+                trusted.push((word, provenance));
             } else {
                 observed.push((word, sources));
             }
