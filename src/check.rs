@@ -30,6 +30,14 @@ const MAX_SUGGESTIONS: usize = 3;
 /// Frequency credited to a lexicon word that no general source ranks.
 const LEXICON_FLOOR: i64 = 3;
 
+/// Shortest run worth judging as a name. Initials and two-letter tokens sit
+/// one edit from half the world.
+const MIN_NAME_LENGTH: usize = 4;
+
+/// Separate days a person must have been seen on before their spelling can
+/// convict another. A name typed once is as likely the typo as the target.
+const NAME_CORROBORATION: i64 = 2;
+
 /// Distinct documents an observed word needs before it stops being checked.
 ///
 /// One sighting is not evidence of a word — it is equally evidence of a typo,
@@ -90,6 +98,9 @@ pub struct Checker {
     /// Lexicon words that came from a source containing nothing but names —
     /// repos, taps, installed binaries, dependency manifests.
     from_naming_source: HashSet<String>,
+    /// People seen in captured messages: normalized key to (days seen,
+    /// display form). A full name is one entry.
+    people: std::collections::HashMap<String, (i64, String)>,
     dictionary: OnceCell<Option<crate::dict::Dictionary>>,
     /// Contractions derived from the dictionary and your lexicon, beyond the
     /// static table. Lazy, because building it needs the dictionary and the
@@ -109,6 +120,7 @@ impl Checker {
             frequency: std::collections::HashMap::new(),
             observed: std::collections::HashMap::new(),
             from_naming_source: HashSet::new(),
+            people: std::collections::HashMap::new(),
             dictionary: cell,
             derived_contractions: OnceCell::new(),
             profile: Rc::new(Profile::disabled()),
@@ -122,10 +134,17 @@ impl Checker {
             frequency: std::collections::HashMap::new(),
             observed: std::collections::HashMap::new(),
             from_naming_source: HashSet::new(),
+            people: std::collections::HashMap::new(),
             dictionary: OnceCell::new(),
             derived_contractions: OnceCell::new(),
             profile,
         }
+    }
+
+    /// Attach the people seen in captured messages, with their corroboration.
+    pub fn with_people(mut self, people: std::collections::HashMap<String, (i64, String)>) -> Self {
+        self.people = people;
+        self
     }
 
     /// Mark which lexicon words arrived from a naming source.
@@ -270,6 +289,53 @@ impl Checker {
         false
     }
 
+    /// Is this a misspelling of someone we know?
+    ///
+    /// Deliberately the strictest test in this crate, because the cost is
+    /// asymmetric in a way word corrections are not: telling someone they
+    /// misspelled a colleague's name and being wrong is worse than missing it,
+    /// and `Jon` and `John` are frequently *both* real people.
+    ///
+    /// So: one edit only, never two. The candidate must be unknown as a word
+    /// and unknown as a person. Exactly one known person may be that close —
+    /// ambiguity is silence. And that person must have been seen on at least
+    /// two separate days, so a name typed once cannot convict a name typed
+    /// twice.
+    fn misspelled_name(&self, candidate: &str) -> Option<(String, f32)> {
+        if candidate.chars().count() < MIN_NAME_LENGTH {
+            return None;
+        }
+        // Already a person, or an ordinary word used as a name — `Field`,
+        // `Green`, `Baker` are all surnames and all words.
+        if self.people.contains_key(candidate) || self.knows(candidate) {
+            return None;
+        }
+
+        let mut matches = self
+            .people
+            .iter()
+            .filter(|(_, (days, _))| *days >= NAME_CORROBORATION)
+            .filter(|(known, _)| bounded_distance(candidate, known, 1).is_some());
+
+        let (_, (days, display)) = matches.next()?;
+        // Two people equally close means we cannot tell which was meant.
+        if matches.next().is_some() {
+            return None;
+        }
+
+        // Evidence creates confidence: a name seen across many days, and a
+        // longer name where a single edit is a smaller share of the whole,
+        // are both firmer ground. Capped well below the word paths — this is
+        // a guess about a person.
+        let corroboration = ((*days as f32) / 8.0).min(1.0);
+        let length = (candidate.chars().count() as f32 / 12.0).min(1.0);
+        let confidence = 0.40 + 0.25 * (0.5 * corroboration + 0.5 * length);
+        Some((
+            display.clone(),
+            crate::types::round(confidence as f64, 2) as f32,
+        ))
+    }
+
     /// The backstop, loading it on first use.
     fn dictionary(&self) -> Option<&crate::dict::Dictionary> {
         self.dictionary
@@ -400,6 +466,49 @@ impl Checker {
             if text::is_proper_noun(&token.text, starts_sentence) {
                 self.profile.count("proper_nouns_skipped", 1);
                 names.observe_proper_noun(&token.text);
+
+                // Everything above skips capitalized tokens outright, which is
+                // right while no dictionary can hold a name. Once people are
+                // known, the same tokens become the only place a misspelled
+                // colleague could ever be caught.
+                //
+                // The whole capitalized run is tried before its first token,
+                // because a full name is far stronger evidence than either
+                // half: `Ada Lovelacee` against `ada lovelace` is one edit in
+                // twelve characters, where `Lovelacee` alone would have to be
+                // judged on its own.
+                let run_end = tokens[i..]
+                    .iter()
+                    .zip(normalized[i..].iter())
+                    .take_while(|(t, _)| {
+                        t.text
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_uppercase())
+                    })
+                    .count();
+                for len in (1..=run_end).rev() {
+                    let candidate = normalized[i..i + len].join(" ");
+                    if let Some((correct, confidence)) = self.misspelled_name(&candidate) {
+                        self.profile.count("name_findings", 1);
+                        findings.push(Finding {
+                            kind: FindingKind::Unknown,
+                            word: tokens[i..i + len]
+                                .iter()
+                                .map(|t| t.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            line: line_no,
+                            col: token.col,
+                            suggestions: vec![Suggestion {
+                                word: correct,
+                                score: 1.0,
+                            }],
+                            confidence,
+                        });
+                        break;
+                    }
+                }
                 continue;
             }
             self.profile.count("tokens_checked", 1);
@@ -952,6 +1061,81 @@ mod tests {
     fn observed(pairs: &[(&str, i64)], dictionary: &[&str]) -> Checker {
         Checker::new(HashSet::new(), Some(crate::dict::from_words(dictionary)))
             .with_observed(pairs.iter().map(|(w, n)| (w.to_string(), *n)).collect())
+    }
+
+    fn with_people(pairs: &[(&str, i64)]) -> Checker {
+        Checker::new(HashSet::new(), Some(crate::dict::from_words(["field"]))).with_people(
+            pairs
+                .iter()
+                .map(|(n, d)| {
+                    let display: String = n
+                        .split(' ')
+                        .map(|w| {
+                            let mut c = w.chars();
+                            match c.next() {
+                                Some(f) => f.to_uppercase().to_string() + c.as_str(),
+                                None => String::new(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    (n.to_string(), (*d, display))
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn catches_a_misspelled_colleague() {
+        let c = with_people(&[("ada lovelace", 3)]);
+        let (name, _) = c.misspelled_name("ada lovelacee").unwrap();
+        assert_eq!(name, "Ada Lovelace");
+    }
+
+    #[test]
+    fn a_name_seen_on_one_day_cannot_convict_another() {
+        // Seen once, it is as likely to be the typo as the target.
+        let c = with_people(&[("ada lovelace", 1)]);
+        assert!(c.misspelled_name("ada lovelacee").is_none());
+    }
+
+    #[test]
+    fn two_people_equally_close_means_silence() {
+        // Both are real people and the typo is one edit from each, so there is
+        // no way to tell which was meant. Telling someone they misspelled a
+        // colleague when they did not is worse than missing it.
+        let c = with_people(&[("jon smith", 5), ("ron smith", 5)]);
+        assert!(c.misspelled_name("ton smith").is_none());
+
+        // With only one of them known, the same input is answerable.
+        let c = with_people(&[("jon smith", 5)]);
+        assert!(c.misspelled_name("ton smith").is_some());
+    }
+
+    #[test]
+    fn a_surname_that_is_also_a_word_is_left_alone() {
+        // `Field`, `Green`, `Baker` are all surnames and all words.
+        let c = with_people(&[("fields", 5)]);
+        assert!(c.misspelled_name("field").is_none());
+    }
+
+    #[test]
+    fn two_edits_away_is_not_a_misspelling() {
+        // Names are short and a second edit reaches a different person.
+        let c = with_people(&[("ada lovelace", 5)]);
+        assert!(c.misspelled_name("ada lovelaces").is_some());
+        assert!(c.misspelled_name("eda lovelaces").is_none());
+    }
+
+    #[test]
+    fn confidence_grows_with_corroboration() {
+        let seldom = with_people(&[("ada lovelace", 2)]);
+        let often = with_people(&[("ada lovelace", 8)]);
+        let a = seldom.misspelled_name("ada lovelacee").unwrap().1;
+        let b = often.misspelled_name("ada lovelacee").unwrap().1;
+        assert!(b > a, "{b} should exceed {a}");
+        // A guess about a person stays below the word paths.
+        assert!(b <= 0.70);
     }
 
     #[test]

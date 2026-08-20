@@ -525,6 +525,46 @@ separator line in a captured message became a word.
 still uses is the most embarrassing false positive available, and recency
 should inform *confidence* rather than membership if it is ever used at all.
 
+## 12j. Catching a misspelled colleague **[measured]**
+
+Names are the case a dictionary can never cover, and misspelling one is the
+most socially expensive error this tool could help with. They were also
+completely invisible: `is_proper_noun` skips every mid-sentence capital, which
+is exactly right while nothing knows any names and exactly wrong once
+something does.
+
+That skip is also what makes this safe to attempt. The check fires **only** on
+tokens the checker previously refused to look at, so ordinary word handling
+cannot regress by construction — and measurement agrees: recall 72.0%,
+precision 95.1%, 1.02 false positives per thousand, unchanged.
+
+### The bar, which is the strictest in the crate
+
+The asymmetry is worse than for words. `Jon` and `John` are frequently *both*
+real people, and telling someone they misspelled a colleague when they did not
+is worse than saying nothing at all. So:
+
+- **One edit, never two.** Names are short; a second edit reaches a different
+  person rather than a typo of this one.
+- **Exactly one candidate.** Two known people equally close means silence,
+  because there is no way to tell which was meant.
+- **Two separate days.** A name seen once is as likely to be the typo as the
+  target, so it cannot convict anything.
+- **Not already a word.** `Field`, `Green`, and `Baker` are surnames and also
+  words, and the word reading wins.
+- **Four characters minimum.** Initials sit one edit from half the world.
+
+### The run is tried before its parts
+
+`Ada Lovelacee` is matched against `ada lovelace` as a whole, because a full
+name is far stronger evidence than either half — one edit in twelve characters
+rather than a judgement on `Lovelacee` alone. The longest capitalized run is
+tried first and shortened only on failure, which also means a common first
+name never becomes individually acceptable.
+
+Confidence follows the evidence, as everywhere else: days seen and name length,
+capped below the word paths, because this is a guess about a person.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

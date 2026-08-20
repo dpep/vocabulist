@@ -76,6 +76,15 @@
   work without anyone having listed them, and a form you personally write
   (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
   are still left alone, which is the whole safety property.
+- **A misspelled colleague's name is caught.** `Ada Lovelacee` now suggests
+  `Ada Lovelace`. This fires only on mid-sentence capitals, which the checker
+  previously skipped outright, so ordinary word handling is untouched.
+
+  The bar is the strictest in the crate, because `Jon` and `John` are often
+  both real people: one edit only, exactly one candidate that close, the
+  person seen on two separate days, not already a word, and four characters
+  minimum. The full capitalized run is matched before its parts, so a common
+  first name never becomes individually acceptable.
 - **People are learned from the messages you read.** Every Slack `From:` line
   and GitHub login was already being parsed to decide which messages are
   yours, and everyone else was discarded — authors included. Those are the

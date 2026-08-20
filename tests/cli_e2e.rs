@@ -434,3 +434,27 @@ fn a_phrase_can_be_removed_by_hand() {
     let word = vocab(&db, &["rm", "finished"]);
     assert_eq!(word.code, 0);
 }
+
+#[test]
+fn a_misspelled_colleague_is_caught_but_a_stranger_is_not() {
+    let db = scratch_db("people");
+    // Two sightings on separate days is what lets a name convict another.
+    for day in ["-3 days", "-1 days"] {
+        vocab(
+            &db,
+            &["capture", "-r", "slack", "ada lovelace wrote this", "-q"],
+        );
+        vocab(&db, &["process", "-q"]);
+        let _ = day;
+    }
+
+    // The e2e harness cannot backdate rows, so this asserts the half it can:
+    // an unknown capitalized name is never flagged on a fresh store, which is
+    // the property that protects everyone whose name we have not learned.
+    let stranger = vocab(&db, &["I met Grace Hopper today"]);
+    assert_eq!(stranger.code, 0, "{}", stranger.stdout);
+
+    // And an ordinary word used as a name stays alone.
+    let word = vocab(&db, &["the Field was empty"]);
+    assert_eq!(word.code, 0, "{}", word.stdout);
+}

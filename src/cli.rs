@@ -661,10 +661,16 @@ fn dispatch_inner(
             let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
             let (trusted, observed, people) = store.checkable()?;
             let (lexicon, mut names) = split_trusted(trusted);
-            names.extend(people);
+            names.extend(people.iter().map(|(n, _, _)| n.clone()));
             let checker = Checker::with_profile(lexicon, Rc::clone(profile))
                 .with_observed(observed.into_iter().collect())
                 .with_naming_sources(names)
+                .with_people(
+                    people
+                        .into_iter()
+                        .map(|(n, d, disp)| (n, (d, disp)))
+                        .collect(),
+                )
                 .with_frequency(store.frequencies()?);
             let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
 
@@ -796,7 +802,7 @@ fn check_input(
     // People rank as names for suggestion purposes: a colleague's name is not
     // a candidate correction for a lowercase ordinary word.
     profile.count("people", people.len() as u64);
-    names.extend(people);
+    names.extend(people.iter().map(|(n, _, _)| n.clone()));
     let observed: std::collections::HashMap<String, i64> = observed.into_iter().collect();
     profile.count("lexicon_words", lexicon.len() as u64);
     profile.count("observed_words", observed.len() as u64);
@@ -806,6 +812,12 @@ fn check_input(
     let checker = Checker::with_profile(lexicon, Rc::clone(profile))
         .with_observed(observed)
         .with_naming_sources(names)
+        .with_people(
+            people
+                .into_iter()
+                .map(|(n, d, disp)| (n, (d, disp)))
+                .collect(),
+        )
         .with_frequency(frequency);
     let mut evidence = |gram: &str| {
         profile.count("ngram_queries", 1);

@@ -227,7 +227,11 @@ fn add_column(conn: &Connection, sql: &str) -> Result<()> {
 /// The lexicon split by how much it has earned: words from a deliberate
 /// source, merely-observed words paired with the number of distinct days
 /// backing each, and the subset that are people.
-pub type Checkable = (Vec<(String, Provenance)>, Vec<(String, i64)>, Vec<String>);
+pub type Checkable = (
+    Vec<(String, Provenance)>,
+    Vec<(String, i64)>,
+    Vec<(String, i64, String)>,
+);
 
 /// One staged body awaiting processing.
 #[derive(Debug, Clone, PartialEq)]
@@ -379,7 +383,7 @@ impl Store {
         // evidence wearing two hats. Counting days is the cheapest honest
         // version of "independent contexts".
         let mut stmt = self.conn.prepare(
-            "SELECT l.word, l.provenance, l.kind,
+            "SELECT l.word, l.provenance, l.kind, l.display,
                     (SELECT COUNT(DISTINCT date(s.first_seen))
                        FROM word_sources s WHERE s.word = l.word)
              FROM lexicon l",
@@ -392,14 +396,17 @@ impl Store {
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
-                r.get::<_, i64>(3)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
             ))
         })?;
         for row in rows {
-            let (word, provenance, kind, sources) = row?;
+            let (word, provenance, kind, display, sources) = row?;
             let provenance = Provenance::parse(&provenance).unwrap_or(Provenance::Observed);
             if kind.as_deref() == Some("person") {
-                people.push(word.clone());
+                // Display form carried alongside: a name should be suggested
+                // the way it is written, not the way it is keyed.
+                people.push((word.clone(), sources, display));
             }
             if provenance > Provenance::Observed {
                 trusted.push((word, provenance));
@@ -1257,7 +1264,12 @@ mod tests {
         let s = store();
         s.record_person("Ada Lovelace", "msg-1").unwrap();
         let (_, _, people) = s.checkable().unwrap();
-        assert!(people.contains(&"ada lovelace".to_string()));
+        let (key, _, display) = people.iter().find(|(w, _, _)| w == "ada lovelace").unwrap();
+        assert_eq!(key, "ada lovelace");
+        assert_eq!(
+            display, "Ada Lovelace",
+            "the display form is what gets suggested"
+        );
 
         // And corroborates by day like everything else: one sighting is not
         // yet evidence that this is how the name is spelled.
