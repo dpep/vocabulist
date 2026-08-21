@@ -16,9 +16,11 @@ use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus};
 /// identical shape.
 /// Emit one finding immediately, for the streaming path.
 ///
-/// Flushed explicitly: Rust block-buffers stdout when it is a pipe, so
-/// without this a downstream consumer sees nothing until the buffer fills or
-/// the process exits — which defeats the point of a line-oriented format.
+/// The flush is insurance, not the mechanism: Rust's `StdoutLock` is a
+/// `LineWriter`, so a `writeln!` already reaches the pipe. It is here because
+/// wrapping `out` in a `BufWriter` — an ordinary thing to do for speed —
+/// would silently turn that into 8K block buffering, and the symptom is
+/// invisible in the output bytes.
 pub fn stream_finding(out: &mut impl Write, finding: &Finding) -> std::io::Result<()> {
     writeln!(out, "{}", serde_json::to_string(finding).unwrap())?;
     out.flush()

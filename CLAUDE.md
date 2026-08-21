@@ -59,8 +59,8 @@ decisions — reach for it before inventing a method that has a name.
 - **Every command is agent/script-friendly.** *All* output honors the format —
   analysis and command status alike. Resolve it once via `Cli::format()`;
   render through `output::`. `-j/--json` is a pretty array or object,
-  `-J/--ndjson` is one compact object per line **and streams** — emitted and
-  flushed as each result is produced, not collected and printed at EOF. That
+  `-J/--ndjson` is one compact object per line **and streams** — each result
+  is emitted as it is produced, not collected and printed at EOF. That
   is the only difference between a line format and a pipe, and it is invisible
   in the bytes, so it is asserted by timing in `tests/cli_e2e.rs`. `-j` cannot
   stream, a pretty array being one document, which is why both exist. When you
