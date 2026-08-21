@@ -31,7 +31,12 @@ carries its own share of \"this is what you meant\".
 
 Checking is deliberately reluctant: a false alarm teaches you to ignore the
 tool, a missed typo costs almost nothing. -j/--json and -J/--ndjson switch to
-machine output on every command, and clean input exits 0 while findings exit 1.
+machine output on every command; -J streams a finding per line as it is read.
+
+Exit codes (1 reads two ways, by the command's job):
+  checking   0 clean, 1 findings          — drops into a hook or CI unwrapped
+  querying   0 a result, 1 none           — grep's convention, so `&&` reads
+  any        2 an operational error       — never a verdict
 
 Examples:
   vocab \"ship the small change\"     check one string
