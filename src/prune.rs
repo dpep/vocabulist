@@ -66,7 +66,7 @@ pub fn run(
     // asked for, since loading the dictionary is the expensive part.
     let vouchers: Option<HashSet<String>> = strict.then(|| {
         let mut known: HashSet<String> = crate::dict::load()
-            .map(|d| d.into_keys().collect())
+            .map(|d| d.into_iter().map(|(w, _)| w.to_string()).collect())
             .unwrap_or_default();
         if let Ok(entries) = store.list(None, usize::MAX) {
             for entry in entries {

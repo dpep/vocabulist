@@ -232,11 +232,7 @@ impl Checker {
     fn derived_contraction(&self, word: &str) -> Option<&str> {
         self.derived_contractions
             .get_or_init(|| {
-                let dictionary = self
-                    .dictionary()
-                    .into_iter()
-                    .flatten()
-                    .map(|(w, _)| w.as_str());
+                let dictionary = self.dictionary().into_iter().flatten().map(|(w, _)| *w);
                 let known = self.lexicon.iter().map(String::as_str).chain(dictionary);
                 crate::contraction::derive(known, |w| self.knows_atom(w))
             })
@@ -754,7 +750,8 @@ impl Checker {
         // sit one edit from everything, and letting provenance win would bury
         // the obvious correction under them.
         self.profile.count("suggest_calls", 1);
-        let mut scored: Vec<(usize, u8, i64, isize, isize, u8, &String)> = Vec::new();
+        let _scan = self.profile.timer("suggest");
+        let mut scored: Vec<(usize, u8, i64, isize, isize, u8, &str)> = Vec::new();
         // Collected once, not once per candidate.
         let query: Vec<char> = word.chars().collect();
         let mut scratch = Scratch::default();
@@ -762,8 +759,8 @@ impl Checker {
         for (candidate, rank) in self
             .lexicon
             .iter()
-            .map(|c| (c, 0u8))
-            .chain(dictionary.map(|(c, _)| (c, 1u8)))
+            .map(|c| (c.as_str(), 0u8))
+            .chain(dictionary.map(|(c, _)| (*c, 1u8)))
         {
             // Every known word is measured against every unknown one. This
             // counter is what makes that cost visible under --profile.
@@ -787,7 +784,7 @@ impl Checker {
 
         scored.sort();
         scored.dedup_by(|a, b| a.6 == b.6);
-        let kept: Vec<(usize, &String)> = scored
+        let kept: Vec<(usize, &str)> = scored
             .into_iter()
             .take(MAX_SUGGESTIONS)
             .map(|(d, _, _, _, _, _, w)| (d, w))
@@ -797,7 +794,7 @@ impl Checker {
         // word is at all, times how likely this typo is given that word.
         // Frequency supplies the first term; edit distance stands in for the
         // second, since a second edit is far rarer than a first.
-        let mut weighted: Vec<(f64, &String, usize)> = kept
+        let mut weighted: Vec<(f64, &str, usize)> = kept
             .iter()
             .map(|(distance, candidate)| {
                 // Log-compressed, because these counts are not probabilities
@@ -838,7 +835,7 @@ impl Checker {
         let mut out: Vec<Suggestion> = weighted
             .into_iter()
             .map(|(weight, candidate, _)| Suggestion {
-                word: candidate.clone(),
+                word: candidate.to_string(),
                 // Normalized, so the scores read as a distribution over the
                 // candidates offered rather than as unrelated magnitudes.
                 // Rounded: these are estimates from a rough error model, and
@@ -1105,10 +1102,10 @@ impl Scratch {
 mod tests {
     use super::*;
 
-    fn checker(lexicon: &[&str], dictionary: &[&str]) -> Checker {
+    fn checker(lexicon: &[&str], dictionary: &[&'static str]) -> Checker {
         Checker::new(
             lexicon.iter().map(|s| s.to_string()).collect(),
-            Some(crate::dict::from_words(dictionary)),
+            Some(crate::dict::from_words(dictionary.iter().copied())),
         )
     }
 
@@ -1119,8 +1116,11 @@ mod tests {
     /// Just the words, for assertions that don't care about the scores.
     /// A fixture dictionary of genuinely common words. `from_words` claims
     /// only middling frequency, which several rules here rightly reject.
-    fn common(words: &[&str]) -> crate::dict::Dictionary {
-        words.iter().map(|w| (w.to_string(), 10u8)).collect()
+    fn common(words: &[&'static str]) -> crate::dict::Dictionary {
+        // Sorted, because lookups binary search.
+        let mut out: crate::dict::Dictionary = words.iter().map(|w| (*w, 10u8)).collect();
+        out.sort_unstable();
+        out
     }
 
     fn words(suggestions: &[Suggestion]) -> Vec<&str> {
@@ -1256,9 +1256,12 @@ mod tests {
         );
     }
 
-    fn observed(pairs: &[(&str, i64)], dictionary: &[&str]) -> Checker {
-        Checker::new(HashSet::new(), Some(crate::dict::from_words(dictionary)))
-            .with_observed(pairs.iter().map(|(w, n)| (w.to_string(), *n)).collect())
+    fn observed(pairs: &[(&str, i64)], dictionary: &[&'static str]) -> Checker {
+        Checker::new(
+            HashSet::new(),
+            Some(crate::dict::from_words(dictionary.iter().copied())),
+        )
+        .with_observed(pairs.iter().map(|(w, n)| (w.to_string(), *n)).collect())
     }
 
     fn with_people(pairs: &[(&str, i64)]) -> Checker {
@@ -1315,7 +1318,8 @@ mod tests {
         // The obscure tail of a word list is full of concatenations nobody
         // wrote.
         let mut dict = common(&["warm"]);
-        dict.insert("lukewarm".into(), 60);
+        dict.push(("lukewarm", 60));
+        dict.sort_unstable();
         let c = Checker::new(HashSet::new(), Some(dict));
         assert!(c.join_with_neighbour("luke", None, Some("warm")).is_none());
     }
@@ -1341,8 +1345,9 @@ mod tests {
         //
         // Here `ch` and `ail` exist but are not common, so no split is found.
         let mut dict = common(&["chain", "chair", "hail"]);
-        dict.insert("ch".into(), 50);
-        dict.insert("ail".into(), 50);
+        dict.push(("ch", 50));
+        dict.push(("ail", 50));
+        dict.sort_unstable();
         let c = Checker::new(HashSet::new(), Some(dict));
         let suggestions = c.suggest("chail");
         assert!(
@@ -1356,8 +1361,9 @@ mod tests {
         // Two readings is a coin flip, not a correction: `alot` reads as
         // `a lot` and `al ot` if the word list is deep enough.
         let mut dict = common(&["a", "lot"]);
-        dict.insert("al".into(), 10);
-        dict.insert("ot".into(), 10);
+        dict.push(("al", 10));
+        dict.push(("ot", 10));
+        dict.sort_unstable();
         let c = Checker::new(HashSet::new(), Some(dict));
         assert!(c.split_in_two("alot").is_none());
     }
@@ -1441,7 +1447,6 @@ mod tests {
         // resembling something obscure is not evidence of a slip.
         let common: crate::dict::Dictionary = [("should", 10u8), ("shout", 10), ("the", 10)]
             .into_iter()
-            .map(|(w, level)| (w.to_string(), level))
             .collect();
         let with = |sources| {
             Checker::new(HashSet::new(), Some(common.clone()))

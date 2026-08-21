@@ -709,6 +709,30 @@ is never shorter in bytes than in characters, so most candidates are dismissed
 without decoding at all. A cold pass over the reference corpus went 91ms to
 48ms, with identical output.
 
+**Loading the word list was hashing, not allocating.** ✅
+
+`--profile` reported `dictionary_load` at ~8ms — most of the ~11ms floor every
+check pays, for a lookup table that is identical on every run.
+
+The obvious cause was wrong. The map was `HashMap<String, u8>` built from
+`include_str!`'d text, so it allocated 102,495 strings to hold data that was
+already `'static`; borrowing instead barely moved it. The cost was **hashing**
+102,495 keys.
+
+A `Vec` is 36x cheaper to build than a `HashMap`, measured. So the list is now
+emitted globally sorted as `<word>\t<level>` and a lookup is a binary search —
+loading is one pass with no hashing at all.
+
+| | before | after |
+|---|---|---|
+| `dictionary_load` | ~8ms | ~3.8ms |
+| fixed cost of a check | 11.3ms | **6.3ms** |
+| cold pass over the corpus | 91ms → 48ms | **32ms** |
+
+Output is identical: 72.0% recall, 95.1% precision, 1.02 per thousand. The
+generator was updated to emit the new shape and verified to reproduce the
+committed file byte for byte.
+
 **Trigram indexing is not worth it from here.** Indexing words by character
 trigram and comparing only those that share one would take 5.6ms to perhaps
 1ms — but building the index over 102k words costs tens of milliseconds, which

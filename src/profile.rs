@@ -56,6 +56,16 @@ impl Profile {
 
     /// Time `f` under `key`, accumulating across calls. Runs `f` either way —
     /// only the bookkeeping is conditional.
+    /// Time a scope rather than a closure, for hot paths where wrapping the
+    /// body in a closure would fight the borrow checker.
+    pub fn timer(&self, key: &'static str) -> Option<ScopeTimer<'_>> {
+        self.enabled.then(|| ScopeTimer {
+            profile: self,
+            key,
+            started: Instant::now(),
+        })
+    }
+
     pub fn time<T>(&self, key: &'static str, f: impl FnOnce() -> T) -> T {
         if !self.enabled {
             return f();
@@ -123,6 +133,24 @@ impl Profile {
                 writeln!(out, "{text}")
             }
         }
+    }
+}
+
+/// Records elapsed time when it goes out of scope.
+pub struct ScopeTimer<'a> {
+    profile: &'a Profile,
+    key: &'static str,
+    started: Instant,
+}
+
+impl Drop for ScopeTimer<'_> {
+    fn drop(&mut self) {
+        *self
+            .profile
+            .timers
+            .borrow_mut()
+            .entry(self.key)
+            .or_default() += self.started.elapsed();
     }
 }
 

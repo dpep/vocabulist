@@ -821,7 +821,7 @@ fn check_input(
         .with_frequency(frequency);
     let mut evidence = |gram: &str| {
         profile.count("ngram_queries", 1);
-        store.ngram_count(gram).unwrap_or(0)
+        profile.time("ngram_lookup", || store.ngram_count(gram).unwrap_or(0))
     };
 
     let mut findings: Vec<Finding> = Vec::new();
@@ -831,16 +831,18 @@ fn check_input(
 
     if let Some(text) = &cli.text {
         for line in text.lines() {
-            findings.extend(scanner.feed(line, &mut evidence));
+            findings.extend(profile.time("check", || scanner.feed(line, &mut evidence)));
         }
     } else if let Some(path) = &cli.file {
         let file = std::fs::File::open(path)?;
         for line in io::BufReader::new(file).lines() {
-            findings.extend(scanner.feed(&line?, &mut evidence));
+            let line = line?;
+            findings.extend(profile.time("check", || scanner.feed(&line, &mut evidence)));
         }
     } else if !io::stdin().is_terminal() {
         for line in io::stdin().lock().lines() {
-            findings.extend(scanner.feed(&line?, &mut evidence));
+            let line = line?;
+            findings.extend(profile.time("check", || scanner.feed(&line, &mut evidence)));
         }
     } else {
         Cli::command().print_help()?;
