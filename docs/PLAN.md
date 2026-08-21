@@ -694,9 +694,32 @@ Note this is separate from `text::normalize`, which strips possessive `'s`
 before lookup and is still right: `debugger's` is a form of `debugger`, not a
 word to be listed.
 
+**Scanning every candidate was allocation, not arithmetic.** ✅
+
+Each suggestion cost **19.7ms**, and the fix was not the interesting one.
+`bounded_distance` collected the query's characters *per candidate* — the same
+query, 102k times — collected the candidate's, and allocated three DP rows.
+Five heap allocations against every dictionary word, half a million per
+suggestion, and the length check that rejects most candidates ran after the
+first two.
+
+Hoisting the buffers into a reusable scratch and rejecting on length first took
+it to **5.6ms**. The early reject uses the *byte* count, since a UTF-8 string
+is never shorter in bytes than in characters, so most candidates are dismissed
+without decoding at all. A cold pass over the reference corpus went 91ms to
+48ms, with identical output.
+
+**Trigram indexing is not worth it from here.** Indexing words by character
+trigram and comparing only those that share one would take 5.6ms to perhaps
+1ms — but building the index over 102k words costs tens of milliseconds, which
+dominates the common case of a prompt containing zero or one unknown word. It
+pays only for documents thick with typos, and the allocation fix already
+covers those. Banding the DP to the |i−j| ≤ 2 diagonal stays available and is
+cheaper than any index.
+
 **Deliberately not doing yet:** BK-trees and SymSpell-style deletion
 neighborhoods. `vocab` is a per-invocation CLI, so any index dies with the
-process — a distance-2 delete neighborhood over 236k words costs seconds to
+process — a distance-2 delete neighborhood over 102k words costs seconds to
 build and tens of MB to hold, which would have to be persisted, coupling a
 derived index to the schema and to dictionary-file invalidation. These earn
 their keep in the Phase 5 LSP, which is a long-lived process worth amortizing
