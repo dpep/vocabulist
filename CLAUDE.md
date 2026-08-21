@@ -63,8 +63,8 @@ decisions — reach for it before inventing a method that has a name.
   flushed as each result is produced, not collected and printed at EOF. That
   is the only difference between a line format and a pipe, and it is invisible
   in the bytes, so it is asserted by timing in `tests/cli_e2e.rs`. `-j` cannot
-  stream, a pretty array being one document, which is why both exist. When you add a command or a
-  payload field, give it structured output in the same change and keep field
+  stream, a pretty array being one document, which is why both exist. When you
+  add a command or a payload field, give it structured output in the same change and keep field
   names in `src/types.rs` stable — consumers parse them.
 - **Exit codes follow the convention of the command's job**, which means
   `1` reads two ways and that is deliberate:

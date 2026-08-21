@@ -188,6 +188,10 @@ vocab self                     # the handles believed to be yours
 vocab prune --dry-run          # what an older, looser capture rule let in
 ```
 
+`-J` is a real pipe: each finding is written and flushed as its line is
+checked, so `tail -f notes.md | vocab -J` reports as you type. `-j` buffers by
+necessity — a pretty array is one document — which is why both exist.
+
 `status` also reports what it has actually *read* — bodies per register, messages
 captured per service — and which spell checkers the lexicon has been exported
 into, including how many words in a shared file are ours rather than yours:
