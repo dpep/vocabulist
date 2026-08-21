@@ -477,3 +477,44 @@ fn a_compound_written_as_two_words_is_offered_joined() {
         assert_eq!(clean.code, 0, "{text}: {}", clean.stdout);
     }
 }
+
+/// `-J` must emit as it reads, not at EOF.
+///
+/// The assertion is the *timing*, because the output is byte-identical either
+/// way: a format that only appears once the producer finishes is line-shaped
+/// but not a pipe, and `tail -f | vocab -J` would print nothing forever.
+#[test]
+fn ndjson_streams_rather_than_buffering() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let db = scratch_db("ndjson_stream");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .args(["--db", db.to_str().unwrap(), "-J"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "a line with zblorgw in it").unwrap();
+    stdin.flush().unwrap();
+
+    // Read one line with stdin still open. If the child buffered until EOF
+    // this blocks forever, so the test is guarded by a reader thread.
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = out.read_line(&mut line);
+        let _ = tx.send(line);
+    });
+
+    let first = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("no output before EOF: -J is buffering, not streaming");
+    assert!(first.contains("zblorgw"), "{first}");
+
+    drop(stdin);
+    child.wait().unwrap();
+}

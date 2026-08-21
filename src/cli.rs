@@ -824,32 +824,46 @@ fn check_input(
         profile.time("ngram_lookup", || store.ngram_count(gram).unwrap_or(0))
     };
 
-    let mut findings: Vec<Finding> = Vec::new();
     // A scanner rather than bare check_line: fenced blocks and front matter
     // can only be recognized with memory of the lines above.
     let mut scanner = crate::check::Scanner::new(&checker);
 
-    if let Some(text) = &cli.text {
-        for line in text.lines() {
-            findings.extend(profile.time("check", || scanner.feed(line, &mut evidence)));
-        }
+    // NDJSON emits as it reads; every other format collects and renders at the
+    // end. A line-oriented format that only appears at EOF is line-*shaped*,
+    // not streaming — `tail -f log | vocab -J` would print nothing, and a long
+    // file would show nothing until it finished. `-j` cannot stream at all, a
+    // pretty array being a single document, which is why both formats exist.
+    let streaming = format == Format::Ndjson && !cli.quiet;
+
+    // One loop over all three input sources, so streaming is not implemented
+    // three times and cannot drift between them.
+    let lines: Box<dyn Iterator<Item = io::Result<String>> + '_> = if let Some(text) = &cli.text {
+        Box::new(text.lines().map(|line| Ok(line.to_string())))
     } else if let Some(path) = &cli.file {
-        let file = std::fs::File::open(path)?;
-        for line in io::BufReader::new(file).lines() {
-            let line = line?;
-            findings.extend(profile.time("check", || scanner.feed(&line, &mut evidence)));
-        }
+        Box::new(io::BufReader::new(std::fs::File::open(path)?).lines())
     } else if !io::stdin().is_terminal() {
-        for line in io::stdin().lock().lines() {
-            let line = line?;
-            findings.extend(profile.time("check", || scanner.feed(&line, &mut evidence)));
-        }
+        Box::new(io::stdin().lock().lines())
     } else {
         Cli::command().print_help()?;
         return Ok(ExitCode::SUCCESS);
+    };
+
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut found = false;
+    for line in lines {
+        let line = line?;
+        let batch = profile.time("check", || scanner.feed(&line, &mut evidence));
+        found |= !batch.is_empty();
+        if streaming {
+            for finding in &batch {
+                output::stream_finding(out, finding)?;
+            }
+        } else {
+            findings.extend(batch);
+        }
     }
 
-    if !cli.quiet {
+    if !cli.quiet && !streaming {
         // Only for a one-word positional argument: piped or --file input was
         // never going to be mistaken for a subcommand.
         let single_word = cli
@@ -861,10 +875,10 @@ fn check_input(
     }
     // Lint convention: clean input exits 0, findings exit 1, so this drops
     // into a pre-commit hook or CI step without a wrapper.
-    Ok(if findings.is_empty() {
-        ExitCode::SUCCESS
-    } else {
+    Ok(if found {
         ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     })
 }
 

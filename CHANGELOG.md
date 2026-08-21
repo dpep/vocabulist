@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--profile` reports where the time went — per-stage timings and counters, in
+  any output format.
+
+### Fixed
+
+- **`-J/--ndjson` now actually streams.** It was line-*shaped* but collected
+  every finding and printed at EOF, so `tail -f log | vocab -J` printed
+  nothing and a long file showed nothing until it finished. Findings are now
+  emitted and flushed per input line, which is the only difference between a
+  line format and a pipe.
+
+### Changed
+
+- Suggestions are roughly 3.5x faster, and startup about 2x, from removing
+  per-candidate allocations and binary-searching the word list rather than
+  hashing all of it at load. No change to what is suggested.
+
 ## 0.5.0 — 2026-08-20
 
 ### Breaking

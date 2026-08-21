@@ -14,6 +14,16 @@ use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus};
 /// The single structured-output path for findings. `-j` is a pretty array,
 /// `-J` is one object per line, so single-blob and streamed input emit an
 /// identical shape.
+/// Emit one finding immediately, for the streaming path.
+///
+/// Flushed explicitly: Rust block-buffers stdout when it is a pipe, so
+/// without this a downstream consumer sees nothing until the buffer fills or
+/// the process exits — which defeats the point of a line-oriented format.
+pub fn stream_finding(out: &mut impl Write, finding: &Finding) -> std::io::Result<()> {
+    writeln!(out, "{}", serde_json::to_string(finding).unwrap())?;
+    out.flush()
+}
+
 pub fn render_findings(
     out: &mut impl Write,
     findings: &[Finding],
