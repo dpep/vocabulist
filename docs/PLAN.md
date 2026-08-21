@@ -177,7 +177,7 @@ sources name the same term, so insert order can't change the outcome.
 ## 8. Real-word errors
 
 The class of typo that survives into sent mail: `form` for `from`, `casual`
-for `causal`, `pubic` for `public`. A dictionary is **structurally blind** to
+for `causal`, `manger` for `manager`. A dictionary is **structurally blind** to
 these — both spellings are perfectly good words — so no amount of dictionary
 improvement helps. Only the company a word keeps gives it away.
 
@@ -603,11 +603,11 @@ flagged, try joining it with each neighbour and offer the compound if that is
 a common word.
 
 **The dangerous cases are excluded structurally rather than by a threshold.**
-`may be`/`maybe`, `any way`/`anyway`, `in to`/`into`, and `the rapist` — which
-a checker must never propose joining — all have two *known* halves. Neither
-token is ever flagged, so this code is never reached for any of them. That is
-a far stronger guarantee than a frequency ratio would have been, and it costs
-nothing.
+`may be`/`maybe`, `in to`/`into`, `read just`/`readjust`, `in form`/`inform` —
+every one of them decided by the sentence rather than the pair — all have two
+*known* halves. Neither token is ever flagged, so this code is never reached
+for any of them. That is a far stronger guarantee than a frequency ratio would
+have been, and it costs nothing.
 
 What stays invisible is a split compound where both halves are ordinary words
 and the join is nonetheless intended. Those are precisely the ambiguous ones,

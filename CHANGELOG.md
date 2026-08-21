@@ -4,215 +4,77 @@
 
 ### Breaking
 
-- `vocab stats` is now **`vocab status`**. Renamed rather than aliased: two
-  commands whose names differ by two letters and whose output is identical is
-  worse than one. `status` is also the word people reach for — and `vocab
-  status` previously spell-checked the *word* "status", found it correct, and
-  printed "No issues found", so a command that did not exist reported success.
-- Schema 6. A `kind` column records what a lexicon entry *is*, because
-  provenance cannot distinguish a colleague's name from any other captured
-  word. Existing databases migrate in place.
+- `vocab stats` is now **`vocab status`**. Two commands differing by two
+  letters with identical output is worse than one — and `vocab status`
+  previously spell-checked the *word* "status", found it correct, and printed
+  "No issues found", so a command that did not exist reported success.
+- **A word now needs two separate days to be learned, not two documents.**
+  Typos are bursty in time as well as within a message, so two documents from
+  one sitting was one piece of evidence counted twice. This makes an existing
+  lexicon stricter: words learned in a single session must be seen again on
+  another day. Nothing is ever forgotten — this is what a word must earn to
+  silence the checker, not decay.
+- Schema 6, migrated in place. A `kind` column records what an entry *is*,
+  because provenance cannot tell a colleague's name from any other captured
+  word.
 
 ### Added
 
-- `phrases` reports log-likelihood to two decimals. It is computed from a
-  handful of counts, so `61.08969673590383` was claiming evidence that isn't
-  there. Rounded where the value is built, so the JSON carries the same
-  precision the human output does.
-- `vocab rm --phrase "..."` removes a phrase. Phrases had no removal path at
-  all: they are derived counts and the prose is gone, so anything a rule
-  cannot recognize was permanent.
-- **A Wispr Flow target for `vocab sync`.** Dictation has more to gain from a
-  personal lexicon than a spell checker does: a checker only has to recognize
-  a word you typed, while dictation has to *choose* it from audio, so a name
-  it has never heard is unrecoverable rather than merely underlined.
-
-  Flow keeps its dictionary in the cloud and imports from CSV, so this writes
-  a file for you to hand it rather than one it reads — which makes it the one
-  target `unsync` cannot undo. It caps at Flow's 1,000-item import limit,
-  strongest words first.
-- `vocab prune` removes what today's capture rules would reject but an older
-  version already learned — session ids, tool-call ids, path fragments. The
-  default judges shape alone, which cannot take anything that was ever a word.
-  `--strict` also requires the dictionary or your lexicon to vouch for each
-  word, which reaches residue shape cannot and takes your own coinages with
-  it; `--dry-run` first.
-- Phrases up to five words, via `vocab phrases -n <2..5>`. Longer ones are
-  tracked only once the phrase one word shorter has recurred, which is sound
-  because a phrase can never appear more often than its own prefix — so
-  anything seen once cannot become a collocation and following it is provably
-  wasted. That keeps n=2..5 to about 4,400 rows on the reference corpus where
-  storing everything would take 17,200. Note the stored count for n>=3 runs at
-  least one below the true one, since counting starts when the prefix recurs.
-  The association test stays a 2x2 table by splitting at the *last* space, so
-  a longer phrase is scored as "does this one extend in a surprising way".
-- `vocab help <option>` works — `vocab help --completions` as well as `vocab
-  help status`. clap's built-in `help` only knows subcommands, so asking about
-  a flag answered "unrecognized subcommand", which is true and useless. An
-  unknown topic now lists what you could have asked about instead.
-- `--completions` defaults to the shell you are running, read from `$SHELL`.
-  Naming the shell is now the exception rather than the price of entry.
-- A one-word check now names the word: `"log" is spelled correctly`, rather
-  than a bare "No issues found" that reads like a command result.
-- `status` reports when the lexicon was last seeded, and paths are shown
-  relative to `~` in human output. JSON keeps absolute paths, since `~` is a
-  shell convention a consumer would have to know to expand.
-- `vocab status` reports what it has actually **read** — bodies per register,
-  messages captured per service — and which spell checkers the lexicon has
-  been exported into. For a shared file it distinguishes the words it wrote
-  from the ones you added yourself, which is the difference `unsync` depends
-  on.
-- **The dictionary is bundled, and it is a modern one.** The backstop was
-  `/usr/share/dict/words` — Webster's Second International of 1934, which
-  turned out to be wrong three ways: a *headword* list carrying `begin` but
-  not `began` and `boxcar` but not `box`, ninety years stale, and with no
-  frequency data, so `smal` offered `small`, `smalm`, and `smalt` as equals.
-
-  SCOWL levels 10-60 replace it. The levels are themselves a frequency
-  ranking, so one file answers both "is this a word" and "how common".
-  Cold-start false positives fell from 8.1 per thousand words to 0.7,
-  correction rate rose from 0.68 to 0.89, and a cold pass got 20x faster.
-
-  `vocab` no longer reads anything from the host, so it behaves the same on a
-  machine with no word list installed.
-- Suffix stripping is gone from dictionary lookup. It existed because the old
-  backstop carried headwords without inflections; the bundled list carries
-  them, so the stripper only accepted typos that happened to peel back to a
-  real word. Recall on the reference corpus rose from 87.5% to 95.8% with an
-  identical false-positive set.
-- **Contractions are derived rather than enumerated.** The hand-written table
-  of 35 covered the common cases and nothing else. The same rule — an
-  apostrophe form whose bare spelling is not itself a word — now runs over the
-  bundled dictionary *and* your lexicon, so `mightve`, `wholl`, and `shant`
-  work without anyone having listed them, and a form you personally write
-  (`y'all`) starts working once it has been seen. `cant`, `wont`, and `shell`
-  are still left alone, which is the whole safety property.
-- **A compound written as two words is offered joined.** `the water was luke
-  warm` now suggests `lukewarm`. `luke` was always being flagged — it is in no
-  dictionary — but the corrections were `like`, `lake`, `lure`.
-
-  The pairs that must *not* be joined — `may be`, `in to`, `some times`, and
-  `the rapist` — are excluded structurally rather than by a threshold: each
-  has two known halves, so neither token is ever flagged and the join is never
-  considered.
-- **A missing space is offered as a correction.** `alot` now suggests `a lot`
-  and `infact` suggests `in fact`. Both were already caught; the corrections
-  were `lot` and `intact`, because a missing space is not an edit the model
-  had. Both halves must be *common* words — a list deep enough to be useful
-  holds `al`, `ot`, and `ch`, which is why `chail` used to become `ch ail`.
-- **A misspelled colleague's name is caught.** `Ada Lovelacee` now suggests
-  `Ada Lovelace`. This fires only on mid-sentence capitals, which the checker
-  previously skipped outright, so ordinary word handling is untouched.
-
-  The bar is the strictest in the crate, because `Jon` and `John` are often
-  both real people: one edit only, exactly one candidate that close, the
-  person seen on two separate days, not already a word, and four characters
-  minimum. The full capitalized run is matched before its parts, so a common
-  first name never becomes individually acceptable.
-- **People are learned from the messages you read.** Every Slack `From:` line
-  and GitHub login was already being parsed to decide which messages are
-  yours, and everyone else was discarded — authors included. Those are the
-  names of people you work with, and no dictionary will ever hold them.
-
-  A full name is stored as a unit (`ada lovelace`), because either half alone
-  is near-worthless as evidence while the pair is nearly unique. `Kind` is now
-  stored rather than derived, since a colleague's name arrives with exactly
-  the provenance of any other captured word and only the source knows the
-  difference.
-
-  This slice classifies only: people rank as names, so a colleague is never
-  offered as the correction for a lowercase word. Flagging *misspelled* names
-  is not in yet.
-- **Corroboration counts distinct days rather than distinct documents.** Typos
-  are bursty in time as well as within a message, so two documents from one
-  sitting was one piece of evidence counted twice. Nothing is ever forgotten —
-  this is about what a word must earn before it silences the checker, not
-  about decay.
-- A run of punctuation is no longer a word. `is_lexical` allowed hyphens, as
-  it must for `re-word`, but never required a letter, so a separator line in a
-  captured message became the lexicon entry `-----------------`.
-- **A project name no longer outranks a word in suggestions.** 309 of the
-  short names in a real lexicon sit one edit from an ordinary word, and
-  lexicon membership carries a frequency floor — so `navv` offered the tools
-  `navi` and `nav` above `navy`. Suggestions now know whether a name or a word
-  was meant, from how the token was capitalized.
-
-  Kind sorts *after* distance, deliberately. Leading with it cost three points
-  of correction rate, because technical names are written lowercase —
-  `ripgrep`, `nixpkgs` — so demoting names for a lowercase token demotes
-  exactly the corrections that were wanted.
-- **Real-word confidence reflects the evidence behind it.** Every cue used to
-  report a flat `0.6`, so `apart from` — which beats `apart form` by 1444 to 1
-  — was indistinguishable from a cue that scraped past the threshold. The
-  margin now sets the confidence, logarithmically, between 0.50 and 0.80. It
-  stays below what corroborated personal collocations earn, because a rule
-  about English is weaker evidence than a fact about you.
-- **The cue table is derived from a corpus rather than written by hand.**
-  891 cues from Google Books Ngrams, and real-word recall goes from 26.3% to
-  **68.4%** with precision and false positives unchanged.
-
-  The corpus overruled three of the hand-written cues. `relationship` was
-  listed as selecting `causal`, where `casual relationship` in fact outnumbers
-  it three to one; `even`→`though` and `or`→`whether` both looked decisive at
-  90:1 and 65:1 but would fire on `even through the night` and `the weather or
-  the traffic`. Judging that is not something a person holds steady across
-  fifty pairs.
-- **Real-word errors are caught without a corpus.** The mechanism needed
-  collocation evidence, and a new lexicon has none, so it caught nothing for
-  weeks — measured, 0 of 19. A bundled table of discriminating collocates
-  covers the day-one case: `apart from` is idiomatic and `apart form` is
-  always a slip, so `apart` settles that confusion in any sentence. Recall
-  0% → 26%, no new false positives. Your own corpus still overrules it.
-- `vocab eval --kind` targets one class of error. Unrestricted sampling
-  produced one real-word injection in a 1,658-line corpus, which measured
-  nothing. Eval also reports false positives per thousand words, which is
-  comparable across corpora as precision is not.
+- **The dictionary is bundled, and modern.** SCOWL levels 10–60 replace
+  `/usr/share/dict/words` — which on macOS is Webster's Second of 1934, a
+  *headword* list holding `begin` but not `began` and `boxcar` but not `box`.
+  Its levels double as a frequency ranking, so one file answers both "is this
+  a word" and "how common". Cold-start false positives fell from 8.1 per
+  thousand words to 0.7, correction rate rose from 0.68 to 0.89, and a cold
+  pass got 20× faster. `vocab` now reads nothing from the host.
+- **Real-word errors are caught on day one.** A bundled table of 891
+  discriminating collocates, derived from Google Books Ngrams: `apart from` is
+  idiomatic and `apart form` is always a slip. Real-word recall went from 26%
+  to 68% with no change in precision. Your own collocations still supersede it.
+- **People are learned, and their names checked.** Every Slack `From:` line
+  and GitHub login was already parsed to decide which messages were yours,
+  then discarded. `Ada Lovelacee` now suggests `Ada Lovelace`, at the
+  strictest bar in the crate: one edit, exactly one candidate, seen on two
+  separate days, not already a word.
+- **Compounds in both directions.** `alot` suggests `a lot`; `luke warm`
+  suggests `lukewarm`. Both were already flagged — the corrections were `lot`
+  and `like`.
+- `vocab prune` removes what an older, looser capture rule let in — session
+  ids, path fragments. `--strict` reaches further and will take your coinages
+  with it, so read `--dry-run` first.
+- `vocab phrases -n 2..5`. Longer phrases are tracked only once the shorter one
+  recurs, which is sound because a phrase can never appear more often than its
+  own prefix — so n=2..5 costs 4,400 rows where storing everything costs
+  17,200.
+- `vocab status` reports what it has *read* and which spell checkers it exports
+  into. `vocab sync` gained a Wispr Flow target: dictation has more to gain
+  from a personal lexicon than a checker does, since it must *choose* a word
+  from audio rather than merely recognize one.
+- `vocab help <option>` explains a flag, not just a subcommand.
+  `--completions` defaults to the shell you are running.
 
 ### Fixed
 
 - **A typo typed once was learned, and the checker went blind to it.** The
-  lexicon was consulted as a flat set, so one occurrence in one document
-  taught a word permanently — an audit of a real store found nine of its
-  owner's own misspellings learned that way. A merely-observed word now needs
-  two independent contexts before it silences the checker, which is the bar
-  `sync` already applied before exporting a word elsewhere.
-
-  Words that sit one edit from a common word need three, because a chronic
-  misspelling looks exactly like new vocabulary from the inside and shadowing
-  something the writer already knows is what tells them apart. On held-out
-  prose this raised recall from 0.665 to 0.720 *and* precision from 0.939 to
-  0.951 — the typos already learned had been suppressing real detections.
-- **The harness's own text was being learned as yours.** A prompt is not only
-  what you typed: reminders get appended, and a finished background task
-  arrives as a whole turn of its own. So `background command`, `exit code`,
-  and `completed status` had become characteristic phrases of this user. The
-  hook now strips the injected envelopes before capture, and a turn that was
-  only a notification captures nothing. Ordinary markup in a prompt survives —
-  a question about `<div>` is still your prose.
-- **Paths, tags, and identifiers were entering the lexicon as words.** A path
-  was only recognized after whitespace, so `<output-file>/private/tmp/...`
-  contributed `private`, `tmp`, and `output-file`. Markup tags are now masked
-  too, since captured text arrives wrapped in them more often than you would
-  expect.
-- **Phrases were ranking session ids and path fragments above real phrases.**
-  N-grams were built over the unfiltered token sequence, so a UUID appearing
-  twice looked like a wildly surprising collocation. They are now built over
-  runs of ordinary words, which keeps junk out *and* keeps the tokens on
-  either side of it from being joined into an adjacency nobody wrote.
-- **URLs were only sometimes masked**, so `voidlinux`, `mdbook`, and
-  `repology` were reported as misspelled words. Spans were located by
-  searching the line for the string `iriq` returned, which works only while
-  canonicalization changes nothing — `voidlinux.org/p/?a=1` comes back as
-  `.../p?a=1` and matches nowhere. A repeated URL, the markdown badge shape,
-  was also masked only the first time.
-- **Names the document introduces are no longer flagged.** A README names a
-  tool in a table row, an install command, or a link before writing a sentence
-  about it; those regions were already being located in order to discard them.
-  Keeping them turns the discarded half of every line into a name list, and an
-  unknown word matching one is accepted.
-
-  Together: precision 0.77 → 0.92 against held-out technical prose, with recall
-  unchanged. See `docs/PLAN.md` §12d.
+  lexicon was consulted as a flat set, so one occurrence taught a word
+  permanently; an audit found nine of this machine's owner's own misspellings
+  learned that way. Words now need corroboration — and three sightings if they
+  sit one edit from a common word, because a chronic misspelling looks exactly
+  like new vocabulary from the inside.
+- **The harness's own text was being learned as your voice.** Prompts carry
+  injected reminders, and a finished background task arrives as a whole turn,
+  so `background command` and `exit code` had become characteristic phrases.
+- **Names, paths, and tags were being flagged as misspelled words.** URLs were
+  only masked when the extractor's canonical form appeared verbatim, which it
+  often does not; markup tags were never masked; and a path was only recognized
+  after whitespace. Together with recognizing the names a document introduces,
+  precision went from 0.77 to 0.92 with no loss of recall.
+- Suggestions no longer offer a project name for an ordinary word — 309 of the
+  short names in a real lexicon sit one edit from a real word, so `navv`
+  offered `navi` and `nav` above `navy`.
+- Confidence is derived from evidence rather than a constant, everywhere it is
+  reported, and rounded where it is built so `--json` carries the same
+  precision the human output does.
 
 ## 0.4.0 — 2026-08-16
 

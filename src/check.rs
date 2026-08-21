@@ -308,11 +308,11 @@ impl Checker {
     /// between them were removed.
     ///
     /// Only reachable for a token that is *already* being flagged, which is
-    /// what makes it safe. The dangerous split-compounds are the ones where
-    /// both halves are ordinary words — `may be`/`maybe`, `any way`/`anyway`,
-    /// `in to`/`into`, and `the rapist`, which a checker must never propose
-    /// joining. Every one of those has two known halves, so neither token is
-    /// ever flagged and this is never consulted.
+    /// what makes it safe. The split-compounds that must not be joined are the
+    /// ones where both halves are ordinary words — `may be`/`maybe`,
+    /// `in to`/`into`, `read just`/`readjust` — each decided by the sentence
+    /// rather than the pair. Every one has two known halves, so neither token
+    /// is ever flagged and this is never consulted.
     ///
     /// What is left is the case where one half is not a word at all: `luke`
     /// in `luke warm`. There the join is unambiguous, and the alternative on
@@ -1249,26 +1249,18 @@ mod tests {
 
     #[test]
     fn an_ambiguous_pair_never_reaches_the_join() {
-        // `may be`/`maybe`, `in to`/`into`, and `the rapist` are all decided
-        // by the sentence rather than the pair, and a checker must never
-        // propose joining the last of them.
+        // `may be`/`maybe`, `in to`/`into`, `read just`/`readjust` are each
+        // decided by the sentence rather than the pair.
         //
         // Every one has two known halves, so neither token is flagged and the
         // join is never consulted. The guarantee is structural, not a
         // threshold — this asserts the structure holds.
         let c = Checker::new(
             HashSet::new(),
-            Some(common(&[
-                "may",
-                "be",
-                "maybe",
-                "the",
-                "rapist",
-                "therapist",
-            ])),
+            Some(common(&["may", "be", "maybe", "read", "just", "readjust"])),
         );
         assert!(c.knows("may") && c.knows("be"));
-        assert!(c.knows("the") && c.knows("rapist"));
+        assert!(c.knows("read") && c.knows("just"));
     }
 
     #[test]

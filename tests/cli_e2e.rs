@@ -470,7 +470,7 @@ fn a_compound_written_as_two_words_is_offered_joined() {
     // halves, so neither token is flagged and the join is never reached.
     for text in [
         "may be we should go",
-        "the rapist was caught",
+        "read just the summary",
         "it happens some times",
     ] {
         let clean = vocab(&db, &[text]);

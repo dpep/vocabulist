@@ -67,7 +67,7 @@ Only forms that aren't real words are in the table. `cant`, `wont`, `its`, and
 ## Real-word errors
 
 The typos that survive into sent mail are the ones that are spelled fine:
-`form` for `from`, `casual` for `causal`, `pubic` for `public`. A dictionary is
+`form` for `from`, `casual` for `causal`, `manger` for `manager`. A dictionary is
 structurally blind to these, because both spellings are real words. Only the
 company a word keeps gives it away.
 
