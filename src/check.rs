@@ -755,6 +755,9 @@ impl Checker {
         // the obvious correction under them.
         self.profile.count("suggest_calls", 1);
         let mut scored: Vec<(usize, u8, i64, isize, isize, u8, &String)> = Vec::new();
+        // Collected once, not once per candidate.
+        let query: Vec<char> = word.chars().collect();
+        let mut scratch = Scratch::default();
         let dictionary = self.dictionary().into_iter().flatten();
         for (candidate, rank) in self
             .lexicon
@@ -765,7 +768,7 @@ impl Checker {
             // Every known word is measured against every unknown one. This
             // counter is what makes that cost visible under --profile.
             self.profile.count("candidates_scanned", 1);
-            if let Some(d) = bounded_distance(word, candidate, MAX_EDIT_DISTANCE) {
+            if let Some(d) = scratch.distance(&query, candidate, MAX_EDIT_DISTANCE) {
                 let (prefix, suffix) = affinity(word, candidate);
                 // Sorts ascending, so 0 is "the kind that was asked for".
                 let wrong_kind = u8::from(self.is_name(candidate) != want_name);
@@ -1020,38 +1023,82 @@ fn affinity(a: &str, b: &str) -> (usize, usize) {
 /// from `avoid` but only one from `avid`, so the obvious correction loses to
 /// a worse one.
 pub fn bounded_distance(a: &str, b: &str, max: usize) -> Option<usize> {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    let (a_len, b_len) = (a_chars.len(), b_chars.len());
-    if a_len.abs_diff(b_len) > max {
-        return None;
-    }
+    Scratch::default().distance(&a.chars().collect::<Vec<_>>(), b, max)
+}
 
-    // Three rows, because a transposition looks back two positions.
-    let mut prev_prev: Vec<usize> = vec![0; b_len + 1];
-    let mut prev: Vec<usize> = (0..=b_len).collect();
-    let mut current = vec![0usize; b_len + 1];
+/// Reusable buffers for repeated distance comparisons.
+///
+/// The query is compared against every word in the dictionary, and the naive
+/// shape allocated five vectors per candidate — the query's characters
+/// re-collected each time, the candidate's, and three DP rows. That is half a
+/// million allocations for one suggestion, and it was most of the 20ms each
+/// one cost.
+///
+/// Holding the buffers across candidates leaves the arithmetic, which is what
+/// we actually wanted to spend time on.
+#[derive(Default)]
+struct Scratch {
+    candidate: Vec<char>,
+    prev_prev: Vec<usize>,
+    prev: Vec<usize>,
+    current: Vec<usize>,
+}
 
-    for i in 0..a_len {
-        current[0] = i + 1;
-        let mut row_min = current[0];
-        for j in 0..b_len {
-            let cost = usize::from(a_chars[i] != b_chars[j]);
-            let mut best = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
-            if i > 0 && j > 0 && a_chars[i] == b_chars[j - 1] && a_chars[i - 1] == b_chars[j] {
-                best = best.min(prev_prev[j - 1] + 1);
-            }
-            current[j + 1] = best;
-            row_min = row_min.min(best);
-        }
-        if row_min > max {
+impl Scratch {
+    /// Damerau-Levenshtein, restricted (OSA): a transposition costs one edit
+    /// rather than two, so `aviod` reaches `avoid` before `avid`.
+    fn distance(&mut self, a_chars: &[char], b: &str, max: usize) -> Option<usize> {
+        let a_len = a_chars.len();
+
+        // Length alone rejects most of the dictionary, and it is answerable
+        // from the byte count without decoding: a UTF-8 string is never
+        // shorter in bytes than in characters, so a candidate whose bytes
+        // already exceed the bound cannot possibly be close enough.
+        if b.len() > a_len + max {
             return None;
         }
-        std::mem::swap(&mut prev_prev, &mut prev);
-        std::mem::swap(&mut prev, &mut current);
+        self.candidate.clear();
+        self.candidate.extend(b.chars());
+        let b_len = self.candidate.len();
+        if a_len.abs_diff(b_len) > max {
+            return None;
+        }
+
+        // Three rows, because a transposition looks back two positions.
+        self.prev_prev.clear();
+        self.prev_prev.resize(b_len + 1, 0);
+        self.prev.clear();
+        self.prev.extend(0..=b_len);
+        self.current.clear();
+        self.current.resize(b_len + 1, 0);
+
+        for i in 0..a_len {
+            self.current[0] = i + 1;
+            let mut row_min = self.current[0];
+            for j in 0..b_len {
+                let cost = usize::from(a_chars[i] != self.candidate[j]);
+                let mut best = (self.prev[j] + cost)
+                    .min(self.prev[j + 1] + 1)
+                    .min(self.current[j] + 1);
+                if i > 0
+                    && j > 0
+                    && a_chars[i] == self.candidate[j - 1]
+                    && a_chars[i - 1] == self.candidate[j]
+                {
+                    best = best.min(self.prev_prev[j - 1] + 1);
+                }
+                self.current[j + 1] = best;
+                row_min = row_min.min(best);
+            }
+            if row_min > max {
+                return None;
+            }
+            std::mem::swap(&mut self.prev_prev, &mut self.prev);
+            std::mem::swap(&mut self.prev, &mut self.current);
+        }
+        let d = self.prev[b_len];
+        (d <= max).then_some(d)
     }
-    let d = prev[b_len];
-    (d <= max).then_some(d)
 }
 
 #[cfg(test)]
