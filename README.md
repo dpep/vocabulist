@@ -23,8 +23,8 @@ frequency      observed      20732 terms
 2808 words added, 0 upgraded
 
 $ vocab "the contextdb rubocop and iriq tooling shp a smal change"
-1:40   shp     unknown   shap, ship, shop     0.70
-1:46   smal    unknown   small, smalm, smalt  0.70
+1:40   shp    unknown   ship 0.49, shop 0.49, she 0.02   0.70
+1:46   smal   unknown   small 0.96, seal 0.04            0.70
 ```
 
 `contextdb`, `rubocop`, and `iriq` pass without a word. That's the point.
@@ -79,14 +79,23 @@ $ vocab -j "apart form the rest"
     "word": "form",
     "line": 1,
     "col": 7,
-    "suggestions": ["from"],
-    "confidence": 0.71
+    "suggestions": [
+      { "word": "from", "score": 1.0 }
+    ],
+    "confidence": 0.6
   }
 ]
 ```
 
-This gets better strictly as your corpus grows, and says nothing at all until
-it has evidence — a tool with no evidence should have no opinion.
+This works on a lexicon created a minute ago, because `apart from` is
+idiomatic and `apart form` is always a slip — a bundled table of collocates
+that settle a confusion on their own, derived from a corpus rather than
+written by hand. Your own collocations then supersede it, which is the same
+inversion the whole tool rests on: your evidence over the general prior.
+
+Confidence is derived, never a constant. `apart` beats its alternative by more
+than a thousand to one and says so; a collocate that scraped past the
+threshold says that instead.
 
 ## Feeding the checkers you already run
 
@@ -156,9 +165,12 @@ The headline number is **Guiraud's R** (`types / √tokens`) rather than the mor
 familiar type-token ratio, because TTR falls as a sample gets longer and so
 can't compare texts of different sizes.
 
-Corpus mode reports no sentence metrics, and says so rather than leaving a
-silent gap: processing keeps counts and drops the prose, so anything below the
-word can't be recovered afterward. That's the cost of not being an archive.
+Corpus mode reports sentence metrics too — length, its spread, and reading
+ease — because `process` records sentence shape while the prose is still
+there. It has to: processing keeps counts and drops the text, so anything not
+measured then can never be recovered. The spread matters as much as the mean,
+since two writers can share an average sentence length and read nothing
+alike.
 
 ## Built for pipes and agents
 
@@ -171,6 +183,9 @@ vocab -f README.md -j          # check a file, pretty JSON
 vocab list rubo                # lexicon entries matching "rubo"
 vocab add contextdb iriq       # add by hand (top provenance, never pruned)
 vocab status                   # what the store knows, and where it exports
+vocab phrases -n 3             # the three-word phrases you actually repeat
+vocab self                     # the handles believed to be yours
+vocab prune --dry-run          # what an older, looser capture rule let in
 ```
 
 `status` also reports what it has actually *read* — bodies per register, messages
@@ -187,8 +202,11 @@ spell checkers:
   macos          1,204 of 1,377 words ours
 ```
 
-Exit codes follow lint convention — clean input exits `0`, findings exit `1` —
-so it drops into a pre-commit hook or a CI step without a wrapper.
+Exit codes follow the convention of the command's job. *Checking* is a linter:
+clean input exits `0`, findings exit `1`, so it drops into a pre-commit hook or
+a CI step without a wrapper. *Querying* — `list`, `phrases`, `self` — is grep:
+a result exits `0` and an empty one exits `1`, so `vocab list foo && …` means
+"if any". `2` is always an operational error, never a verdict.
 
 ## Local, always
 

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking
+
+- `vocab stats` is now **`vocab status`**. Renamed rather than aliased: two
+  commands whose names differ by two letters and whose output is identical is
+  worse than one. `status` is also the word people reach for — and `vocab
+  status` previously spell-checked the *word* "status", found it correct, and
+  printed "No issues found", so a command that did not exist reported success.
+- Schema 6. A `kind` column records what a lexicon entry *is*, because
+  provenance cannot distinguish a colleague's name from any other captured
+  word. Existing databases migrate in place.
+
 ### Added
 
 - `phrases` reports log-likelihood to two decimals. It is computed from a
@@ -207,10 +218,6 @@
 
 ### Breaking
 
-- `vocab stats` is now **`vocab status`**. It was renamed rather than aliased
-  because `status` is the word people reach for — and `vocab status`
-  previously spell-checked the *word* "status", found it correct, and printed
-  "No issues found", so a command that did not exist reported success.
 - `Finding.suggestions` is now `[{word, score}]` rather than `[string]`. One
   number couldn't answer two questions — how sure we are the word is wrong,
   and which replacement was meant — so `hepl` reported `help`, `hep`, and
