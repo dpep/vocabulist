@@ -307,6 +307,17 @@ pub struct EvalReport {
 /// How many false positives to keep for inspection.
 const FP_SAMPLE: usize = 15;
 
+/// What became of one injected error.
+///
+/// Recorded once per injection so the overall tallies and the per-kind
+/// breakdown read the same judgement, rather than each rescanning the
+/// findings and risking two answers to the same question.
+struct Outcome {
+    kind: ErrorKind,
+    caught: bool,
+    corrected: bool,
+}
+
 /// Compare findings against the known injections.
 pub fn score(
     findings: &[Finding],
@@ -323,23 +334,29 @@ pub fn score(
     };
 
     let mut matched = vec![false; findings.len()];
+    let mut outcomes: Vec<Outcome> = Vec::with_capacity(injections.len());
     for injection in injections {
         // A catch is a finding on the same line naming the corrupted word.
         let hit = findings.iter().position(|f| {
             f.line == injection.line && f.word.to_lowercase() == injection.mutated.to_lowercase()
         });
+        let mut outcome = Outcome {
+            kind: injection.kind,
+            caught: false,
+            corrected: false,
+        };
         if let Some(i) = hit {
             matched[i] = true;
-            report.caught += 1;
-            if findings[i]
+            outcome.caught = true;
+            outcome.corrected = findings[i]
                 .suggestions
                 .iter()
-                .any(|s| s.word.to_lowercase() == injection.original.to_lowercase())
-            {
-                report.corrected += 1;
-            }
+                .any(|s| s.word.to_lowercase() == injection.original.to_lowercase());
         }
+        outcomes.push(outcome);
     }
+    report.caught = outcomes.iter().filter(|o| o.caught).count();
+    report.corrected = outcomes.iter().filter(|o| o.corrected).count();
 
     for (i, finding) in findings.iter().enumerate() {
         if !matched[i] {
@@ -363,18 +380,11 @@ pub fn score(
         ErrorKind::Substitution,
         ErrorKind::RealWord,
     ] {
-        let of_kind: Vec<&Injection> = injections.iter().filter(|i| i.kind == kind).collect();
+        let of_kind: Vec<&Outcome> = outcomes.iter().filter(|o| o.kind == kind).collect();
         if of_kind.is_empty() {
             continue;
         }
-        let caught = of_kind
-            .iter()
-            .filter(|inj| {
-                findings.iter().any(|f| {
-                    f.line == inj.line && f.word.to_lowercase() == inj.mutated.to_lowercase()
-                })
-            })
-            .count();
+        let caught = of_kind.iter().filter(|o| o.caught).count();
         report.by_kind.push(KindScore {
             kind: kind.as_str().to_string(),
             injected: of_kind.len(),
