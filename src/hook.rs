@@ -260,7 +260,58 @@ fn capture_own_messages(store: &Store, input: &HookInput) {
     }
 }
 
+/// A stable identity for captured text, so the same text counts once.
+///
+/// FNV-1a rather than `DefaultHasher`: this key is persisted, and SipHash's
+/// output is explicitly not guaranteed stable across Rust releases, so a
+/// toolchain bump would silently void every claim ever made.
+///
+/// Case, whitespace runs, and digit runs are folded first, so a template that
+/// interpolates a session id, a count, or a date is still recognized as the
+/// same template. Nothing that folds together under that is two different
+/// sentences. The hash is all that persists — the prose still goes to the
+/// spool and is still dropped when processed.
+fn content_key(register: Register, body: &str) -> String {
+    let mut folded = String::with_capacity(body.len());
+    let (mut space, mut digit) = (false, false);
+    for c in body.chars() {
+        if c.is_whitespace() {
+            if !space {
+                folded.push(' ');
+            }
+            (space, digit) = (true, false);
+        } else if c.is_ascii_digit() {
+            if !digit {
+                folded.push('#');
+            }
+            (space, digit) = (false, true);
+        } else {
+            folded.extend(c.to_lowercase());
+            (space, digit) = (false, false);
+        }
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in folded.trim().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{}:{hash:016x}", register.as_str())
+}
+
 fn spool(store: &Store, register: Register, source: &str, body: &str) {
+    // Text that arrives verbatim again is one piece of evidence, not two.
+    // The store already draws this line for messages read out of a channel —
+    // "the same sentence would look like a habit" — and the paths that
+    // capture directly never had it, which is how a fixed prompt template
+    // reaches the top of `vocab phrases` by repetition alone. A claim that
+    // errors drops the capture: losing a prompt costs a little recall, and
+    // failing the other way quietly restores the behavior this prevents.
+    if !store
+        .claim_source(&content_key(register, body))
+        .unwrap_or(false)
+    {
+        return;
+    }
     let authored_by = if watermark::is_assistant_authored(body) {
         "assistant"
     } else {
@@ -331,6 +382,45 @@ mod tests {
             },
         );
         assert_eq!(s.pending_spool(10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_same_text_is_captured_once_however_often_it_arrives() {
+        let s = store();
+        // Same template, different interpolated run number: still one
+        // template, and a hook that fires every session must not make it
+        // look like this user's favourite sentence.
+        for prompt in [
+            "summarize what changed in run 41 and why it matters",
+            "summarize what changed in run 42 and why it matters",
+            "summarize what changed in run 41 and why it matters",
+        ] {
+            run(
+                "user-prompt-submit",
+                &s,
+                &HookInput {
+                    prompt: prompt.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(s.pending_spool(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn different_prose_still_captures_separately() {
+        let s = store();
+        for prompt in ["ship the small focused change", "why is the cold pass slow"] {
+            run(
+                "user-prompt-submit",
+                &s,
+                &HookInput {
+                    prompt: prompt.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(s.pending_spool(10).unwrap().len(), 2);
     }
 
     #[test]

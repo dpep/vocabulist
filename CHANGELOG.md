@@ -31,6 +31,14 @@
   phrases. On a real store this was the entire top of `vocab phrases -n 3`.
   The whole turn is now dropped when a command marker is present, and
   `<local-command-caveat>` joins the stripped envelopes.
+- **Identical captured text now counts once.** Every capture claims a key —
+  a message id where the source has one, otherwise a hash of the text with
+  case, whitespace, and digit runs folded, so a template that interpolates a
+  session id or a date still matches itself. A hook firing the same prompt
+  every session used to contribute one observation per run, which is how
+  fixed boilerplate climbed `vocab phrases` on repetition alone. Reading a
+  channel twice was already idempotent; the paths that capture directly
+  were not.
 - `vocab eval --kind <KIND>` returned a real-word swap instead whenever the
   word it picked happened to have a confusable, so a targeted run measured a
   mixture and labeled it as one class.

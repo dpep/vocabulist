@@ -133,6 +133,32 @@ is a filter on the obvious cases, never a claim of authorship. **[open]** —
 whether to add a heuristic backstop (assistant prose has measurable tells) or
 leave it at the literal markers.
 
+### The prompt channel is not all prompts
+
+The harness writes into the same field the user does, and its text carries no
+watermark because no assistant drafted it. Three rules, in order of how much
+they are trusted to know:
+
+1. **Named envelopes are removed.** `hook::ENVELOPES` lists the tags the
+   harness injects — reminders, task notifications, local command output.
+   Named rather than "any tag", because a prompt about HTML contains `<div>`
+   and is still the user's.
+2. **A command expansion is dropped whole.** Its body arrives *after* the
+   `<command-*>` tags rather than inside them, so stripping leaves the skill
+   author's instructions in place of a sentence. There is nothing in that turn
+   worth keeping.
+3. **Identical text counts once.** Every capture claims a key — a message id
+   where the source has one, otherwise a hash of the text with case,
+   whitespace, and digit runs folded. A hook that fires the same template
+   every session contributes one observation, not four hundred.
+
+The third is the one that generalizes, and it is deliberately an *identity*
+rule rather than a repetition threshold. "Seen more than N times, therefore
+machine" would be a constant chosen to feel right, and it is false besides:
+people repeat themselves. But four hundred copies of one string is one
+context however it got there, which is the same standard `MIN_SOURCES`
+already applies to words.
+
 ## 6. Registers
 
 A single "writing style" is a fiction. You write in at least these voices:

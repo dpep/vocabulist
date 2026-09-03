@@ -144,7 +144,8 @@ CREATE TABLE IF NOT EXISTS identities (
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Messages already captured, by stable per-message key.
+-- Text already captured, by stable key: a message's own id where the source
+-- provides one, otherwise a hash of the text itself.
 --
 -- Reading the same channel twice is normal and must be idempotent. Without
 -- this, a re-read inflates register counts and n-grams — word_sources would
