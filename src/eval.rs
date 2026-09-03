@@ -132,8 +132,12 @@ pub fn corrupt_kind(
 ) -> Option<(String, ErrorKind)> {
     // A real-word swap when the word has a confusable — the case no
     // dictionary can catch, so it's worth over-sampling relative to chance.
+    // Only when nothing else was asked for: a targeted run that quietly
+    // returns a different kind measures something other than what it named.
     let confusables = crate::ngram::confusables(word);
-    if !confusables.is_empty() && (only == Some(ErrorKind::RealWord) || rng.below(2) == 0) {
+    if !confusables.is_empty()
+        && (only == Some(ErrorKind::RealWord) || (only.is_none() && rng.below(2) == 0))
+    {
         let pick = confusables[rng.below(confusables.len())];
         return Some((pick.to_string(), ErrorKind::RealWord));
     }
@@ -543,6 +547,17 @@ mod tests {
         assert_eq!(report.false_positives, 1);
         assert_eq!(report.recall, 1.0);
         assert_eq!(report.precision, 0.5);
+    }
+
+    #[test]
+    fn targeting_a_kind_yields_only_that_kind() {
+        let mut rng = Rng::new(11);
+        // `there` has confusables, which used to hijack half the samples.
+        for _ in 0..20 {
+            if let Some((_, kind)) = corrupt_kind("there", &mut rng, Some(ErrorKind::Deletion)) {
+                assert_eq!(kind, ErrorKind::Deletion);
+            }
+        }
     }
 
     #[test]
