@@ -24,6 +24,13 @@
   nothing and a long file showed nothing until it finished. Findings are now
   emitted and flushed per input line, which is the only difference between a
   line format and a pipe.
+- **A slash command's expansion is no longer learned as your voice.** The
+  `<command-*>` tags were stripped, but a command's body arrives *after*
+  them as bare markdown — so the skill author's instructions were left
+  looking like a paragraph and counted as this user's characteristic
+  phrases. On a real store this was the entire top of `vocab phrases -n 3`.
+  The whole turn is now dropped when a command marker is present, and
+  `<local-command-caveat>` joins the stripped envelopes.
 - `vocab eval --kind <KIND>` returned a real-word swap instead whenever the
   word it picked happened to have a confusable, so a targeted run measured a
   mixture and labeled it as one class.

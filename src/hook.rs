@@ -118,9 +118,17 @@ const ENVELOPES: &[&str] = &[
     "command-name",
     "command-message",
     "command-args",
+    "local-command-caveat",
     "local-command-stdout",
     "local-command-stderr",
 ];
+
+/// Tags that mark the whole turn as a command expansion.
+///
+/// Stripping is the wrong tool here: a command's body arrives as bare
+/// markdown *after* these tags, not inside them, so taking the tags off
+/// leaves the skill's own instructions sitting where a sentence should be.
+const COMMAND_MARKERS: &[&str] = &["<command-name>", "<command-message>"];
 
 /// Remove machine-injected blocks from a prompt, leaving what was typed.
 ///
@@ -150,13 +158,18 @@ fn strip_envelopes(prompt: &str) -> String {
 
 /// The purest signal available: text the user typed themselves.
 fn capture_prompt(store: &Store, input: &HookInput) {
+    // A slash command is machine syntax, not the user's prose — and when it
+    // expands, the prose it expands into is the skill author's, not this
+    // user's. Checked before stripping, because after stripping the body no
+    // longer looks like a command at all: it looks like a paragraph.
+    if input.prompt.trim_start().starts_with('/')
+        || COMMAND_MARKERS.iter().any(|m| input.prompt.contains(m))
+    {
+        return;
+    }
     let prompt = strip_envelopes(&input.prompt);
     let prompt = prompt.trim();
     if prompt.is_empty() {
-        return;
-    }
-    // A slash command is machine syntax, not the user's prose.
-    if prompt.starts_with('/') {
         return;
     }
     spool(store, Register::Prompt, &input.session_id, prompt);
@@ -318,6 +331,27 @@ mod tests {
             },
         );
         assert_eq!(s.pending_spool(10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_command_expansion_is_not_the_users_prose() {
+        // The body arrives after the tags, not inside them. Stripping alone
+        // left a skill's instructions looking like a paragraph someone wrote,
+        // and they were counted as this user's characteristic phrases.
+        let s = store();
+        run(
+            "user-prompt-submit",
+            &s,
+            &HookInput {
+                prompt: "<command-message>audit is running</command-message>\n\
+                         <command-name>/audit</command-name>\n\
+                         Convert every result into this JSON and output only \
+                         this JSON, with no commentary and no code fence."
+                    .into(),
+                ..Default::default()
+            },
+        );
+        assert!(s.pending_spool(10).unwrap().is_empty());
     }
 
     #[test]
