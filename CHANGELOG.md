@@ -6,6 +6,11 @@
 
 - `--profile` reports where the time went — per-stage timings and counters, in
   any output format.
+- `vocab eval` reports **top-1 correction accuracy** (`top1_rate`, and a
+  per-kind column) alongside the existing correction rate. The old number
+  accepts the right answer anywhere in the suggestion list, so it could not
+  see a change that merely reranks — on the reference corpus it reads 98.9%
+  where top-1 reads 88.0%.
 
 ### Fixed
 

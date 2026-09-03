@@ -17,6 +17,11 @@
 //! untouched words: flagging correct prose is what teaches someone to ignore
 //! the tool, and a checker that catches nothing is merely useless rather than
 //! actively harmful.
+//!
+//! For work on *ranking* rather than detection, read `top1_rate` instead.
+//! `correction_rate` accepts the right answer anywhere in the suggestion
+//! list, so it is blind to exactly the improvement a better error model
+//! produces.
 
 use serde::{Deserialize, Serialize};
 
@@ -273,6 +278,12 @@ pub struct KindScore {
     pub caught: usize,
     /// caught / injected, for this class alone.
     pub recall: f64,
+    /// Of those caught, how many offered the original anywhere.
+    pub corrected: usize,
+    /// Of those caught, how many offered it *first*.
+    pub corrected_top1: usize,
+    /// corrected_top1 / caught.
+    pub top1_rate: f64,
 }
 
 /// Scores for one run.
@@ -287,6 +298,14 @@ pub struct EvalReport {
     pub caught: usize,
     /// Of those, how many offered the original word as a suggestion.
     pub corrected: usize,
+    /// Of those, how many offered it as the *first* suggestion.
+    ///
+    /// The one to read when a change reranks rather than re-finds.
+    /// `corrected` counts a hit anywhere in a list of at most
+    /// `MAX_SUGGESTIONS`, so any reordering within that list leaves it
+    /// untouched — a better error model can move every right answer from
+    /// third place to first and this harness would report no change at all.
+    pub corrected_top1: usize,
     /// Findings on words nobody corrupted.
     pub false_positives: usize,
     /// False positives per thousand words — comparable across corpora, which
@@ -298,6 +317,8 @@ pub struct EvalReport {
     pub precision: f64,
     /// corrected / caught — a flag with the wrong fix is only half a catch.
     pub correction_rate: f64,
+    /// corrected_top1 / caught — the fix someone actually applies.
+    pub top1_rate: f64,
     /// Per error kind — which classes of damage the checker actually sees.
     pub by_kind: Vec<KindScore>,
     /// A sample of false positives, for reading rather than counting.
@@ -316,6 +337,7 @@ struct Outcome {
     kind: ErrorKind,
     caught: bool,
     corrected: bool,
+    top1: bool,
 }
 
 /// Compare findings against the known injections.
@@ -344,19 +366,23 @@ pub fn score(
             kind: injection.kind,
             caught: false,
             corrected: false,
+            top1: false,
         };
         if let Some(i) = hit {
+            let wanted = injection.original.to_lowercase();
+            let suggestions = &findings[i].suggestions;
             matched[i] = true;
             outcome.caught = true;
-            outcome.corrected = findings[i]
-                .suggestions
-                .iter()
-                .any(|s| s.word.to_lowercase() == injection.original.to_lowercase());
+            outcome.corrected = suggestions.iter().any(|s| s.word.to_lowercase() == wanted);
+            outcome.top1 = suggestions
+                .first()
+                .is_some_and(|s| s.word.to_lowercase() == wanted);
         }
         outcomes.push(outcome);
     }
     report.caught = outcomes.iter().filter(|o| o.caught).count();
     report.corrected = outcomes.iter().filter(|o| o.corrected).count();
+    report.corrected_top1 = outcomes.iter().filter(|o| o.top1).count();
 
     for (i, finding) in findings.iter().enumerate() {
         if !matched[i] {
@@ -385,11 +411,15 @@ pub fn score(
             continue;
         }
         let caught = of_kind.iter().filter(|o| o.caught).count();
+        let corrected_top1 = of_kind.iter().filter(|o| o.top1).count();
         report.by_kind.push(KindScore {
             kind: kind.as_str().to_string(),
             injected: of_kind.len(),
             caught,
             recall: ratio(caught, of_kind.len()),
+            corrected: of_kind.iter().filter(|o| o.corrected).count(),
+            corrected_top1,
+            top1_rate: ratio(corrected_top1, caught),
         });
     }
 
@@ -404,6 +434,7 @@ pub fn score(
     report.recall = ratio(report.caught, report.injected);
     report.precision = ratio(report.caught, report.findings);
     report.correction_rate = ratio(report.corrected, report.caught);
+    report.top1_rate = ratio(report.corrected_top1, report.caught);
     report
 }
 
@@ -512,6 +543,40 @@ mod tests {
         assert_eq!(report.false_positives, 1);
         assert_eq!(report.recall, 1.0);
         assert_eq!(report.precision, 0.5);
+    }
+
+    #[test]
+    fn a_right_answer_ranked_second_is_a_correction_but_not_a_top1() {
+        let injections = vec![Injection {
+            line: 1,
+            original: "change".into(),
+            mutated: "chagne".into(),
+            kind: ErrorKind::Transposition,
+        }];
+        let findings = vec![Finding {
+            kind: FindingKind::Unknown,
+            word: "chagne".into(),
+            line: 1,
+            col: 5,
+            suggestions: vec![
+                Suggestion {
+                    word: "chagrin".into(),
+                    score: 0.6,
+                },
+                Suggestion {
+                    word: "change".into(),
+                    score: 0.4,
+                },
+            ],
+            confidence: 0.7,
+        }];
+        let report = score(&findings, &injections, 1, 10);
+        // The distinction the whole metric exists for: a reranking change
+        // moves this one number and leaves correction_rate flat.
+        assert_eq!(report.correction_rate, 1.0);
+        assert_eq!(report.top1_rate, 0.0);
+        assert_eq!(report.by_kind[0].corrected, 1);
+        assert_eq!(report.by_kind[0].corrected_top1, 0);
     }
 
     #[test]

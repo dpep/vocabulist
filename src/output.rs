@@ -558,17 +558,26 @@ pub fn render_eval(
                 "correction rate",
                 report.correction_rate * 100.0
             )?;
+            writeln!(
+                out,
+                "  {:<22} {:>8.1}%",
+                "  right one first",
+                report.top1_rate * 100.0
+            )?;
 
             if !report.by_kind.is_empty() {
-                writeln!(out, "\n  by error kind (caught/injected):")?;
+                writeln!(out, "\n  by error kind (caught/injected, first/caught):")?;
                 for k in &report.by_kind {
                     writeln!(
                         out,
-                        "    {:<16} {:>4}/{:<4} {:>5.0}%",
+                        "    {:<16} {:>4}/{:<4} {:>4.0}%   {:>4}/{:<4} {:>4.0}%",
                         k.kind,
                         k.caught,
                         k.injected,
-                        k.recall * 100.0
+                        k.recall * 100.0,
+                        k.corrected_top1,
+                        k.caught,
+                        k.top1_rate * 100.0
                     )?;
                 }
             }
