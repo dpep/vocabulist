@@ -11,6 +11,11 @@
   accepts the right answer anywhere in the suggestion list, so it could not
   see a change that merely reranks — on the reference corpus it reads 98.9%
   where top-1 reads 88.0%.
+- `vocab eval` injects a second class of substitution, reported as
+  **`far-substitution`** and targetable with `--kind far-substitution`: a
+  same-class letter that is *not* a neighboring key. It is the control arm for
+  any future error model that reasons about key adjacency, which would
+  otherwise be graded on errors built from the table it reasons with.
 
 ### Fixed
 
@@ -19,6 +24,9 @@
   nothing and a long file showed nothing until it finished. Findings are now
   emitted and flushed per input line, which is the only difference between a
   line format and a pipe.
+- `vocab eval --kind <KIND>` returned a real-word swap instead whenever the
+  word it picked happened to have a confusable, so a targeted run measured a
+  mixture and labeled it as one class.
 
 ### Changed
 

@@ -51,6 +51,36 @@ string-to-string edits (`ph`→`f`, `ent`→`ant`) learned from data — a bette
 `P(typo | correction)` than uniform edit distance. Requires a corpus of real
 typo/correction pairs, which the eval harness could bootstrap.
 
+**Kukich (1992)**, *Techniques for automatically correcting words in text*
+(ACM Computing Surveys), is the survey, and its taxonomy is why `eval.rs`
+injects two kinds of substitution. Errors split into **typographic** slips,
+which key adjacency predicts (`teh`, `wrok`), **cognitive/orthographic** ones,
+which it does not (`seperate`, `recieve`, `definately`), and **phonetic**
+ones. Composed prose — what this tool captures — carries a lot of the second
+class, and a harness that injected only adjacent-key substitutions would model
+the first as the whole population.
+
+That matters the moment anything scores by keyboard distance: the injector's
+neighbor table and the scorer's would be the same table, and the improvement
+would be an artifact. `ErrorKind::FarSubstitution` is the control arm.
+Out-of-sample validation would want real pairs — the **Birkbeck spelling error
+corpus** (Mitton), the **GitHub Typo Corpus** (Hagiwara & Mita, 2020),
+Wikipedia's common-misspellings list.
+
+**Grudin (1983)**, *Error patterns in novice and skilled transcription
+typing*, is the empirical study behind any proximity model, and it carries a
+warning for the obvious implementation. The structure in substitution errors
+is not purely spatial: skilled typists produce **homologous-finger,
+opposite-hand** errors — `d`/`k`, `f`/`j`, `s`/`l` — where the right finger
+fires on the wrong hand. Euclidean key distance rates those as maximally
+implausible and gets them backwards. If a cost table is ever built, the
+bucketing that carries signal is finger and hand, not region. Shipped prior
+art for the coarse version: Hunspell's `KEY` directive (`qwertyuiop|asdfghjkl|
+zxcvbnm`) and Aspell's keyboard definition files. **Goodman et al. (2002)**,
+*Language modeling for soft keyboards*, is the continuous version — a Gaussian
+over key centers times a language model, which is the noisy channel with a
+real proximity term.
+
 **Whitelaw et al. (2009)** built a spellchecker with no dictionary at all,
 learning both models from web text. The extreme form of this project's thesis:
 the corpus is the authority.

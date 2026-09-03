@@ -29,6 +29,10 @@ use crate::types::Finding;
 
 /// Adjacent keys on a QWERTY keyboard, for substitutions that resemble real
 /// slips rather than random letters.
+///
+/// Assumed QWERTY, and assumed to be half the story — see `far_substitute`
+/// for the other half and for why a harness that injected only these would
+/// flatter any keyboard-aware error model that scored them.
 const NEIGHBORS: &[(char, &str)] = &[
     ('a', "qwsz"),
     ('b', "vghn"),
@@ -58,6 +62,41 @@ const NEIGHBORS: &[(char, &str)] = &[
     ('z', "asx"),
 ];
 
+/// Letter classes a substitution stays inside. A typist reaching for a vowel
+/// and getting a consonant is a different, rarer event than either kind of
+/// same-class slip.
+const VOWELS: &str = "aeiou";
+const CONSONANTS: &str = "bcdfghjklmnpqrstvwxyz";
+
+/// A substitution the keyboard cannot explain.
+///
+/// Kukich (1992) splits misspellings into typographic slips, which key
+/// adjacency predicts, and cognitive ones, which it does not — `definately`,
+/// `seperate`, `existance`. Injecting only adjacent-key substitutions models
+/// the first class as if it were the whole population, so a proximity-aware
+/// error model would be scored entirely on errors built from the same table
+/// it reasons with. This is the control arm.
+///
+/// Unstressed English vowels all sound alike, which is where most of the
+/// cognitive class lives, so a vowel takes another vowel. Everything else
+/// takes a consonant. Either way never a neighbor, or the arm is not one.
+fn far_substitute(c: char, rng: &mut Rng) -> Option<char> {
+    let lower = c.to_ascii_lowercase();
+    let neighbors = NEIGHBORS
+        .iter()
+        .find(|(n, _)| *n == lower)
+        .map(|(_, n)| *n)?;
+    let pool: Vec<char> = if VOWELS.contains(lower) {
+        VOWELS
+    } else {
+        CONSONANTS
+    }
+    .chars()
+    .filter(|&x| x != lower && !neighbors.contains(x))
+    .collect();
+    (!pool.is_empty()).then(|| pool[rng.below(pool.len())])
+}
+
 /// How a word was corrupted.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -66,7 +105,11 @@ pub enum ErrorKind {
     Transposition,
     Deletion,
     Insertion,
+    /// A neighboring key — the motor slip.
     Substitution,
+    /// A same-class letter nowhere near it — the cognitive slip, and the
+    /// control on any error model that reasons about key adjacency.
+    FarSubstitution,
     /// Swapped for a different real word — invisible to any dictionary.
     RealWord,
 }
@@ -78,6 +121,7 @@ impl ErrorKind {
             ErrorKind::Deletion => "deletion",
             ErrorKind::Insertion => "insertion",
             ErrorKind::Substitution => "substitution",
+            ErrorKind::FarSubstitution => "far-substitution",
             ErrorKind::RealWord => "real-word",
         }
     }
@@ -153,7 +197,7 @@ pub fn corrupt_kind(
         Some(ErrorKind::Transposition) => 0,
         Some(ErrorKind::Deletion) => 1,
         Some(ErrorKind::Insertion) => 2,
-        Some(ErrorKind::Substitution) => 3,
+        Some(ErrorKind::Substitution) | Some(ErrorKind::FarSubstitution) => 3,
         _ => rng.below(4),
     };
     match roll {
@@ -179,16 +223,33 @@ pub fn corrupt_kind(
         }
         _ => {
             let i = rng.below(chars.len());
-            let neighbors = NEIGHBORS
-                .iter()
-                .find(|(c, _)| *c == chars[i].to_ascii_lowercase())
-                .map(|(_, n)| *n)?;
-            let replacement = neighbors
-                .chars()
-                .nth(rng.below(neighbors.chars().count()))?;
+            let far = match only {
+                Some(ErrorKind::FarSubstitution) => true,
+                Some(_) => false,
+                // An even split, which is a stated ignorance rather than an
+                // estimate: nobody here knows the adjacent share, and
+                // injecting only neighbors asserts it is all of them.
+                None => rng.below(2) == 0,
+            };
+            let replacement = if far {
+                far_substitute(chars[i], rng)?
+            } else {
+                let neighbors = NEIGHBORS
+                    .iter()
+                    .find(|(c, _)| *c == chars[i].to_ascii_lowercase())
+                    .map(|(_, n)| *n)?;
+                neighbors
+                    .chars()
+                    .nth(rng.below(neighbors.chars().count()))?
+            };
             let mut out = chars.clone();
             out[i] = replacement;
-            Some((out.into_iter().collect(), ErrorKind::Substitution))
+            let kind = if far {
+                ErrorKind::FarSubstitution
+            } else {
+                ErrorKind::Substitution
+            };
+            Some((out.into_iter().collect(), kind))
         }
     }
 }
@@ -408,6 +469,7 @@ pub fn score(
         ErrorKind::Deletion,
         ErrorKind::Insertion,
         ErrorKind::Substitution,
+        ErrorKind::FarSubstitution,
         ErrorKind::RealWord,
     ] {
         let of_kind: Vec<&Outcome> = outcomes.iter().filter(|o| o.kind == kind).collect();
@@ -547,6 +609,27 @@ mod tests {
         assert_eq!(report.false_positives, 1);
         assert_eq!(report.recall, 1.0);
         assert_eq!(report.precision, 0.5);
+    }
+
+    #[test]
+    fn a_far_substitution_is_never_an_adjacent_key() {
+        let mut rng = Rng::new(3);
+        for _ in 0..50 {
+            let Some((mutated, kind)) =
+                corrupt_kind("keyboard", &mut rng, Some(ErrorKind::FarSubstitution))
+            else {
+                continue;
+            };
+            assert_eq!(kind, ErrorKind::FarSubstitution);
+            let (from, to) = "keyboard"
+                .chars()
+                .zip(mutated.chars())
+                .find(|(a, b)| a != b)
+                .expect("one letter changed");
+            let neighbors = NEIGHBORS.iter().find(|(c, _)| *c == from).unwrap().1;
+            assert!(!neighbors.contains(to), "{from} -> {to} is adjacent");
+            assert_eq!(VOWELS.contains(from), VOWELS.contains(to));
+        }
     }
 
     #[test]
