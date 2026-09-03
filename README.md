@@ -151,6 +151,22 @@ $ vocab capture -r pr "$(cat pr-body.md)"
 captured as assistant (co-authored-by: claude)
 ```
 
+The harness is held to the same rule, and it is harder to spot: it writes
+into the same field you do and carries no watermark, because no assistant
+drafted it. Injected reminders and task notifications are stripped by tag; a
+turn that expands a slash command is dropped whole, since the command's body
+arrives *after* those tags and would otherwise read as a paragraph you wrote;
+and identical text counts once however often it arrives, so a hook firing the
+same template every session contributes one observation rather than one per
+run.
+
+If you run session-summarizer hooks or anything else that submits a fixed
+prompt, `vocab phrases -n 3` is worth a glance now and then. Machine
+boilerplate is plain English with no shape to it, so `vocab prune` genuinely
+cannot see it — but it is obvious to a reader at the top of that list, and
+the tool's own rule of thumb applies: if it reads like a program talking, it
+is. `vocab rm --phrase` removes one.
+
 ## Measuring complexity
 
 `analyze` reports vocabulary and readability metrics — for a text, or for
