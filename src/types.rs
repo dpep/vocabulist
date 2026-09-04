@@ -288,6 +288,12 @@ pub struct IntegrationStatus {
     /// Words in the file altogether. Larger than `ours` for a shared file the
     /// user also adds to by hand, which is the case `unsync` must respect.
     pub total: usize,
+    /// Whether anything is actually reading the file: `inherent`, `wired`,
+    /// `inert`, or `manual`.
+    pub activation: String,
+    /// Whether the export reaches its consumer at all. The question `present`
+    /// looks like it answers and doesn't.
+    pub live: bool,
 }
 
 /// Round to `places` decimals, for numbers that cross the output boundary.

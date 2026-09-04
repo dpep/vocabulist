@@ -108,6 +108,29 @@ vscode     +1988   -0      ~/.local/share/vocabulist/vocabulist.txt
 macos      +1988   -0      ~/Library/Spelling/LocalDictionary
 ```
 
+Writing the file is only half of it — the checker also has to be pointed at
+it, and nothing complains when it isn't. So `sync` checks the consumer's own
+config and says which targets are actually live:
+
+```sh
+$ vocab sync
+vscode     +1988   -0      ~/.local/share/vocabulist/vocabulist.txt
+           not in effect — nothing reads this file yet
+           add to ~/Library/Application Support/Code/User/settings.json:
+             "cSpell.customDictionaries": {
+               "vocabulist": {
+                 "name": "vocabulist",
+                 "path": "/Users/you/.local/share/vocabulist/vocabulist.txt",
+                 "addWords": false
+               }
+             }
+```
+
+`addWords: false` matters: without it cSpell's own "add to dictionary"
+quick-fix writes into a file `sync` regenerates wholesale, so the word
+disappears at the next sync. Use `vocab add` instead and it gets permanent
+provenance. In `--json`, each target carries `activation` and `live`.
+
 The macOS target is the one that pays off quietly — it backs `NSSpellChecker`,
 so Mail, Notes, TextEdit, and Safari all stop flagging your jargon.
 

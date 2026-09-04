@@ -21,6 +21,55 @@ use std::path::{Path, PathBuf};
 use crate::store::{Store, default_db_path};
 use crate::types::Provenance;
 
+/// Whether the consuming application is actually pointed at our file.
+///
+/// Writing a correctly formatted word list is only half an integration: the
+/// consumer has to be told the file exists, and nothing fails loudly when it
+/// hasn't been. A target sat exported and unread for months because there was
+/// no way — for the tool or the person running it — to tell the difference
+/// between wired up and written to disk and ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Activation {
+    /// The consumer reads this exact path by definition. Nothing to wire.
+    Inherent,
+    /// The consumer's own config was found, and it references our file.
+    Wired,
+    /// Our file is on disk and nothing points at it. This is the silent one.
+    Inert,
+    /// Needs a step whose result we cannot see — a cloud import, or a
+    /// consumer that isn't installed on this machine.
+    Manual,
+}
+
+impl Activation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Activation::Inherent => "inherent",
+            Activation::Wired => "wired",
+            Activation::Inert => "inert",
+            Activation::Manual => "manual",
+        }
+    }
+
+    /// Is the export actually reaching the consumer?
+    pub fn live(self) -> bool {
+        matches!(self, Activation::Inherent | Activation::Wired)
+    }
+}
+
+/// A verdict on one target, and the evidence behind it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Wiring {
+    pub state: Activation,
+    /// The consumer config we read to decide. Absent when there was none to
+    /// read — which is itself why the verdict is what it is.
+    pub config: Option<PathBuf>,
+    /// What the user has to do, when there is anything. The snippet alone —
+    /// where it goes is `config`, so a consumer gets the two separately.
+    pub hint: Option<String>,
+}
+
 /// Where a target's word list lives, and how we're allowed to treat it.
 pub struct Target {
     pub name: &'static str,
@@ -48,6 +97,12 @@ pub struct SyncReport {
     pub removed: usize,
     pub total: usize,
     pub skipped: Option<String>,
+    /// Whether the words just written will reach anything. Reported with the
+    /// write, because that is the moment someone believes the job is done.
+    pub activation: Option<Activation>,
+    pub hint: Option<String>,
+    /// The consumer config the verdict came from — and where a hint goes.
+    pub config: Option<String>,
 }
 
 /// Every target we know how to write, resolved for this machine.
@@ -117,15 +172,123 @@ pub fn status() -> Vec<crate::types::IntegrationStatus> {
         .into_iter()
         .map(|t| {
             let total = read_lines(&t.path).len();
+            let wiring = t.wiring();
             crate::types::IntegrationStatus {
                 name: t.name.to_string(),
                 path: t.path.display().to_string(),
                 present: t.path.exists(),
                 ours: read_lines(&t.manifest).len(),
                 total,
+                activation: wiring.state.as_str().to_string(),
+                live: wiring.state.live(),
             }
         })
         .collect()
+}
+
+/// Editors that consume a cSpell dictionary, and where each keeps its user
+/// settings. Several forks share VS Code's layout, and someone running Cursor
+/// rather than Code is not a corner case — cSpell is the consumer either way,
+/// and which shell it runs in is not our business.
+fn cspell_settings_paths() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let editors = ["Code", "Code - Insiders", "VSCodium", "Cursor", "Windsurf"];
+    let roots = [
+        home.join("Library").join("Application Support"),
+        home.join(".config"),
+    ];
+    roots
+        .iter()
+        .flat_map(|root| {
+            editors
+                .iter()
+                .map(move |e| root.join(e).join("User").join("settings.json"))
+        })
+        .filter(|p| p.exists())
+        .collect()
+}
+
+/// The snippet that actually activates the cSpell target.
+///
+/// `addWords: false` is the part that isn't obvious. Without it cSpell's own
+/// "add to dictionary" quick-fix writes into this file, and the next `vocab
+/// sync` regenerates it wholesale — so the word silently disappears. Words
+/// added through `vocab add` get permanent provenance instead and survive
+/// every sync.
+fn cspell_snippet(path: &Path) -> String {
+    format!(
+        "\"cSpell.customDictionaries\": {{\n  \"vocabulist\": {{\n    \"name\": \"vocabulist\",\n    \"path\": \"{}\",\n    \"addWords\": false\n  }}\n}}",
+        path.display()
+    )
+}
+
+/// Decide the cSpell verdict from a set of candidate config files.
+///
+/// Split from the `HOME` lookup so it can be tested against a temp dir: the
+/// paths are the input, not an ambient fact.
+fn cspell_wiring(configs: &[PathBuf], word_list: &Path) -> Wiring {
+    if configs.is_empty() {
+        return Wiring {
+            state: Activation::Manual,
+            config: None,
+            hint: Some("no VS Code settings found on this machine".into()),
+        };
+    }
+    // Match on the file name rather than the full path: a reference may be
+    // written with ~ or ${userHome}, and any mention of our file at all means
+    // they wired it.
+    let needle = word_list
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let found = configs.iter().find(|c| {
+        std::fs::read_to_string(c)
+            .map(|text| text.contains(&needle))
+            .unwrap_or(false)
+    });
+    match found {
+        Some(config) => Wiring {
+            state: Activation::Wired,
+            config: Some(config.clone()),
+            hint: None,
+        },
+        None => Wiring {
+            state: Activation::Inert,
+            config: configs.first().cloned(),
+            hint: Some(cspell_snippet(word_list)),
+        },
+    }
+}
+
+impl Target {
+    /// Is anything actually reading this file?
+    ///
+    /// Read-only, and tolerant of every absence: no consumer installed, no
+    /// config written yet, an unreadable file. None of those is an error —
+    /// each is a different answer to the question, and saying which one is
+    /// the entire point.
+    pub fn wiring(&self) -> Wiring {
+        match self.name {
+            // NSSpellChecker reads this exact path. There is no config step
+            // to get wrong, which is why this target has always worked.
+            "macos" => Wiring {
+                state: Activation::Inherent,
+                config: None,
+                hint: None,
+            },
+            "vscode" => cspell_wiring(&cspell_settings_paths(), &self.path),
+            // Flow keeps its dictionary in the cloud and imports from a CSV,
+            // so there is no local config that could reference this file and
+            // nothing to check.
+            _ => Wiring {
+                state: Activation::Manual,
+                config: None,
+                hint: (!self.note.is_empty()).then(|| self.note.to_string()),
+            },
+        }
+    }
 }
 
 pub fn find_target(name: &str) -> Option<Target> {
@@ -220,10 +383,14 @@ pub fn install(
         // rather than the alphabetically luckiest.
         words = strongest(store, limit)?;
     }
+    let wiring = target.wiring();
     let mut report = SyncReport {
         target: target.name.to_string(),
         path: target.path.display().to_string(),
         total: words.len(),
+        activation: Some(wiring.state),
+        hint: wiring.hint,
+        config: wiring.config.map(|c| c.display().to_string()),
         ..Default::default()
     };
 
@@ -335,6 +502,59 @@ mod tests {
             limit: None,
             note: "",
         }
+    }
+
+    #[test]
+    fn a_config_that_names_our_file_counts_as_wired() {
+        let dir = scratch("wired");
+        let settings = dir.join("settings.json");
+        // ${userHome} rather than a literal path, which is why the check
+        // matches on the file name and not the full path.
+        std::fs::write(
+            &settings,
+            r#"{ "cSpell.customDictionaries": { "vocabulist": {
+                 "path": "${userHome}/.local/share/vocabulist/vocabulist.txt" } } }"#,
+        )
+        .unwrap();
+        let w = cspell_wiring(&[settings], &dir.join("vocabulist.txt"));
+        assert_eq!(w.state, Activation::Wired);
+        assert!(w.state.live());
+    }
+
+    #[test]
+    fn a_config_that_ignores_our_file_is_inert_not_absent() {
+        // The failure this exists for: a correct word list on disk that
+        // nothing reads, reporting exactly like one that works.
+        let dir = scratch("inert");
+        let settings = dir.join("settings.json");
+        std::fs::write(&settings, r#"{ "cSpell.userWords": ["zblorg"] }"#).unwrap();
+        let w = cspell_wiring(&[settings], &dir.join("vocabulist.txt"));
+        assert_eq!(w.state, Activation::Inert);
+        assert!(!w.state.live());
+        let hint = w.hint.unwrap();
+        assert!(hint.contains("cSpell.customDictionaries"));
+        // Without this cSpell writes into a file the next sync regenerates.
+        assert!(hint.contains("\"addWords\": false"));
+    }
+
+    #[test]
+    fn no_editor_installed_is_not_a_failed_wiring() {
+        let w = cspell_wiring(&[], Path::new("/tmp/vocabulist.txt"));
+        assert_eq!(w.state, Activation::Manual);
+    }
+
+    #[test]
+    fn the_macos_target_needs_no_wiring() {
+        let target = Target {
+            name: "macos",
+            path: PathBuf::from("/tmp/LocalDictionary"),
+            manifest: PathBuf::from("/tmp/manifest.txt"),
+            owned: false,
+            limit: None,
+            note: "",
+        };
+        assert_eq!(target.wiring().state, Activation::Inherent);
+        assert!(target.wiring().state.live());
     }
 
     #[test]

@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`vocab sync` now says whether an export is actually in effect.** Writing a
+  correctly formatted word list is only half an integration — the checker has
+  to be pointed at the file, and nothing fails when it hasn't been, so an
+  export can sit correct and unread indefinitely. Each target now reports
+  `activation` (`inherent`, `wired`, `inert`, `manual`) and `live`, checked
+  against the consumer's own config, and an inert target prints the snippet
+  that activates it, naming the settings file it goes in. The cSpell snippet
+  carries `addWords: false`, without which the editor's own "add to
+  dictionary" writes into a file the next sync regenerates.
+
 - `--profile` reports where the time went — per-stage timings and counters, in
   any output format.
 - `vocab eval` reports **top-1 correction accuracy** (`top1_rate`, and a
@@ -68,6 +78,16 @@
   word.
 
 ### Added
+
+- **`vocab sync` now says whether an export is actually in effect.** Writing a
+  correctly formatted word list is only half an integration — the checker has
+  to be pointed at the file, and nothing fails when it hasn't been, so an
+  export can sit correct and unread indefinitely. Each target now reports
+  `activation` (`inherent`, `wired`, `inert`, `manual`) and `live`, checked
+  against the consumer's own config, and an inert target prints the snippet
+  that activates it, naming the settings file it goes in. The cSpell snippet
+  carries `addWords: false`, without which the editor's own "add to
+  dictionary" writes into a file the next sync regenerates.
 
 - **The dictionary is bundled, and modern.** SCOWL levels 10–60 replace
   `/usr/share/dict/words` — which on macOS is Webster's Second of 1934, a
@@ -136,6 +156,16 @@
 
 ### Added
 
+- **`vocab sync` now says whether an export is actually in effect.** Writing a
+  correctly formatted word list is only half an integration — the checker has
+  to be pointed at the file, and nothing fails when it hasn't been, so an
+  export can sit correct and unread indefinitely. Each target now reports
+  `activation` (`inherent`, `wired`, `inert`, `manual`) and `live`, checked
+  against the consumer's own config, and an inert target prints the snippet
+  that activates it, naming the settings file it goes in. The cSpell snippet
+  carries `addWords: false`, without which the editor's own "add to
+  dictionary" writes into a file the next sync regenerates.
+
 - **Capture from your own past messages.** Reading a Slack channel or a pull
   request surfaces things you wrote months ago, which no forward-looking
   capture will ever see. The filter moves from direction to authorship, which
@@ -188,6 +218,16 @@
 
 ### Added
 
+- **`vocab sync` now says whether an export is actually in effect.** Writing a
+  correctly formatted word list is only half an integration — the checker has
+  to be pointed at the file, and nothing fails when it hasn't been, so an
+  export can sit correct and unread indefinitely. Each target now reports
+  `activation` (`inherent`, `wired`, `inert`, `manual`) and `live`, checked
+  against the consumer's own config, and an inert target prints the snippet
+  that activates it, naming the settings file it goes in. The cSpell snippet
+  carries `addWords: false`, without which the editor's own "add to
+  dictionary" writes into a file the next sync regenerates.
+
 - `vocab eval` — measure the checker against a labeled corpus. Known-good
   prose is corrupted in known places (Damerau's four single-character
   operations plus real-word swaps, with QWERTY-adjacent substitutions),
@@ -228,6 +268,16 @@
 ## 0.2.0 — 2026-08-15
 
 ### Added
+
+- **`vocab sync` now says whether an export is actually in effect.** Writing a
+  correctly formatted word list is only half an integration — the checker has
+  to be pointed at the file, and nothing fails when it hasn't been, so an
+  export can sit correct and unread indefinitely. Each target now reports
+  `activation` (`inherent`, `wired`, `inert`, `manual`) and `live`, checked
+  against the consumer's own config, and an inert target prints the snippet
+  that activates it, naming the settings file it goes in. The cSpell snippet
+  carries `addWords: false`, without which the editor's own "add to
+  dictionary" writes into a file the next sync regenerates.
 
 - `vocab analyze` — vocabulary and linguistic complexity, for a text or for
   everything captured. Reports Guiraud's R alongside type-token ratio (TTR

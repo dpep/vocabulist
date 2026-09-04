@@ -233,7 +233,10 @@ pub fn render_status(
                         (true, ours) if ours == i.total => format!("{ours} words"),
                         (true, ours) => format!("{ours} of {} words ours", i.total),
                     };
-                    writeln!(out, "  {:<14} {}", i.name, state)?;
+                    // "present" answers whether we wrote the file, which is
+                    // the question people mistake for whether it works.
+                    let reach = if i.live { "" } else { "  (not in effect)" };
+                    writeln!(out, "  {:<14} {state}{reach}", i.name)?;
                     writeln!(out, "  {:<14} {}", "", tilde(&i.path))?;
                 }
             }
@@ -253,15 +256,20 @@ pub fn render_targets(
         Format::Human => {
             for t in targets {
                 let state = if t.path.exists() { "present" } else { "absent" };
+                let wiring = t.wiring();
                 writeln!(
                     out,
-                    "{:<10} {:<8} {}",
+                    "{:<10} {:<8} {:<9} {}",
                     t.name,
                     state,
+                    wiring.state.as_str(),
                     tilde(&t.path.display().to_string())
                 )?;
                 if !t.note.is_empty() {
                     writeln!(out, "{:<19} — {}", "", t.note)?;
+                }
+                if wiring.state == crate::sync::Activation::Inert {
+                    writeln!(out, "{:<19} — not referenced by any editor config", "")?;
                 }
             }
             Ok(())
@@ -275,6 +283,8 @@ pub fn render_targets(
                         "path": t.path.display().to_string(),
                         "owned": t.owned,
                         "exists": t.path.exists(),
+                        "activation": t.wiring().state.as_str(),
+                        "live": t.wiring().state.live(),
                         "note": t.note,
                     })
                 })
@@ -304,6 +314,32 @@ pub fn render_sync(
                         tilde(&r.path)
                     )?,
                 }
+                // Written is not the same as in effect, and the difference
+                // used to be invisible: a correct file nothing was pointed at
+                // reported exactly like one that worked.
+                match r.activation {
+                    Some(crate::sync::Activation::Inert) => {
+                        writeln!(
+                            out,
+                            "{:<10} not in effect — nothing reads this file yet",
+                            ""
+                        )?;
+                        if let Some(config) = &r.config {
+                            writeln!(out, "{:<10} add to {}:", "", tilde(config))?;
+                        }
+                        if let Some(hint) = &r.hint {
+                            for line in hint.lines() {
+                                writeln!(out, "{:<12} {line}", "")?;
+                            }
+                        }
+                    }
+                    Some(crate::sync::Activation::Manual) => {
+                        if let Some(hint) = &r.hint {
+                            writeln!(out, "{:<10} needs a manual step — {hint}", "")?;
+                        }
+                    }
+                    _ => {}
+                }
             }
             if dry_run {
                 writeln!(out, "\n(dry run — nothing written)")?;
@@ -321,6 +357,10 @@ pub fn render_sync(
                         "removed": r.removed,
                         "total": r.total,
                         "skipped": r.skipped,
+                        "activation": r.activation.map(|a| a.as_str()),
+                        "live": r.activation.map(crate::sync::Activation::live),
+                        "hint": r.hint,
+                        "config": r.config,
                         "dry_run": dry_run,
                     })
                 })

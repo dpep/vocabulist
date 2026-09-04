@@ -351,6 +351,18 @@ built-in checker" for a fraction of the cost of replacing it.
   `cSpell.customDictionaries`. Deliberately *not* a rewrite of the user's
   `settings.json`: that file is JSONC and theirs, and mechanical edits lose
   comments.
+
+  That decision has a cost, and for months it was paid silently. Writing a
+  correctly formatted word list is only half an integration — the consumer
+  still has to be told the file exists, and nothing fails when it hasn't been.
+  One user's export sat correct and unread from the first sync onward, because
+  neither the tool nor the person running it could tell that state apart from
+  a working one. So `sync` now **checks**: it reads the editor's own settings
+  and reports `inherent`, `wired`, `inert`, or `manual` per target, and prints
+  the activation snippet — with `addWords: false`, so cSpell's quick-fix
+  doesn't write into a file the next sync regenerates — when it finds an
+  export nothing points at. Detect and report, not edit: the reason not to
+  touch someone's `settings.json` hasn't changed, only the silence around it.
 - **macOS `~/Library/Spelling/LocalDictionary`** — feeds `NSSpellChecker`, so
   Mail, Notes, TextEdit, and Safari all benefit. Read at app launch, so
   eventually-consistent rather than live.
@@ -358,8 +370,10 @@ built-in checker" for a fraction of the cost of replacing it.
   desktop, and every web textarea, but the file carries a trailing
   `checksum_v1` line and Chrome is understood to discard the dictionary when
   that doesn't match, so a naive append may silently disable it. **Verify
-  before implementing** — this is the one target that can fail closed and
-  silently.
+  before implementing** — this was written as the one target that can fail
+  closed and silently, and that was wrong: VS Code was already doing it, one
+  step earlier. A target can fail at the format *or* at the wiring, and only
+  the first was being guarded against.
 
 **Uninstall must be exact.** These files are shared with words the user added
 themselves — macOS writes there on every "Learn Spelling". So each install
