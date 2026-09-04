@@ -324,9 +324,9 @@ pub fn render_sync(
                             "{:<10} not in effect — nothing reads this file yet",
                             ""
                         )?;
-                        if let Some(config) = &r.config {
-                            writeln!(out, "{:<10} add to {}:", "", tilde(config))?;
-                        }
+                        // The hint says where it goes as well as what to
+                        // paste; `config` carries the path on its own for a
+                        // consumer that wants it structured.
                         if let Some(hint) = &r.hint {
                             for line in hint.lines() {
                                 writeln!(out, "{:<12} {line}", "")?;

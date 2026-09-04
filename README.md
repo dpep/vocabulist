@@ -116,7 +116,7 @@ config and says which targets are actually live:
 $ vocab sync
 vscode     +1988   -0      ~/.local/share/vocabulist/vocabulist.txt
            not in effect — nothing reads this file yet
-           add to ~/Library/Application Support/Code/User/settings.json:
+             add to ~/Library/Application Support/Code/User/settings.json:
              "cSpell.customDictionaries": {
                "vocabulist": {
                  "name": "vocabulist",
@@ -125,6 +125,10 @@ vscode     +1988   -0      ~/.local/share/vocabulist/vocabulist.txt
                }
              }
 ```
+
+It checks the path too, not just that a reference exists — a config left
+pointing at an old home directory looks configured and reads nothing, which
+is the failure this is here to catch.
 
 `addWords: false` matters: without it cSpell's own "add to dictionary"
 quick-fix writes into a file `sync` regenerates wholesale, so the word

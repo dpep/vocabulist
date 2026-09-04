@@ -236,30 +236,79 @@ fn cspell_wiring(configs: &[PathBuf], word_list: &Path) -> Wiring {
             hint: Some("no VS Code settings found on this machine".into()),
         };
     }
-    // Match on the file name rather than the full path: a reference may be
-    // written with ~ or ${userHome}, and any mention of our file at all means
-    // they wired it.
     let needle = word_list
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let found = configs.iter().find(|c| {
-        std::fs::read_to_string(c)
-            .map(|text| text.contains(&needle))
-            .unwrap_or(false)
-    });
-    match found {
-        Some(config) => Wiring {
-            state: Activation::Wired,
-            config: Some(config.clone()),
-            hint: None,
-        },
-        None => Wiring {
-            state: Activation::Inert,
-            config: configs.first().cloned(),
-            hint: Some(cspell_snippet(word_list)),
-        },
+
+    // A config can name our file and still not reach it. One real settings.json
+    // pointed at /Users/daniel.pepper/... on a machine whose home is
+    // /Users/dpepper — a stale username from another install. Matching the file
+    // name alone called that wired, which is the same false comfort this whole
+    // check exists to remove, so the referenced path has to resolve to ours.
+    let mut names_us: Option<(PathBuf, String)> = None;
+    for config in configs {
+        let Ok(text) = std::fs::read_to_string(config) else {
+            continue;
+        };
+        for reference in quoted_strings(&text).filter(|q| q.contains(&needle)) {
+            if expand_home(&reference).as_deref() == Some(word_list) {
+                return Wiring {
+                    state: Activation::Wired,
+                    config: Some(config.clone()),
+                    hint: None,
+                };
+            }
+            names_us.get_or_insert((config.clone(), reference));
+        }
     }
+
+    match names_us {
+        // Pointed at the wrong place: worse than unconfigured, because it
+        // looks done.
+        Some((config, reference)) => Wiring {
+            hint: Some(format!(
+                "{} points at {reference}\nreplace that entry with:\n{}",
+                config.display(),
+                cspell_snippet(word_list)
+            )),
+            state: Activation::Inert,
+            config: Some(config),
+        },
+        None => {
+            let config = configs.first().cloned();
+            Wiring {
+                hint: Some(format!(
+                    "add to {}:\n{}",
+                    config
+                        .as_ref()
+                        .map(|c| c.display().to_string())
+                        .unwrap_or_default(),
+                    cspell_snippet(word_list)
+                )),
+                state: Activation::Inert,
+                config,
+            }
+        }
+    }
+}
+
+/// Every double-quoted run in a blob of JSONC. Enough to find the paths a
+/// config references without parsing a format that permits comments and
+/// trailing commas.
+fn quoted_strings(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split('"').skip(1).step_by(2).map(str::to_string)
+}
+
+/// Resolve the forms an editor config writes a home-relative path in.
+fn expand_home(raw: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    for prefix in ["~/", "${userHome}/", "$HOME/"] {
+        if let Some(rest) = raw.strip_prefix(prefix) {
+            return Some(home.join(rest));
+        }
+    }
+    Some(PathBuf::from(raw))
 }
 
 impl Target {
@@ -484,6 +533,13 @@ fn write_all(path: &Path, words: &[String]) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// The path the ${userHome} fixture resolves to on whatever machine the
+    /// suite is running on.
+    fn home_relative_word_list() -> PathBuf {
+        PathBuf::from(std::env::var_os("HOME").unwrap())
+            .join(".local/share/vocabulist/vocabulist.txt")
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("vocabulist-sync-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -508,17 +564,35 @@ mod tests {
     fn a_config_that_names_our_file_counts_as_wired() {
         let dir = scratch("wired");
         let settings = dir.join("settings.json");
-        // ${userHome} rather than a literal path, which is why the check
-        // matches on the file name and not the full path.
+        // ${userHome} rather than a literal path — a form the check has to
+        // resolve before it can compare.
         std::fs::write(
             &settings,
             r#"{ "cSpell.customDictionaries": { "vocabulist": {
                  "path": "${userHome}/.local/share/vocabulist/vocabulist.txt" } } }"#,
         )
         .unwrap();
-        let w = cspell_wiring(&[settings], &dir.join("vocabulist.txt"));
+        let w = cspell_wiring(&[settings], &home_relative_word_list());
         assert_eq!(w.state, Activation::Wired);
         assert!(w.state.live());
+    }
+
+    #[test]
+    fn a_config_pointing_at_the_wrong_path_is_not_wired() {
+        // Seen in the wild: a stale username from another install, so cSpell
+        // referenced a file that does not exist. Matching the file name alone
+        // reported this as working.
+        let dir = scratch("stale");
+        let settings = dir.join("settings.json");
+        std::fs::write(
+            &settings,
+            r#"{ "cSpell.customDictionaries": { "vocabulist": {
+                 "path": "/Users/someone-else/.local/share/vocabulist/vocabulist.txt" } } }"#,
+        )
+        .unwrap();
+        let w = cspell_wiring(&[settings], &dir.join("vocabulist.txt"));
+        assert_eq!(w.state, Activation::Inert);
+        assert!(w.hint.unwrap().contains("someone-else"));
     }
 
     #[test]

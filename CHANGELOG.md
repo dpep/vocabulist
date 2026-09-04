@@ -12,7 +12,9 @@
   against the consumer's own config, and an inert target prints the snippet
   that activates it, naming the settings file it goes in. The cSpell snippet
   carries `addWords: false`, without which the editor's own "add to
-  dictionary" writes into a file the next sync regenerates.
+  dictionary" writes into a file the next sync regenerates. The check
+  resolves the referenced path rather than trusting a name match, so a config
+  left pointing at an old home directory reads as inert rather than wired.
 
 - `--profile` reports where the time went — per-stage timings and counters, in
   any output format.
@@ -87,7 +89,9 @@
   against the consumer's own config, and an inert target prints the snippet
   that activates it, naming the settings file it goes in. The cSpell snippet
   carries `addWords: false`, without which the editor's own "add to
-  dictionary" writes into a file the next sync regenerates.
+  dictionary" writes into a file the next sync regenerates. The check
+  resolves the referenced path rather than trusting a name match, so a config
+  left pointing at an old home directory reads as inert rather than wired.
 
 - **The dictionary is bundled, and modern.** SCOWL levels 10–60 replace
   `/usr/share/dict/words` — which on macOS is Webster's Second of 1934, a
@@ -164,7 +168,9 @@
   against the consumer's own config, and an inert target prints the snippet
   that activates it, naming the settings file it goes in. The cSpell snippet
   carries `addWords: false`, without which the editor's own "add to
-  dictionary" writes into a file the next sync regenerates.
+  dictionary" writes into a file the next sync regenerates. The check
+  resolves the referenced path rather than trusting a name match, so a config
+  left pointing at an old home directory reads as inert rather than wired.
 
 - **Capture from your own past messages.** Reading a Slack channel or a pull
   request surfaces things you wrote months ago, which no forward-looking
@@ -226,7 +232,9 @@
   against the consumer's own config, and an inert target prints the snippet
   that activates it, naming the settings file it goes in. The cSpell snippet
   carries `addWords: false`, without which the editor's own "add to
-  dictionary" writes into a file the next sync regenerates.
+  dictionary" writes into a file the next sync regenerates. The check
+  resolves the referenced path rather than trusting a name match, so a config
+  left pointing at an old home directory reads as inert rather than wired.
 
 - `vocab eval` — measure the checker against a labeled corpus. Known-good
   prose is corrupted in known places (Damerau's four single-character
@@ -277,7 +285,9 @@
   against the consumer's own config, and an inert target prints the snippet
   that activates it, naming the settings file it goes in. The cSpell snippet
   carries `addWords: false`, without which the editor's own "add to
-  dictionary" writes into a file the next sync regenerates.
+  dictionary" writes into a file the next sync regenerates. The check
+  resolves the referenced path rather than trusting a name match, so a config
+  left pointing at an old home directory reads as inert rather than wired.
 
 - `vocab analyze` — vocabulary and linguistic complexity, for a text or for
   everything captured. Reports Guiraud's R alongside type-token ratio (TTR
