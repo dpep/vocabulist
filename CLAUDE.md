@@ -52,12 +52,13 @@ decisions — reach for it before inventing a method that has a name.
 
   The harness counts as "anyone else" too, and it writes into the same field
   the user does. `hook::strip_envelopes` removes injected reminders and task
-  notifications; a turn carrying a `<command-*>` marker is dropped whole,
-  because a command's body arrives after those tags and stripping would leave
-  a skill author's instructions looking like prose; and every capture claims a
-  content key, so a template that fires every session counts once. Each of
-  those was feeding machine text into the voice profile for weeks before
-  anyone looked. Assume the next capture path has the same hole.
+  notifications; a turn carrying a `<command-*>` or `<agent-message` marker is
+  dropped whole, because the prose arrives around those tags rather than
+  inside them, and stripping would leave a skill author's instructions or a
+  subagent hand-back frame looking like something the user typed; and every
+  capture claims a content key, so a template that fires every session counts
+  once. Each of those was feeding machine text into the voice profile for
+  weeks before anyone looked. Assume the next capture path has the same hole.
 - **stdout is for data, stderr is for logs.** All logging goes through
   `env_logger` to stderr so a consumer piping `vocab` gets clean output.
 - **Every command is agent/script-friendly.** *All* output honors the format —

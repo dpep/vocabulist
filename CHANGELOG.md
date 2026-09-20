@@ -31,6 +31,15 @@
 
 ### Fixed
 
+- **A subagent's hand-back is no longer learned as your voice.** When another
+  agent reports back, the harness wraps it in `<agent-message from="…">` and
+  introduces it with a frame explaining that the words carry no user
+  authority. The envelope list matched bare tags only, so the attribute kept
+  the tag from matching, and the frame sits outside it regardless — the whole
+  turn is now dropped, as a command expansion is. On one real store the frame
+  was 41% of all four-gram weight and 38 of the top 50 bigrams by
+  log-likelihood. An existing store keeps what it learned; `vocab rm --phrase`
+  removes it.
 - **`-J/--ndjson` now actually streams.** It was line-*shaped* but collected
   every finding and printed at EOF, so `tail -f log | vocab -J` printed
   nothing and a long file showed nothing until it finished. Findings are now

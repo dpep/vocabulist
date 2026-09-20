@@ -143,10 +143,13 @@ they are trusted to know:
    harness injects — reminders, task notifications, local command output.
    Named rather than "any tag", because a prompt about HTML contains `<div>`
    and is still the user's.
-2. **A command expansion is dropped whole.** Its body arrives *after* the
-   `<command-*>` tags rather than inside them, so stripping leaves the skill
-   author's instructions in place of a sentence. There is nothing in that turn
-   worth keeping.
+2. **A turn another author produced is dropped whole.** `hook::FOREIGN_MARKERS`
+   lists them. A command expansion's body arrives *after* the `<command-*>`
+   tags rather than inside them, so stripping leaves the skill author's
+   instructions in place of a sentence; a subagent's hand-back is wrapped in
+   `<agent-message from="…">` — an attribute, which is why matching bare tags
+   missed it — and introduced by a frame that sits outside the tag anyway.
+   There is nothing in either turn worth keeping.
 3. **Identical text counts once.** Every capture claims a key — a message id
    where the source has one, otherwise a hash of the text with case,
    whitespace, and digit runs folded. A hook that fires the same template

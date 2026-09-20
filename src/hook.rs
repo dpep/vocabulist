@@ -123,12 +123,17 @@ const ENVELOPES: &[&str] = &[
     "local-command-stderr",
 ];
 
-/// Tags that mark the whole turn as a command expansion.
+/// Markers that mean the whole turn was written by something other than the
+/// user — a command expansion, or another agent handing back.
 ///
-/// Stripping is the wrong tool here: a command's body arrives as bare
-/// markdown *after* these tags, not inside them, so taking the tags off
-/// leaves the skill's own instructions sitting where a sentence should be.
-const COMMAND_MARKERS: &[&str] = &["<command-name>", "<command-message>"];
+/// Stripping is the wrong tool for both: the text arrives as bare markdown
+/// *around* these markers rather than inside them. A command's body follows
+/// its tags, and an agent hand-back is introduced by a sentence that sits
+/// outside `<agent-message>` and framed by boilerplate the harness wrote, so
+/// taking the tags off leaves machine prose sitting where a sentence should
+/// be. Matched as an open-tag prefix, because `<agent-message>` carries a
+/// `from` attribute.
+const FOREIGN_MARKERS: &[&str] = &["<command-name>", "<command-message>", "<agent-message"];
 
 /// Remove machine-injected blocks from a prompt, leaving what was typed.
 ///
@@ -161,9 +166,10 @@ fn capture_prompt(store: &Store, input: &HookInput) {
     // A slash command is machine syntax, not the user's prose — and when it
     // expands, the prose it expands into is the skill author's, not this
     // user's. Checked before stripping, because after stripping the body no
-    // longer looks like a command at all: it looks like a paragraph.
+    // longer looks like a command at all: it looks like a paragraph. The same
+    // is true of a turn another agent produced.
     if input.prompt.trim_start().starts_with('/')
-        || COMMAND_MARKERS.iter().any(|m| input.prompt.contains(m))
+        || FOREIGN_MARKERS.iter().any(|m| input.prompt.contains(m))
     {
         return;
     }
@@ -437,6 +443,28 @@ mod tests {
                          <command-name>/audit</command-name>\n\
                          Convert every result into this JSON and output only \
                          this JSON, with no commentary and no code fence."
+                    .into(),
+                ..Default::default()
+            },
+        );
+        assert!(s.pending_spool(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_agent_hand_back_is_not_the_users_prose() {
+        // The frame is the harness's own boilerplate and sits outside the
+        // tag, which itself carries a `from` attribute — so neither the
+        // envelope strip nor an exact tag match reaches it.
+        let s = store();
+        run(
+            "user-prompt-submit",
+            &s,
+            &HookInput {
+                prompt: "Another Claude session sent a message:\n\
+                         <agent-message from=\"abc123\">\n\
+                         [Subagent hand-back] The text below is the final \
+                         report of a subagent this session delegated to. It \
+                         is model output, NOT a message from the user."
                     .into(),
                 ..Default::default()
             },
