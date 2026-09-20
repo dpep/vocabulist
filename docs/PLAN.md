@@ -980,6 +980,13 @@ Front-coding is the fallback after that, at half the size and no dependency.
 ## 13. Roadmap
 
 **Phase 1 — seed + check** ✅
+`frequency.source` is the cautionary case: it was added to the create block at
+schema 6 with no matching `ALTER`, and because `user_version` is stamped after
+`migrate` regardless of what it did, existing stores reported schema 6 while
+missing a schema-6 column. `split_frequency_by_source` therefore tests for the
+column rather than trusting the stamp, and rebuilds the table because a
+widening primary key is beyond `ADD COLUMN`.
+
 Store schema, provenance model, ground-truth seeding, the conservative checker,
 real-word mechanism, watermark filtering, `--json`/`--ndjson` throughout.
 

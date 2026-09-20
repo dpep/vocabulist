@@ -207,7 +207,47 @@ fn migrate(conn: &Connection) -> Result<()> {
         conn,
         "ALTER TABLE identities ADD COLUMN denied INTEGER NOT NULL DEFAULT 0",
     )?;
+    split_frequency_by_source(conn)?;
     Ok(())
+}
+
+/// Give `frequency` its `source` column, on a database created before it had
+/// one.
+///
+/// An `ADD COLUMN` cannot do this: the primary key widens from `(word)` to
+/// `(word, source)`, and SQLite will not alter a key. So the table is rebuilt.
+///
+/// Existing rows become `mined`, which is the self-healing label. They are a
+/// mix of mined and core counts with nothing recording which, and mined is
+/// the half that gets *replaced* on the next seed — call them core and the
+/// stale numbers would take a MAX and never be corrected. Nothing is lost
+/// either way: core counts come from the embedded list and mined ones from
+/// re-reading the machine.
+///
+/// Without this, every seed on an existing store failed on `no column named
+/// source`, the Stop hook swallowed it, and the lexicon quietly stopped
+/// learning about newly installed tools.
+fn split_frequency_by_source(conn: &Connection) -> Result<()> {
+    let has_source = conn
+        .prepare("SELECT 1 FROM pragma_table_info('frequency') WHERE name = 'source'")?
+        .exists([])?;
+    if has_source {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE frequency_new (
+             word TEXT NOT NULL,
+             source TEXT NOT NULL DEFAULT 'mined',
+             count INTEGER NOT NULL DEFAULT 0,
+             PRIMARY KEY (word, source)
+         );
+         INSERT INTO frequency_new (word, source, count)
+             SELECT word, 'mined', count FROM frequency;
+         DROP TABLE frequency;
+         ALTER TABLE frequency_new RENAME TO frequency;
+         COMMIT;",
+    )
 }
 
 /// Run an idempotent `ADD COLUMN`, tolerating only the duplicate-column error.
@@ -1258,6 +1298,43 @@ mod tests {
         let (_, observed, _) = s.checkable().unwrap();
         let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
         assert_eq!(sources, 2);
+    }
+
+    #[test]
+    fn an_old_frequency_table_gains_its_source_column() {
+        // A store created before `frequency` was keyed by source. The whole
+        // seed path failed on it with "no column named source", and the Stop
+        // hook swallowed the error, so seeding silently stopped forever.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE frequency (
+                 word TEXT PRIMARY KEY,
+                 count INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO frequency (word, count) VALUES ('widget', 7);",
+        )
+        .unwrap();
+
+        split_frequency_by_source(&conn).unwrap();
+
+        let (source, count): (String, i64) = conn
+            .query_row(
+                "SELECT source, count FROM frequency WHERE word = 'widget'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 7, "counts survive the rebuild");
+        // Mined is the self-healing label: the next seed replaces it, where
+        // a stale count called `core` would take a MAX and persist.
+        assert_eq!(source, "mined");
+
+        // Idempotent — a second pass must not rebuild or double the rows.
+        split_frequency_by_source(&conn).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM frequency", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[test]

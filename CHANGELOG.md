@@ -43,6 +43,15 @@
 
 ### Fixed
 
+- **Seeding no longer fails forever on a database created before `frequency`
+  was keyed by source.** The column went into the `CREATE TABLE` block without
+  a matching migration, so existing stores kept the old shape and every seed
+  died on `table frequency has no column named source`. The Stop hook swallows
+  errors by design, so nothing surfaced — a store seeded 35 days ago with a
+  30-day refresh had simply stopped learning about newly installed tools.
+  `ADD COLUMN` cannot fix it, since the primary key widens from `(word)` to
+  `(word, source)`, so the table is rebuilt and existing rows become `mined`,
+  the half the next seed replaces.
 - **A session nobody is attending no longer captures anything.** A plugin
   that asks a model a question spawns a headless `claude -p`, and that
   session's hook fired with the plugin's own instruction text as the prompt —
