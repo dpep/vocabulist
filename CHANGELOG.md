@@ -4,6 +4,18 @@
 
 ### Added
 
+- **`vocab templates` finds boilerplate that was learned as your prose.** Six
+  times now machine text has reached the voice profile through a capture path
+  nobody had looked at, and every one was found by a person reading `vocab
+  phrases` and recognizing a program talking. `prune` structurally cannot
+  help — its test is made on one stored row, and boilerplate is ordinary
+  words in an ordinary order. But a repeated sentence leaves a chain of
+  overlapping five-grams that all recur about equally often, so chaining them
+  back reconstructs the run. Reports length, repeats, flatness and a
+  confidence derived from all three; `--apply` removes every phrase a run
+  contains, crossings included. On the live store it found the subagent frame
+  and, unprompted, a second leak nobody had noticed.
+
 - **`vocab sync` now says whether an export is actually in effect.** Writing a
   correctly formatted word list is only half an integration — the checker has
   to be pointed at the file, and nothing fails when it hasn't been, so an
@@ -31,6 +43,13 @@
 
 ### Fixed
 
+- **A session nobody is attending no longer captures anything.** A plugin
+  that asks a model a question spawns a headless `claude -p`, and that
+  session's hook fired with the plugin's own instruction text as the prompt —
+  which is how a status-bar labeller's prompt became this user's
+  characteristic phrasing. `CLAUDE_CODE_SESSION_ATTENDED=0` says nobody is
+  typing, which settles it without knowing anything about any one plugin.
+  Only an explicit `0` counts; absent means a CLI that doesn't set it.
 - **A subagent's hand-back is no longer learned as your voice.** When another
   agent reports back, the harness wraps it in `<agent-message from="…">` and
   introduces it with a frame explaining that the words carry no user

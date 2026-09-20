@@ -26,6 +26,7 @@ pub mod prune;
 pub mod seed;
 pub mod store;
 pub mod sync;
+pub mod template;
 pub mod text;
 pub mod types;
 pub mod watermark;

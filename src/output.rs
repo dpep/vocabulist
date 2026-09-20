@@ -148,6 +148,41 @@ pub fn render_seed(
     }
 }
 
+pub fn render_templates(
+    out: &mut impl Write,
+    report: &crate::template::TemplateReport,
+    apply: bool,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            if report.templates.is_empty() {
+                return writeln!(out, "No repeated runs — nothing reads like boilerplate.");
+            }
+            for t in &report.templates {
+                writeln!(
+                    out,
+                    "{:>5} words  x{:<4}  flat {:.2}  confidence {:.2}",
+                    t.length, t.repeats, t.flatness, t.confidence
+                )?;
+                writeln!(out, "  {}\n", t.text)?;
+            }
+            if apply {
+                writeln!(out, "removed {} phrases", report.ngrams_removed)
+            } else {
+                writeln!(out, "(scan only — nothing removed; --apply to remove)")
+            }
+        }
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(report).unwrap()),
+        Format::Ndjson => {
+            for t in &report.templates {
+                writeln!(out, "{}", serde_json::to_string(t).unwrap())?;
+            }
+            Ok(())
+        }
+    }
+}
+
 pub fn render_prune(
     out: &mut impl Write,
     report: &crate::prune::PruneReport,

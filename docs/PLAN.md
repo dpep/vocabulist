@@ -154,13 +154,26 @@ they are trusted to know:
    where the source has one, otherwise a hash of the text with case,
    whitespace, and digit runs folded. A hook that fires the same template
    every session contributes one observation, not four hundred.
+4. **An unattended session captures nothing.** `CLAUDE_CODE_SESSION_ATTENDED=0`
+   says nobody is typing — a headless `claude -p`, which is the shape a plugin
+   asking a model a question takes. Only an explicit `0` counts; absent is a
+   CLI that does not set it, and reading that as unattended would turn capture
+   off for everyone.
 
-The third is the one that generalizes, and it is deliberately an *identity*
-rule rather than a repetition threshold. "Seen more than N times, therefore
-machine" would be a constant chosen to feel right, and it is false besides:
-people repeat themselves. But four hundred copies of one string is one
-context however it got there, which is the same standard `MIN_SOURCES`
-already applies to words.
+The last two generalize past the hole that prompted them; the first two only
+close the hole they name. Rule 3 is deliberately an *identity* rule rather
+than a repetition threshold: "seen more than N times, therefore machine"
+would be a constant chosen to feel right, and it is false besides — people
+repeat themselves. But four hundred copies of one string is one context
+however it got there, which is the same standard `MIN_SOURCES` already
+applies to words. Rule 4 asks about the session rather than the text, which
+is why it needs to know nothing about what the text says.
+
+None of the four will be the last word. Six leaks have been found so far and
+every one was invisible until a person read `vocab phrases`, so the store
+also gets a backstop that assumes the next capture path leaks: `templates`
+(§9a) reconstructs repeated verbatim runs from the n-gram tables, which is
+what boilerplate looks like from the inside regardless of how it arrived.
 
 ## 6. Registers
 
@@ -266,6 +279,36 @@ The cost is a one-occurrence lag: for n >= 3 the stored count is at least one
 below the true one, because counting starts when the prefix recurs. So
 `--min-count 2` on a long phrase means "said at least three times" — a
 stricter bar than it looks, and the right one for a claim about habit.
+
+### 9a. Templates — boilerplate seen from the inside **[done]**
+
+`prune` judges one stored row, and boilerplate is ordinary words in an
+ordinary order, so no row-local test can reach it. The evidence is *across*
+rows: a repeated sentence leaves a chain of overlapping five-grams that all
+recur about equally often. `vocab templates` chains them back — join on the
+four-word overlap, highest count winning a contested link, and report the
+maximal runs.
+
+Five is the chaining width because it is the widest the store keeps and
+because a four-word overlap makes a wrong join unlikely; chaining bigrams
+would wander through ordinary English.
+
+Three quantities are measured and reported rather than collapsed into a
+verdict: **length** (words recurring verbatim), **repeats** (the lowest count
+along the chain, so a run is credited only with what its weakest link
+demonstrates), and **flatness** (lowest count over highest — a template
+repeats whole, prose that merely overlaps is raggeder). Confidence is their
+product, so nothing scores high on one strength alone, which is the mistake
+that would flag prose.
+
+The defaults — twelve words, five repeats — are where the real store
+separates: at those settings every run found was machine text, and lowering
+repeats to two pulled in prose the user had simply said twice. They gate
+reading, not removing. `--apply` takes every n-gram the run contains at every
+stored width, crossings included, because the template is the unit; removing
+it one line at a time is why an audit ends with the same fragments at the top
+of the list. Only collocations go — the words stay in the lexicon, and a
+genuine pairing re-accumulates from zero.
 
 ## 10. Stylometry — beyond vocabulary **[open]**
 

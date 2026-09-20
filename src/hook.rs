@@ -68,9 +68,36 @@ pub fn outbound(tool_name: &str, tool_input: &Value) -> Option<(Register, String
     None
 }
 
+/// Does this session have somebody sitting in front of it?
+///
+/// A headless `claude -p` has no user typing, so nothing it submits is the
+/// user's voice — and plugins spawn them. The statusbar's label call fed its
+/// own instructions in as prose for weeks, and the next plugin to ask a model
+/// something would have done it again; the env var is the general answer,
+/// where recognizing that one prompt would not have been.
+///
+/// Only an explicit `0` counts. Absent means a CLI that does not set it, and
+/// guessing unattended there would silently turn capture off altogether.
+fn unattended() -> bool {
+    unattended_from(
+        std::env::var("CLAUDE_CODE_SESSION_ATTENDED")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Split out from the environment read so the rule itself is testable —
+/// setting a process-wide env var under a parallel test runner is not.
+fn unattended_from(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v.trim() == "0")
+}
+
 /// Handle one hook event. Always returns 0 — see the fail-open note above.
 pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
     match event {
+        // Seeding and spool processing still run unattended: they are
+        // housekeeping over text already captured, not capture.
+        _ if unattended() && event != "stop" => {}
         "user-prompt-submit" => capture_prompt(store, input),
         "post-tool-use" => capture_tool(store, input),
         "stop" => {
@@ -470,6 +497,15 @@ mod tests {
             },
         );
         assert!(s.pending_spool(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_an_explicit_zero_means_nobody_is_there() {
+        // Absent is an older CLI, not a headless session — reading it as
+        // unattended would turn capture off for everyone.
+        assert!(unattended_from(Some("0")));
+        assert!(!unattended_from(Some("1")));
+        assert!(!unattended_from(None));
     }
 
     #[test]

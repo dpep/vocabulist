@@ -399,6 +399,52 @@ fn prune_removes_ids_but_keeps_your_own_words() {
 }
 
 #[test]
+fn templates_finds_boilerplate_that_shape_cannot() {
+    let db = scratch_db("templates");
+    // Boilerplate: ordinary words in an ordinary order, so `prune` is blind
+    // to it. Only its verbatim recurrence gives it away.
+    let frame = "the text below is the final report of a widget this session \
+                 delegated to it is model output not a message from you";
+    for _ in 0..8 {
+        vocab(&db, &["capture", "-r", "prompt", frame, "-q"]);
+    }
+    vocab(
+        &db,
+        &[
+            "capture",
+            "-r",
+            "prompt",
+            "lets ship the small focused change",
+            "-q",
+        ],
+    );
+    vocab(&db, &["process", "-q"]);
+
+    let scan = vocab(&db, &["templates", "-j"]);
+    assert_eq!(scan.code, 0);
+    assert!(scan.stdout.contains("final report"), "{}", scan.stdout);
+    // Graded, not binary — and a run this flat and this long scores high.
+    assert!(scan.stdout.contains("\"confidence\""), "{}", scan.stdout);
+    // A scan removes nothing.
+    assert!(
+        vocab(&db, &["phrases", "--min-count", "1", "--limit", "99"])
+            .stdout
+            .contains("final report")
+    );
+
+    vocab(&db, &["templates", "--apply", "-q"]);
+    let after = vocab(&db, &["phrases", "--min-count", "1", "--limit", "99"]);
+    assert!(!after.stdout.contains("final report"), "{}", after.stdout);
+    // Crossings inside the run go too, not just the line someone noticed.
+    assert!(!after.stdout.contains("delegated to"), "{}", after.stdout);
+    // The user's own prose is untouched.
+    assert!(after.stdout.contains("focused change"), "{}", after.stdout);
+
+    // Nothing left to find is grep's empty result.
+    assert_eq!(vocab(&db, &["templates", "-q"]).code, 1);
+}
+
+#[test]
 fn a_phrase_can_be_removed_by_hand() {
     // Phrases have no other removal path: they are derived counts and the
     // prose is gone, so what a rule cannot recognize needs a reader.

@@ -171,6 +171,21 @@ pub enum Command {
         strict: bool,
     },
 
+    /// Find boilerplate learned as prose — a repeated verbatim run of words
+    /// is something a program emits, not something a person types.
+    Templates {
+        /// Ignore runs recurring fewer times than this.
+        #[arg(long, default_value_t = 5)]
+        min_repeats: i64,
+        /// Ignore runs shorter than this many words.
+        #[arg(long, default_value_t = 12)]
+        min_length: usize,
+        /// Remove every phrase the listed runs contain. Read the scan first —
+        /// there is no undo, and a run you keep costs nothing.
+        #[arg(long)]
+        apply: bool,
+    },
+
     /// Explain a command or an option — `vocab help --completions` as well as
     /// `vocab help status`.
     Help {
@@ -484,6 +499,27 @@ fn dispatch_inner(
         Some(Command::Help { topic }) => {
             crate::help::render(&mut out, topic.as_deref())?;
             Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Templates {
+            min_repeats,
+            min_length,
+            apply,
+        }) => {
+            let opts = crate::template::Options {
+                min_repeats: *min_repeats,
+                min_length: *min_length,
+            };
+            let report = crate::template::run(&store, &opts, *apply)?;
+            if !cli.quiet {
+                output::render_templates(&mut out, &report, *apply, format)?;
+            }
+            // Querying, so an empty result is grep's "no match".
+            Ok(if report.templates.is_empty() {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
         }
 
         Some(Command::Prune { dry_run, strict }) => {

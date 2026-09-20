@@ -115,6 +115,7 @@ vocabulist/
     names.rs      ← names the document reveals, so they don't read as typos
     process.rs    ← spool → counts, and the authorship rule that governs it
     prune.rs      ← remove what today's rules would reject, learned under old ones
+    template.rs   ← boilerplate learned as prose, found across rows not within one
     ngram.rs      ← collocations, log-likelihood, real-word confusion sets
     dict.rs       ← system word list + inflection folding (the backstop)
     frequency.rs  ← embedded core list + how common a word is in English

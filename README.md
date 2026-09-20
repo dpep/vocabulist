@@ -181,18 +181,39 @@ captured as assistant (co-authored-by: claude)
 The harness is held to the same rule, and it is harder to spot: it writes
 into the same field you do and carries no watermark, because no assistant
 drafted it. Injected reminders and task notifications are stripped by tag; a
-turn that expands a slash command is dropped whole, since the command's body
-arrives *after* those tags and would otherwise read as a paragraph you wrote;
-and identical text counts once however often it arrives, so a hook firing the
+turn that expands a slash command, or carries another agent's report back, is
+dropped whole, since in both cases the prose arrives *around* those tags
+rather than inside them and would otherwise read as a paragraph you wrote;
+identical text counts once however often it arrives, so a hook firing the
 same template every session contributes one observation rather than one per
-run.
+run; and a session nobody is attending captures nothing at all, because a
+headless `claude -p` — the shape a plugin asking a model a question takes —
+has no user typing into it.
 
-If you run session-summarizer hooks or anything else that submits a fixed
-prompt, `vocab phrases -n 3` is worth a glance now and then. Machine
-boilerplate is plain English with no shape to it, so `vocab prune` genuinely
-cannot see it — but it is obvious to a reader at the top of that list, and
-the tool's own rule of thumb applies: if it reads like a program talking, it
-is. `vocab rm --phrase` removes one.
+Something always gets through anyway. `vocab templates` is the backstop, and
+it needs no rule about any particular envelope:
+
+```sh
+$ vocab templates
+   76 words  x44    flat 0.96  confidence 0.96
+  the text below is the final report of a subagent this session delegated to…
+```
+
+Boilerplate is plain English in an ordinary order, so `vocab prune` genuinely
+cannot see it — the evidence isn't in any one phrase, it's across them. A
+template leaves a chain of overlapping five-word phrases that all recur about
+equally often, because they all came from the same repeated sentence, so
+chaining them back reconstructs the run. A dozen words repeating verbatim
+with a flat count is not something a person types.
+
+The three measured quantities are reported rather than collapsed into a
+verdict — **length**, **repeats** (what the weakest link in the chain
+demonstrates), and **flatness** (lowest count over highest) — and confidence
+is their product, so nothing scores high on one strength alone. Read the
+scan, then `vocab templates --apply` to remove every phrase the runs contain,
+crossings included. Removing a template one line at a time is why an audit
+ends with the same fragments at the top of the list. Only collocations go;
+the words stay, and a genuine pairing re-accumulates from zero.
 
 ## Measuring complexity
 
@@ -229,6 +250,7 @@ vocab status                   # what the store knows, and where it exports
 vocab phrases -n 3             # the three-word phrases you actually repeat
 vocab self                     # the handles believed to be yours
 vocab prune --dry-run          # what an older, looser capture rule let in
+vocab templates                # boilerplate that got learned as your prose
 ```
 
 `-J` is a real pipe: each finding is written as its line is
