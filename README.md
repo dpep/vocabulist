@@ -99,8 +99,9 @@ say. If one is wrong — a spelling you really use — `vocab add` it, and `--fi
 leaves it alone from then on.
 
 The text goes to stdout as it is read (or back into the file with
-`--in-place`), and what changed goes to stderr. Code spans and URLs are left
-alone.
+`--in-place`, which replaces the file atomically), and what changed goes to
+stderr. Code is left alone: code spans, `<code>` and its kin, URLs, and a word
+joined to code (`teh.rs`, `$teh`, `--dont`, `teh()`).
 
 ## Your shorthand
 

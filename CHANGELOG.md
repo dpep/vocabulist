@@ -48,6 +48,14 @@
   acute (NFD, as macOS filenames and PDF copies carry it) was read as `cafe`
   and flagged; it is now judged exactly as the composed `café` is.
 
+### Docs
+
+- `--fix` never promised `TEH` → `THE` honestly: an all-caps word reads as an
+  acronym and is never checked. The docs now say so.
+- A name the document puts in a code span or URL is learned as it is read, so
+  it excuses a prose mention below it but not one above it. `--fix` streams
+  and checking matches it, so the two never disagree about a line.
+
 ## 0.6.0 — 2026-11-11
 
 ### Added

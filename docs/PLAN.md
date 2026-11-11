@@ -867,8 +867,13 @@ the argument.
   `<pre>` blocks, indented lines), names the document introduces, and proper nouns all carry
   over unchanged. One consequence: a document that writes `teh` in a code span
   or URL has named it, so the prose `teh` is accepted and left alone, exactly
-  as the checker would.
-- **The typed case is kept:** `Teh` → `The`, `TEH` → `THE`.
+  as the checker would. Names are learned as lines are read, so this holds
+  for a prose `teh` *below* the code span and not above it: the stream decides
+  a line before it has seen the rest. Checking does the same even when it
+  collects, so the two never disagree about a line.
+- **The typed case is kept:** `Teh` → `The`. An all-caps token is never
+  checked, since it reads as an acronym (`ae`'s job), so `TEH` and `DONT` are
+  left alone.
 - **A fix lands only where the line still holds the word, at its column.**
   Columns are characters, and typography folding preserves them; a mismatch
   leaves the text alone.

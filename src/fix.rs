@@ -74,6 +74,8 @@ pub fn replace_file(path: &Path, contents: &str) -> io::Result<()> {
 }
 
 /// `to`, in the case `from` was typed in: `Teh` → `The`, `TEH` → `THE`.
+/// Nothing reaches the last today: an all-caps token reads as an acronym and
+/// is neither checked nor expanded (`text::is_checkable`).
 fn match_case(from: &str, to: &str) -> String {
     let letters: Vec<char> = from.chars().filter(|c| c.is_alphabetic()).collect();
     let upper = |c: &char| c.is_uppercase();
