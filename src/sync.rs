@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::store::{Store, default_db_path};
-use crate::types::Provenance;
+use crate::types::{Entry, Provenance};
 
 /// Whether the consuming application is actually pointed at our file.
 ///
@@ -368,8 +368,8 @@ fn read_lines(path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The words worth exporting: the lexicon minus anything an ordinary
-/// dictionary already knows.
+/// The entries worth exporting, strongest first: the lexicon minus anything
+/// an ordinary dictionary already knows.
 ///
 /// Exporting words the target's own dictionary already has would be pure
 /// bloat — the value is entirely in the jargon it *doesn't* have.
@@ -380,34 +380,33 @@ fn read_lines(path: &Path) -> Vec<String> {
 /// it to every editor on the machine is the most expensive false positive
 /// this tool can produce — it outlives the session and shows up somewhere you
 /// won't connect back to us.
-pub fn exportable(store: &Store) -> rusqlite::Result<Vec<String>> {
+pub fn exportable_entries(store: &Store, filter: Option<&str>) -> rusqlite::Result<Vec<Entry>> {
     let dictionary = crate::dict::load();
-    let mut out = BTreeSet::new();
-
-    for entry in store.list(None, usize::MAX)? {
+    let mut entries = store.list(filter, usize::MAX)?;
+    entries.retain(|entry| {
         let earned = entry.provenance > Provenance::Observed || entry.sources >= 2;
-        if !earned {
-            continue;
-        }
-        if let Some(d) = &dictionary
-            && crate::dict::contains(d, &entry.word)
-        {
-            continue;
-        }
-        out.insert(entry.word);
-    }
-    Ok(out.into_iter().collect())
+        let ordinary = dictionary
+            .as_ref()
+            .is_some_and(|d| crate::dict::contains(d, &entry.word));
+        earned && !ordinary
+    });
+    Ok(entries)
+}
+
+/// The exportable words, alphabetically.
+pub fn exportable(store: &Store) -> rusqlite::Result<Vec<String>> {
+    let mut words: Vec<String> = exportable_entries(store, None)?
+        .into_iter()
+        .map(|e| e.word)
+        .collect();
+    words.sort();
+    Ok(words)
 }
 
 /// Write the lexicon into one target, recording what we wrote.
 /// The `limit` most-established exportable words, strongest first.
 fn strongest(store: &Store, limit: usize) -> rusqlite::Result<Vec<String>> {
-    let keep: std::collections::HashSet<String> = exportable(store)?.into_iter().collect();
-    let mut ranked: Vec<_> = store
-        .list(None, usize::MAX)?
-        .into_iter()
-        .filter(|e| keep.contains(&e.word))
-        .collect();
+    let mut ranked = exportable_entries(store, None)?;
     ranked.sort_by(|a, b| {
         b.validity
             .partial_cmp(&a.validity)
