@@ -102,6 +102,36 @@ The text goes to stdout as it is read (or back into the file with
 `--in-place`), and what changed goes to stderr. Code spans and URLs are left
 alone.
 
+## Your shorthand
+
+`repro`, `args`, `perf`, `impls`: abbreviations you use on purpose, which a
+spell checker reads as typos. Say so once, and say what each one means:
+
+```sh
+$ vocab shorthand repro reproduce
+$ vocab shorthand arg=argument perf=performance
+```
+
+A shorthand is never flagged and never touched by `--fix`, and neither are
+its inflections: `repros`, `repro'd`, `reproing`. `vocab list -J` says what
+each one means where that is settled:
+
+```json
+{"word":"args","kind":"shorthand","means":"arguments",...}
+{"word":"repros","kind":"shorthand","maybe":["reproduces"],...}
+```
+
+`repros` is only a `maybe`: it is "reproduces" in "it repros on main" and
+"reproductions" in "the repros", and the word can't say which. An -s is read
+as a plural only when the meaning isn't also a verb (`args`, `params`).
+`vocab shorthand repros=reproductions` settles a form yourself.
+
+`vocab shorthand` with no words lists what you've confirmed, then
+candidates: words you write that begin a word you also write, with what each
+may mean. They are suggestions. Guessing the meaning from your counts gets
+the form right about one time in three (`repro` → reproduced, `struct` →
+structural), so nothing is ever expanded unless you confirmed it.
+
 ## Contractions
 
 `dont` → `don't`, as its own high-confidence finding rather than a guess. Edit
@@ -296,6 +326,7 @@ vocab list --trusted -J        # words you've really used, ordinary English incl
 vocab list --trusted --uncommon -J  # exactly what `sync` exports: your jargon
 vocab add contextdb iriq       # add by hand (top provenance, never pruned)
 vocab typos -J                 # your habitual typos and the word each one means
+vocab shorthand -J             # your abbreviations and what each one means
 vocab status                   # what the store knows, and where it exports
 vocab phrases -n 3             # the three-word phrases you actually repeat
 vocab self                     # the handles believed to be yours

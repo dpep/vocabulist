@@ -312,6 +312,55 @@ fn a_typo_confirmation_that_could_never_apply_is_refused() {
 }
 
 #[test]
+fn a_shorthand_is_never_flagged_and_lists_what_it_means() {
+    let db = scratch_db("shorthand");
+    assert_eq!(run(&db, &["-j"], Some("we can zrepro it\n")).code, 1);
+    assert_eq!(vocab(&db, &["shorthand"]).code, 1, "none yet is grep's 1");
+
+    assert_eq!(vocab(&db, &["shorthand", "zrepro", "reproduce"]).code, 0);
+    assert_eq!(vocab(&db, &["shorthand", "zarg=argument"]).code, 0);
+    let out = run(
+        &db,
+        &["--fix"],
+        Some("we can zrepro it, it zrepros, zrepro'd, zargs\n"),
+    );
+    assert_eq!(out.code, 0, "never flagged, never fixed: {}", out.stderr);
+
+    let out = vocab(&db, &["shorthand", "-J"]);
+    let first: serde_json::Value =
+        serde_json::from_str(out.stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(first["word"], "zarg");
+    assert_eq!(first["means"], "argument");
+    assert_eq!(first["tier"], "confirmed");
+
+    // `list` says what a shorthand means only where one reading fits.
+    learn(&db, "zrepro zrepros zargs", "first");
+    let out = vocab(&db, &["list", "-J", "z"]);
+    let entries: Vec<serde_json::Value> = out
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let entry = |w: &str| entries.iter().find(|e| e["word"] == w).unwrap().clone();
+    assert_eq!(entry("zrepro")["kind"], "shorthand");
+    assert_eq!(entry("zrepro")["means"], "reproduce");
+    assert_eq!(entry("zargs")["means"], "arguments");
+    assert_eq!(entry("zrepros")["means"], serde_json::Value::Null);
+    assert_eq!(entry("zrepros")["maybe"][0], "reproduces");
+
+    assert_eq!(vocab(&db, &["shorthand", "--rm", "zrepro"]).code, 0);
+    assert_eq!(vocab(&db, &["shorthand", "--rm", "zrepro"]).code, 1);
+}
+
+#[test]
+fn a_shorthand_that_says_nothing_is_refused() {
+    let db = scratch_db("shorthand-refused");
+    assert_eq!(vocab(&db, &["shorthand", "zrepro"]).code, 2);
+    assert_eq!(vocab(&db, &["shorthand", "zrepro", "Zrepro"]).code, 2);
+    assert_eq!(vocab(&db, &["shorthand", "zrepro="]).code, 2);
+}
+
+#[test]
 fn assistant_authored_text_gives_vocabulary_but_not_voice() {
     let db = scratch_db("watermark");
     let body = "the frobnicator handles retries\n\nCo-Authored-By: Claude Opus 5 <x>";

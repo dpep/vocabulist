@@ -89,6 +89,8 @@ pub enum Kind {
     /// opposite way — people are reliably capitalized where tools are
     /// reliably not — and because a wrong suggestion costs more.
     Person,
+    /// The user's abbreviation for another word: `repro`, `args`.
+    Shorthand,
 }
 
 impl Kind {
@@ -97,6 +99,7 @@ impl Kind {
             Kind::Word => "word",
             Kind::Name => "name",
             Kind::Person => "person",
+            Kind::Shorthand => "shorthand",
         }
     }
 }
@@ -326,6 +329,22 @@ pub struct TypoPair {
     pub held_back: Option<HeldBack>,
 }
 
+/// A shorthand, as `vocab shorthand` lists it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ShorthandEntry {
+    pub word: String,
+    /// `confirmed` by the user, or a `candidate` the counts suggest. Nothing
+    /// is inferred: a meaning is never guessed from the counts (PLAN §12m).
+    pub tier: Tier,
+    /// What it stands for, as confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub means: Option<String>,
+    /// What a candidate may stand for: the words you write that it begins,
+    /// most written first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub maybe: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Entry {
     pub word: String,
@@ -341,6 +360,12 @@ pub struct Entry {
     /// Ordinary English, or a name/jargon term.
     #[serde(default = "default_kind")]
     pub kind: Kind,
+    /// What a shorthand stands for, when that is settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub means: Option<String>,
+    /// What a shorthand may stand for, when saying so would be a guess.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub maybe: Vec<String>,
 }
 
 fn default_kind() -> Kind {

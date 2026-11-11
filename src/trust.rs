@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use crate::shorthand::Shorthands;
 use crate::types::{Edit, HeldBack, Provenance, Tier, TypoPair};
 
 /// Distinct documents an observed word needs. One sighting is equally
@@ -42,6 +43,7 @@ pub struct Trust {
     words: HashMap<String, Standing>,
     /// Typo to intended word, as confirmed by hand.
     confirmed: HashMap<String, String>,
+    shorthands: Shorthands,
 }
 
 impl FromIterator<(String, Standing)> for Trust {
@@ -49,6 +51,7 @@ impl FromIterator<(String, Standing)> for Trust {
         Self {
             words: iter.into_iter().collect(),
             confirmed: HashMap::new(),
+            shorthands: Shorthands::default(),
         }
     }
 }
@@ -59,6 +62,22 @@ impl Trust {
     pub fn with_confirmed(mut self, confirmed: HashMap<String, String>) -> Self {
         self.confirmed = confirmed;
         self
+    }
+
+    /// Attach the user's shorthands. A shorthand is the user's word by their
+    /// own say, so it is trusted and never a typo, wherever its counts sit.
+    pub fn with_shorthands(mut self, shorthands: Shorthands) -> Self {
+        self.shorthands = shorthands;
+        self
+    }
+
+    pub fn shorthands(&self) -> &Shorthands {
+        &self.shorthands
+    }
+
+    /// Every word and its standing.
+    pub fn words(&self) -> impl Iterator<Item = (&str, &Standing)> {
+        self.words.iter().map(|(w, s)| (w.as_str(), s))
     }
 
     pub fn standing(&self, word: &str) -> Option<&Standing> {
@@ -78,13 +97,16 @@ impl Trust {
     /// `in_dictionary` is asked only when a veto is in play, so a caller that
     /// loads its dictionary lazily keeps that laziness.
     pub fn trusts(&self, word: &str, in_dictionary: impl Fn(&str) -> bool) -> bool {
-        let Some(standing) = self.words.get(word) else {
-            return false;
-        };
-        if standing.provenance > Provenance::Observed {
+        let standing = self.words.get(word);
+        if standing.is_some_and(|s| s.provenance > Provenance::Observed) {
             return true;
         }
-        standing.docs >= MIN_DOCS && self.typo_of(word, in_dictionary).is_none()
+        // A confirmed typo outranks an inflected shorthand: the user named
+        // this exact form.
+        if !self.confirmed.contains_key(word) && self.shorthands.contains(word, &in_dictionary) {
+            return true;
+        }
+        standing.is_some_and(|s| s.docs >= MIN_DOCS) && self.typo_of(word, in_dictionary).is_none()
     }
 
     /// The word `word` is a habitual typo of, if it is one: confirmed by
@@ -135,6 +157,9 @@ impl Trust {
             return Some(pair(intended.clone(), Provenance::User, edit));
         }
         standing?;
+        if self.shorthands.contains(word, &in_dictionary) {
+            return None;
+        }
         let (intended, edit) = typo_shaped_neighbours(word)
             .into_iter()
             .map(|(c, e)| (ratio(&c), c, e))
@@ -492,6 +517,40 @@ mod tests {
         );
         let pair = t.typo_of("wdgt", nowhere).unwrap();
         assert_eq!((pair.tier, pair.held_back), (Tier::Confirmed, None));
+    }
+
+    fn with_shorthand(t: Trust, short: &str, means: &str) -> Trust {
+        t.with_shorthands(
+            [(short.to_string(), means.to_string())]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_shorthand_and_its_inflections_are_trusted_and_never_typos() {
+        // `repros` is one letter from a word written far more often.
+        let base = || trust(&[("repos", DEP, 900, 500), ("repros", OBS, 6, 6)]);
+        assert!(!base().trusts("repros", nowhere));
+        let t = with_shorthand(base(), "repro", "reproduce");
+        assert!(t.trusts("repros", nowhere));
+        assert!(t.typo_of("repros", nowhere).is_none());
+        assert!(
+            t.trusts("repro'd", nowhere),
+            "trusted before it is ever seen"
+        );
+        assert!(t.typos(nowhere).is_empty());
+    }
+
+    #[test]
+    fn a_confirmed_typo_outranks_an_inflected_shorthand() {
+        let t = with_shorthand(
+            confirmed(trust(&[("repos", DEP, 900, 500)]), &[("repros", "repos")]),
+            "repro",
+            "reproduce",
+        );
+        assert!(!t.trusts("repros", nowhere));
+        assert_eq!(t.typo_of("repros", nowhere).unwrap().intended, "repos");
     }
 
     #[test]

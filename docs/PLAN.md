@@ -980,6 +980,75 @@ surface.
 The checker's internal "trusted" set, which collided with the public
 `--trusted`, is gone: it reads `Trust::deliberate`.
 
+## 12m. Shorthand **[done]**
+
+A shorthand is the user's own abbreviation: `repro` for reproduce, `args`,
+`perf`, `impls`, `structs`. To the checker it looks like an unknown word,
+and to the typo veto it can look like a slip: `repros` is one letter from
+`repos`, which the user writes ten times as often (§12l lost it as a real
+word for that reason).
+
+**Membership and meaning are separate questions,** as they are for words:
+
+- *Is it a shorthand?* Binary, and settles the checker: never flagged, never
+  touched by `--fix`, never a typo however dominant its neighbour.
+- *What does it mean?* Settled only where one reading fits. `means` in JSON
+  is that settled reading; `maybe` is a reading it would be a guess to write.
+
+`vocab shorthand repro reproduce` confirms one, stored in the `shorthands`
+table (schema v8), one row per form. The checker, `list --trusted` and `sync`
+read it through `Trust`, so a shorthand is trusted by the one rule. Confirming
+a shorthand forgets a typo confirmation of the same form and vice versa: the
+latest word on a form wins. Only the exact form confirmed as a typo outranks
+an inflected shorthand.
+
+### Inflections
+
+Inflections are read off a confirmed form by rule, never stored:
+
+- `repro'd`, `reproed` → reproduced; `reproing` → reproducing. A verb
+  inflection reads one way.
+- `args` → arguments: an -s is a plural only when the meaning is **not** also
+  a verb. `repros` is "reproduces" in "it repros on main" and
+  "reproductions" in "the repros", and nothing in the word says which. A
+  meaning is a verb when its -ed form is a dictionary word, so `structs`,
+  `vecs` and `dups` stay guesses too. That gives up some plurals; a wrong
+  one would be written into the user's email.
+- The meaning's inflected spelling is whichever regular spelling is a
+  dictionary word (`reproduced`, `committed`, `copies`), so no spelling rules
+  are encoded.
+- **A dictionary word is never an inflection.** Confirming `st` must not make
+  `sting` a shorthand.
+- **A confirmed form overrides the rule:** `vocab shorthand
+  repros=reproductions`.
+
+### Tiers, and why there is no inferred one
+
+Typo pairs have three tiers (§12l). Shorthand meanings have two:
+`confirmed`, and `candidate` (suggested only). An inferred meaning was
+measured and does not reach a bar.
+
+On the store copy there are 35 candidates: observed words in two documents
+or more, not in the dictionary, whose stem (minus -s, -es, -ed, -ing) is a
+proper prefix, two letters short or more, of a dictionary word the user
+writes. `vocab shorthand` lists 34 of them, leaving out `repros`, which the
+typo veto still holds back until the user confirms `repro`. I labelled them by hand
+(the agent, not the user): 18 shorthands, 14 not (`foo` < footer, `sha` <
+shape, `clis`, `diffs`, `skils`), 3 unclear. Two signals for the meaning,
+scored on the 18:
+
+| signal | exact expansion | right word family | fires on non-shorthands |
+|---|---|---|---|
+| the user's most frequent word with that prefix | 6 | 11 | all 14 |
+| shared bigram neighbours (cosine) | 3 | 4 | `clis`→client 0.49, higher than any real one |
+
+Neighbour overlap is mostly empty: 8 of the 18 share no context at all with
+any expansion, because the user writes the shorthand *instead of* the long
+word. Frequency picks the family more often than not and the form rarely
+(`repro` → reproduced, `impls` → implementation, `struct` → structural). For
+`--fix` the inferred bar was no wrong rewrite in 529 real words; one right in
+three is nowhere near it. Candidates carry `maybe` and are never expanded.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

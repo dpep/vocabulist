@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, params};
 
+use crate::shorthand::{Reading, Shorthands};
 use crate::trust::{Standing, Trust};
 use crate::types::{Entry, Kind, Provenance, Register, StoreStatus};
 
@@ -22,7 +23,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -164,6 +165,15 @@ CREATE TABLE IF NOT EXISTS captured (
 CREATE TABLE IF NOT EXISTS typos (
     typo TEXT PRIMARY KEY,
     intended TEXT NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Shorthands the user confirmed, one row per form: `repro` and, when the
+-- user says so, `repros`. Other inflections are read off these by rule
+-- (`shorthand.rs`), so they are never stored.
+CREATE TABLE IF NOT EXISTS shorthands (
+    short TEXT PRIMARY KEY,
+    means TEXT NOT NULL,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -479,7 +489,35 @@ impl Store {
         let trust: Trust = rows.collect::<Result<_>>()?;
         let mut stmt = self.conn.prepare("SELECT typo, intended FROM typos")?;
         let confirmed = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(trust.with_confirmed(confirmed.collect::<Result<_>>()?))
+        Ok(trust
+            .with_confirmed(confirmed.collect::<Result<_>>()?)
+            .with_shorthands(self.shorthands()?))
+    }
+
+    /// The shorthands the user confirmed.
+    pub fn shorthands(&self) -> Result<Shorthands> {
+        let mut stmt = self.conn.prepare("SELECT short, means FROM shorthands")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// Record that `short` is the user's shorthand for `means`, replacing any
+    /// earlier meaning.
+    pub fn confirm_shorthand(&self, short: &str, means: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO shorthands (short, means) VALUES (?1, ?2)
+             ON CONFLICT(short) DO UPDATE SET means = ?2, added_at = CURRENT_TIMESTAMP",
+            params![short, means],
+        )?;
+        Ok(())
+    }
+
+    /// Forget a confirmed shorthand. Returns whether there was one.
+    pub fn forget_shorthand(&self, short: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM shorthands WHERE short = ?1", params![short])?
+            > 0)
     }
 
     /// Record that `typo` is the user's slip for `intended`, replacing any
@@ -532,6 +570,12 @@ impl Store {
         // provenance of any other captured word, and only the source that
         // captured it knows the difference. So a stored kind wins.
         let dictionary = crate::dict::load();
+        let in_dictionary = |w: &str| {
+            dictionary
+                .as_ref()
+                .is_some_and(|d| crate::dict::contains(d, w))
+        };
+        let shorthands = self.shorthands()?;
         let mut stmt = self.conn.prepare(
             "SELECT l.word, l.provenance, l.count, l.kind,
                     (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
@@ -546,13 +590,26 @@ impl Store {
             let count: i64 = r.get(2)?;
             let stored: Option<String> = r.get(3)?;
             let sources: i64 = r.get(4)?;
+            // The user's word for what a shorthand is outranks any recorded
+            // kind.
+            let (kind, means, maybe) = match shorthands.read(&word, in_dictionary) {
+                Some(Reading::Means(m)) => (Kind::Shorthand, Some(m), Vec::new()),
+                Some(Reading::Maybe(m)) => (Kind::Shorthand, None, m),
+                None => (
+                    match stored.as_deref() {
+                        Some("person") => Kind::Person,
+                        Some("name") => Kind::Name,
+                        Some("word") => Kind::Word,
+                        _ => classify(&word, prov, dictionary.as_ref()),
+                    },
+                    None,
+                    Vec::new(),
+                ),
+            };
             Ok(Entry {
-                kind: match stored.as_deref() {
-                    Some("person") => Kind::Person,
-                    Some("name") => Kind::Name,
-                    Some("word") => Kind::Word,
-                    _ => classify(&word, prov, dictionary.as_ref()),
-                },
+                kind,
+                means,
+                maybe,
                 word,
                 provenance: prov,
                 validity: validity(prov, sources),

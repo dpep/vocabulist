@@ -43,6 +43,7 @@ Examples:
   cat notes.md | vocab -J          stream stdin as NDJSON
   vocab list rubo                  lexicon entries matching \"rubo\"
   vocab typos                      your habitual typos, and what each means
+  vocab shorthand repro reproduce  say `repro` is yours, and what it means
   vocab --fix -f notes.md          write it back with confirmed typos fixed
   vocab sync                       export into cSpell and the macOS dictionary
   vocab phrases                    the phrases you actually use
@@ -205,6 +206,25 @@ pub enum Command {
         #[arg(value_name = "TYPO [INTENDED]")]
         words: Vec<String>,
         /// Forget a confirmed pair instead of adding one.
+        #[arg(long)]
+        rm: bool,
+    },
+    /// Your shorthands — `repro` for reproduce — and what each one means.
+    ///
+    /// A shorthand is never flagged and never touched by `--fix`, and with
+    /// `--expand` it is written out in full. With no words, lists them.
+    /// `vocab shorthand repro reproduce` confirms one; `repros=reproductions`
+    /// confirms an inflection the rule would get wrong or leave alone.
+    /// Otherwise `repro'd`, `reproed` and `reproing` read as reproduced and
+    /// reproducing, and an -s reads as a plural only when the meaning is not
+    /// also a verb: `args` is arguments, but `repros` stays a guess, since
+    /// "it repros on main" and "the repros" mean different things.
+    Shorthand {
+        /// A shorthand and what it means, or any number of `SHORT=MEANING`;
+        /// with `--rm`, just the shorthands.
+        #[arg(value_name = "SHORT [MEANING]")]
+        words: Vec<String>,
+        /// Forget the named shorthands instead of confirming them.
         #[arg(long)]
         rm: bool,
     },
@@ -406,10 +426,12 @@ impl Command {
             | Command::Sync { .. } => Access::Read,
             Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
             Command::Typos { words, rm: false } if words.is_empty() => Access::Read,
+            Command::Shorthand { words, rm: false } if words.is_empty() => Access::Read,
             Command::Templates { apply: false, .. } => Access::Read,
             Command::Prune { dry_run: true, .. } => Access::Read,
             Command::Identity { .. }
             | Command::Typos { .. }
+            | Command::Shorthand { .. }
             | Command::Templates { .. }
             | Command::Prune { .. }
             | Command::Seed { .. }
@@ -641,6 +663,7 @@ fn dispatch_inner(
         }
 
         Some(Command::Typos { words, rm }) => typos(cli, &store, words, *rm, &mut out),
+        Some(Command::Shorthand { words, rm }) => shorthand(cli, &store, words, *rm, &mut out),
 
         Some(Command::Help { topic }) => {
             crate::help::render(&mut out, topic.as_deref())?;
@@ -1006,6 +1029,8 @@ fn typos(
                     format!("{typo} is a dictionary word, so it cannot always be a typo").into(),
                 );
             }
+            // The latest word on a form wins: it is a typo, not a shorthand.
+            store.forget_shorthand(typo)?;
             store.confirm_typo(typo, intended)?;
             if !cli.quiet {
                 output::status(out, &format!("confirmed {typo} -> {intended}"), format)?;
@@ -1014,6 +1039,92 @@ fn typos(
         }
         _ => Err("give a typo and the word it means, or `--rm` and the typo".into()),
     }
+}
+
+/// `vocab shorthand`: list them, confirm some, or forget some.
+fn shorthand(
+    cli: &Cli,
+    store: &Store,
+    words: &[String],
+    rm: bool,
+    out: &mut impl Write,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let format = cli.format();
+    if words.is_empty() && !rm {
+        let dictionary = crate::dict::load();
+        let in_dictionary = |w: &str| {
+            dictionary
+                .as_ref()
+                .is_some_and(|d| crate::dict::contains(d, w))
+        };
+        let listed = crate::shorthand::listing(&store.trust()?, in_dictionary);
+        if !cli.quiet {
+            output::render_shorthands(out, &listed, format)?;
+        }
+        return Ok(if listed.is_empty() {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        });
+    }
+    if rm {
+        if words.is_empty() {
+            return Err("name the shorthands to forget".into());
+        }
+        let mut forgotten = 0;
+        for word in words {
+            forgotten += usize::from(store.forget_shorthand(&text::normalize(word))?);
+        }
+        if !cli.quiet {
+            output::status(out, &format!("removed {forgotten}"), format)?;
+        }
+        return Ok(if forgotten > 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
+
+    let (pairs, positional): (Vec<&String>, Vec<&String>) =
+        words.iter().partition(|w| w.contains('='));
+    let mut confirmed: Vec<(String, String)> = pairs
+        .iter()
+        .filter_map(|w| w.split_once('='))
+        .map(|(s, m)| (s.to_string(), m.to_string()))
+        .collect();
+    match positional.as_slice() {
+        [] => {}
+        [short, means] => confirmed.push((short.to_string(), means.to_string())),
+        _ => return Err("give a shorthand and its meaning, or SHORT=MEANING".into()),
+    }
+    let confirmed: Vec<(String, String)> = confirmed
+        .into_iter()
+        .map(|(s, m)| (text::normalize(s.trim()), m.trim().to_string()))
+        .collect();
+    for (short, means) in &confirmed {
+        if short.is_empty() || means.is_empty() {
+            return Err("a shorthand and its meaning are both needed".into());
+        }
+        if short.eq_ignore_ascii_case(means) {
+            return Err(format!("{short} cannot be a shorthand for itself").into());
+        }
+    }
+    store.transaction(|| -> Result<(), rusqlite::Error> {
+        for (short, means) in &confirmed {
+            // The latest word on a form wins: it is a shorthand, not a typo.
+            store.forget_typo(short)?;
+            store.confirm_shorthand(short, means)?;
+        }
+        Ok(())
+    })?;
+    if !cli.quiet {
+        let said: Vec<String> = confirmed
+            .iter()
+            .map(|(s, m)| format!("{s} = {m}"))
+            .collect();
+        output::status(out, &format!("confirmed {}", said.join(", ")), format)?;
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// The checker over this lexicon: deliberate words as the lexicon proper,

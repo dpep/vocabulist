@@ -143,6 +143,7 @@ vocabulist/
     identity.rs   ← which handles are the user's, detected not configured
     ingest.rs     ← bulk load from JSON on stdin
     trust.rs      ← the one trust rule, and the habitual-typo veto
+    shorthand.rs  ← the user's abbreviations: membership, inflections, meaning
     sync.rs       ← export into cSpell and the macOS dictionary
     eval.rs       ← labeled-corpus measurement (inject typos, score)
     profile.rs    ← --profile timings and counters

@@ -27,6 +27,16 @@
   spans and URLs are left alone and the typed case is kept (`Teh` → `The`).
   What changed goes to stderr, as JSON under `-j`/`-J`. Exits 1 when anything
   changed.
+- **`vocab shorthand`** records your abbreviations and what each one means:
+  `vocab shorthand repro reproduce`, or `arg=argument`. A shorthand and its
+  inflections (`repros`, `repro'd`) are never flagged, never touched by
+  `--fix`, and never held back as a typo of a commoner word. `vocab list`
+  marks them `kind: shorthand` with `means` where one reading fits, or
+  `maybe` where it would be a guess (`repros`: reproduces, or
+  reproductions?). With no words it lists them, then candidates it noticed,
+  which are only suggestions. `--rm` forgets one. The lexicon moves to schema
+  8, so as with schema 7, read-only commands wait for any writing command to
+  migrate it.
 - **`vocab eval`** also scores what `--fix` would write: injected typos fixed
   to the original, rewritten to another word, and rewrites of words nobody
   corrupted, each wrong one listed.

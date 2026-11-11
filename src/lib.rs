@@ -25,6 +25,7 @@ pub mod process;
 pub mod profile;
 pub mod prune;
 pub mod seed;
+pub mod shorthand;
 pub mod store;
 pub mod sync;
 pub mod template;

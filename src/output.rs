@@ -9,7 +9,9 @@ use std::io::Write;
 use serde_json::json;
 
 use crate::cli::Format;
-use crate::types::{Entry, Finding, Fix, SeedReport, StatusPayload, StoreStatus, TypoPair};
+use crate::types::{
+    Entry, Finding, Fix, SeedReport, ShorthandEntry, StatusPayload, StoreStatus, TypoPair,
+};
 
 /// The single structured-output path for findings. `-j` is a pretty array,
 /// `-J` is one object per line, so single-blob and streamed input emit an
@@ -114,9 +116,15 @@ pub fn render_entries(
                 return writeln!(out, "No words.");
             }
             for e in entries {
+                // A settled meaning plainly, a guess with its question mark.
+                let meaning = match (&e.means, e.maybe.as_slice()) {
+                    (Some(m), _) => format!("  = {m}"),
+                    (None, []) => String::new(),
+                    (None, maybe) => format!("  = {}?", maybe.join("? ")),
+                };
                 writeln!(
                     out,
-                    "{:<28} {:<6} {:<12} {:>6}  {:.2}",
+                    "{:<28} {:<9} {:<12} {:>6}  {:.2}{meaning}",
                     e.word,
                     e.kind.as_str(),
                     e.provenance.as_str(),
@@ -768,6 +776,35 @@ pub fn render_typos(
     }
 }
 
+pub fn render_shorthands(
+    out: &mut impl Write,
+    shorthands: &[ShorthandEntry],
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            if shorthands.is_empty() {
+                return writeln!(out, "No shorthands.");
+            }
+            for s in shorthands {
+                let means = match &s.means {
+                    Some(m) => m.clone(),
+                    None => s.maybe.join("? ") + "?",
+                };
+                writeln!(out, "{:<20} {:<40} {}", s.word, means, s.tier.as_str())?;
+            }
+            Ok(())
+        }
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(shorthands).unwrap()),
+        Format::Ndjson => {
+            for s in shorthands {
+                writeln!(out, "{}", serde_json::to_string(s).unwrap())?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A command result — success or failure — in the caller's format.
 pub fn status(out: &mut impl Write, message: &str, format: Format) -> std::io::Result<()> {
     match format {
@@ -866,6 +903,8 @@ mod tests {
             sources: 2,
             validity: 0.96,
             kind: crate::types::Kind::Name,
+            means: None,
+            maybe: Vec::new(),
         }];
         render_entries(&mut buf, &entries, Format::Human).unwrap();
         let out = String::from_utf8(buf).unwrap();
