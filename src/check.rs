@@ -222,7 +222,12 @@ impl Checker {
     fn derived_contraction(&self, word: &str) -> Option<&str> {
         self.derived_contractions
             .get_or_init(|| {
-                let dictionary = self.dictionary().into_iter().flatten().map(|(w, _)| *w);
+                let dictionary = self
+                    .dictionary()
+                    .into_iter()
+                    .flatten()
+                    .map(|(w, _)| *w)
+                    .filter(|w| crate::contraction::is_standard(w));
                 let known = self.lexicon.iter().map(String::as_str).chain(dictionary);
                 crate::contraction::derive(known, |w| self.knows_atom(w))
             })
@@ -1273,6 +1278,39 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].kind, FindingKind::Contraction);
         assert_eq!(words(&f[0].suggestions), vec!["don't"]);
+    }
+
+    #[test]
+    fn only_standard_contractions_are_derived_from_the_dictionary() {
+        let c = checker(
+            &["y'all"],
+            &[
+                "e'en", "o'er", "ne'er", "e'er", "he'd", "might've", "who'll", "i've", "we",
+                "said", "so",
+            ],
+        );
+        let suggested = |line: &str| -> Vec<String> {
+            c.check_line_alone(line, 1, &mut no_evidence)
+                .iter()
+                .filter(|f| f.kind == FindingKind::Contraction)
+                .map(|f| f.suggestions[0].word.clone())
+                .collect()
+        };
+        for archaic in ["een", "oer", "neer", "eer", "hed"] {
+            assert!(
+                suggested(&format!("we said {archaic} so")).is_empty(),
+                "{archaic}"
+            );
+        }
+        assert_eq!(suggested("we said mightve so"), vec!["might've"]);
+        assert_eq!(suggested("we said wholl so"), vec!["who'll"]);
+        assert_eq!(
+            suggested("we said ive so"),
+            vec!["I've"],
+            "the pronoun is capital"
+        );
+        // Your own lexicon is not held to English grammar.
+        assert_eq!(suggested("we said yall so"), vec!["y'all"]);
     }
 
     #[test]

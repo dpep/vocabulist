@@ -27,6 +27,11 @@
   too: `teh.rs`, `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`.
   They also now agree on this, where `--fix` rewrote `teh.rs` and `--expand`
   left `repro.rs`.
+- **No more archaic contractions.** Apostrophe forms derived from the
+  bundled word list are limited to `n't`, `'ve`, `'ll`, `'re` and `'m`, so
+  `een`, `oer`, `neer`, `eer` and `Hed` are no longer rewritten to `e'en`,
+  `o'er`, `ne'er`, `e'er` and `He'd`. Your own lexicon's forms (`y'all`) still
+  count. `ive` now becomes `I've`, not `i've`.
 
 ## 0.6.0 — 2026-11-11
 

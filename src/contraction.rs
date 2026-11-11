@@ -69,6 +69,20 @@ pub fn expand(word: &str) -> Option<&'static str> {
         .map(|(_, fixed)| *fixed)
 }
 
+/// Is this a contraction English grammar makes — `n't`, `'ve`, `'ll`, `'re`,
+/// `'m` — rather than an archaic or poetic elision?
+///
+/// The bundled word list is SCOWL, which carries `e'en`, `o'er` and `ne'er`;
+/// derived from without this, `een` became `e'en`. `'d` is left out too: its
+/// bare forms are words (`shed`, `wed`) or near ones (`hed`, for `had` or
+/// `head` as often as `he'd`), and the two worth having, `you'd` and
+/// `they'd`, are in the table. Your own lexicon is not held to this.
+pub fn is_standard(word: &str) -> bool {
+    ["n't", "'ve", "'ll", "'re", "'m"]
+        .iter()
+        .any(|suffix| word.ends_with(suffix))
+}
+
 /// Derive apostrophe-less mappings from any collection of known words.
 ///
 /// `known` supplies the apostrophe forms; `is_word` decides whether the
@@ -81,11 +95,11 @@ pub fn expand(word: &str) -> Option<&'static str> {
 /// writer meant `abilities`. The `'s` contractions worth having (`that's`,
 /// `what's`) are in the static table, where a human checked them.
 ///
-/// Nothing else is required of the shape. An earlier version demanded one of
-/// the standard suffixes (`n't`, `'ve`, `'ll`), which quietly excluded
-/// `y'all`, `ma'am`, and every apostrophe form a person might have that a
-/// grammar of English does not — exactly the words a *personal* lexicon exists
-/// to hold.
+/// Nothing else is required of the shape here: demanding a standard suffix
+/// of everything excluded `y'all`, `ma'am`, and every apostrophe form a person
+/// might have that a grammar of English does not — exactly the words a
+/// *personal* lexicon exists to hold. The caller filters the dictionary with
+/// [`is_standard`] instead.
 pub fn derive<'a>(
     known: impl Iterator<Item = &'a str>,
     is_word: impl Fn(&str) -> bool,
@@ -105,17 +119,26 @@ pub fn derive<'a>(
         // onto the dictionary, so any word in both arrives twice.
         match out.entry(bare) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
-                if e.get() != word {
+                if *e.get() != capital_i(word) {
                     e.insert(String::new());
                 }
             }
             std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(word.to_string());
+                e.insert(capital_i(word));
             }
         }
     }
     out.retain(|_, v| !v.is_empty());
     out
+}
+
+/// `i've` as `I've`: the pronoun is capital wherever it appears, and a
+/// lowercase word list has no way to say so.
+fn capital_i(word: &str) -> String {
+    match word.strip_prefix("i'") {
+        Some(rest) => format!("I'{rest}"),
+        None => word.to_string(),
+    }
 }
 
 #[cfg(test)]
