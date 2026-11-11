@@ -75,6 +75,22 @@ shoudl               should               observed  transposition     5 docs  x1
 `vocab typos teh the` confirms a pair, so it holds whatever the counts later
 say. If one is wrong — a spelling you really use — `vocab add` it.
 
+A confirmed pair can then be fixed in place, along with missing apostrophes —
+the two corrections that are never guesses:
+
+```sh
+$ vocab --fix -f notes.md > fixed.md
+1:1    Teh -> The
+1:16   shoudl -> should
+1:33   dont -> don't
+```
+
+The text goes to stdout as it is read (or back into the file with
+`--in-place`), and what changed goes to stderr. Code spans and URLs are left
+alone. A pair `vocab` only derived from your counts is suggested by the checker
+but never written into your text: `repros` looks exactly like a slip of `repos`
+from the counts, and only you know it isn't.
+
 ## Contractions
 
 `dont` → `don't`, as its own high-confidence finding rather than a guess. Edit

@@ -206,6 +206,19 @@ pub struct Finding {
 }
 
 /// One lexicon entry, as surfaced by `list` / `stats`.
+/// One correction `--fix` applied.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Fix {
+    pub line: usize,
+    /// 1-based character column, as in a finding.
+    pub col: usize,
+    /// As typed.
+    pub from: String,
+    /// As written back, in the case `from` was typed in.
+    pub to: String,
+    pub kind: FindingKind,
+}
+
 /// What the hand did to the intended word to produce a typo.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

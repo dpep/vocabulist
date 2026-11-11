@@ -11,6 +11,7 @@ pub mod contraction;
 pub mod cue;
 pub mod dict;
 pub mod eval;
+pub mod fix;
 pub mod frequency;
 pub mod help;
 pub mod hook;

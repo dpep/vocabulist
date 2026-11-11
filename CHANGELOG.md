@@ -14,6 +14,13 @@
   instead. The lexicon moves to schema 7 for the confirmations, so straight
   after upgrading, read-only commands wait for any writing command to migrate
   it (see below).
+- **`vocab --fix`** writes text back with corrections applied: missing
+  apostrophes (`dont`) and typos you confirmed with `vocab typos`, never a
+  guess. It reads the text argument, `--file`, or stdin (line by line, as it
+  arrives) and writes stdout; `--in-place` rewrites the `--file` instead. Code
+  spans and URLs are left alone and the typed case is kept (`Teh` → `The`).
+  What changed goes to stderr, as JSON under `-j`/`-J`. Exits 1 when anything
+  changed.
 - **`vocab list --uncommon`** drops words an ordinary dictionary already
   knows. It works on a plain `list` (keeping its default of 50) and composes
   with `--trusted`: `vocab list --trusted --uncommon -J` is exactly what

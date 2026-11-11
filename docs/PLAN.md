@@ -841,6 +841,42 @@ score. No field changed (`Finding`, `Suggestion`).
 prose top-1 correction rose 0.826 → 0.831 with detection unchanged: a few
 injected slips happen to be ones this user makes.
 
+### `--fix`: corrections that are never guesses **[done]**
+
+`vocab --fix` reads the positional text, `--file`, or stdin and writes it back
+with corrections applied. It edits a file only with `--in-place`.
+
+- **Only two kinds qualify:** a missing apostrophe (`dont`, an exact mapping)
+  and a typo pair the user **confirmed**. Derived pairs are not applied,
+  however strong. Their ratio does not separate slips from words: on the store
+  copy, `codecs`/codes (×20) and `cmp`/mcp (×39) sit among `runing`/running
+  (×23) and `mabye`/maybe (×47), and `repros`, `behaviour` and `resolvers` are
+  derived pairs at six and two documents. The checker *suggests* a derived
+  pair; writing it into someone's text needs their say-so, which
+  `vocab typos teh the` gives. Restricting to transpositions at ≥2 documents
+  was 8 for 8 on the store copy, which is too few to build a silent rewrite on;
+  it is the candidate if confirmations prove too much work.
+- **It rides the checker.** A finding becomes a fix only if
+  `Checker::correction` says so, so masking (code spans, URLs, fenced blocks,
+  indented lines), names the document introduces, and proper nouns all carry
+  over unchanged. One consequence: a document that writes `teh` in a code span
+  or URL has named it, so the prose `teh` is accepted and left alone, exactly
+  as the checker would.
+- **The typed case is kept:** `Teh` → `The`, `TEH` → `THE`.
+- **A fix lands only where the line still holds the word, at its column.**
+  Columns are characters, and typography folding preserves them; a mismatch
+  leaves the text alone.
+- **Byte for byte otherwise.** Lines keep their own terminators (`\r\n`
+  stays), and a file without a trailing newline doesn't gain one.
+- **Text on stdout, what changed on stderr.** stdout carries the corrected
+  text in every format, so `vocab --fix -J < a > b` works. The report goes to
+  stderr: `line:col from -> to` by default, a `Fix` object per change under
+  `-J` (streamed), or one array under `-j`.
+- **Streams.** stdin is fixed and written line by line, asserted by timing in
+  `tests/cli_e2e.rs` as `-J` is.
+- **Exit 1 when anything changed**, as checking exits 1 on a finding; 0 when
+  the text was already clean; 2 on an error.
+
 **`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
 probability: a provenance constant plus a corroboration curve, never checked
 against outcomes. A `--confidence 80` filter would claim "80% of these are

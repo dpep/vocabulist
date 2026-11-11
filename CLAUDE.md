@@ -134,6 +134,7 @@ vocabulist/
     frequency.rs  ← embedded core list + how common a word is in English
     text.rs       ← tokenizing, masking, and the shared prose pipeline
     contraction.rs← apostrophe-less contractions (`dont` → `don't`)
+    fix.rs        ← `--fix`: write corrections back, in place and in case
     complexity.rs ← vocabulary and readability metrics
     watermark.rs  ← assistant-authored detection
     help.rs       ← `vocab help <topic>`, for options as well as subcommands

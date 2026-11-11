@@ -16,6 +16,7 @@ fn scratch_db(name: &str) -> PathBuf {
 
 struct Output {
     stdout: String,
+    stderr: String,
     code: i32,
 }
 
@@ -50,6 +51,7 @@ fn run(db: &PathBuf, args: &[&str], stdin: Option<&str>) -> Output {
     let out = child.wait_with_output().expect("run vocab");
     Output {
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         code: out.status.code().unwrap_or(-1),
     }
 }
@@ -192,6 +194,59 @@ fn typos_are_learned_confirmed_and_retracted() {
     assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
     assert_eq!(vocab(&db, &["add", "teh"]).code, 0);
     assert_eq!(vocab(&db, &["typos"]).code, 1, "nothing left is grep's 1");
+}
+
+#[test]
+fn fix_writes_back_only_what_is_never_a_guess() {
+    let db = scratch_db("fix");
+    // `teh` is a derived typo here, `shoudl` a confirmed one.
+    let body = "the zblorg and the widget, the rest of the day the plan was the \
+                same as the last, with teh usual result";
+    learn(&db, body, "first");
+    assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
+
+    let input = "Shoudl we ship? dont run `dont` or https://example.com/dont teh\r\nclean\n";
+    let out = run(&db, &["--fix", "-J"], Some(input));
+    assert_eq!(out.code, 1, "a change exits 1, as a finding does");
+    assert_eq!(
+        out.stdout, "Should we ship? don't run `dont` or https://example.com/dont teh\r\nclean\n",
+        "case kept, code and URLs untouched, a derived pair left alone, line endings kept"
+    );
+    let fixes: Vec<serde_json::Value> = out
+        .stderr
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(fixes.len(), 2);
+    assert_eq!(fixes[0]["from"], "Shoudl");
+    assert_eq!(fixes[0]["to"], "Should");
+    assert_eq!(fixes[1]["kind"], "contraction");
+
+    assert_eq!(run(&db, &["--fix"], Some("all clean\n")).code, 0);
+}
+
+#[test]
+fn fix_edits_a_file_only_when_asked() {
+    let db = scratch_db("fix-file");
+    assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
+    let path = db.with_file_name("notes.md");
+    std::fs::write(&path, "we shoudl ship").unwrap();
+    let file = path.to_str().unwrap();
+
+    let out = vocab(&db, &["--fix", "-f", file]);
+    assert_eq!(out.stdout, "we should ship");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "we shoudl ship");
+
+    let out = vocab(&db, &["--fix", "--in-place", "-f", file]);
+    assert_eq!(out.code, 1);
+    assert_eq!(out.stdout, "");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "we should ship");
+
+    assert_eq!(
+        vocab(&db, &["--in-place", "-f", file]).code,
+        2,
+        "needs --fix"
+    );
 }
 
 #[test]
@@ -628,6 +683,40 @@ fn ndjson_streams_rather_than_buffering() {
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("no output before EOF: -J is buffering, not streaming");
     assert!(first.contains("zblorgw"), "{first}");
+
+    drop(stdin);
+    child.wait().unwrap();
+}
+
+#[test]
+fn fix_streams_rather_than_buffering() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let db = scratch_db("fix_stream");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .args(["--db", db.to_str().unwrap(), "--fix"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "we dont buffer").unwrap();
+    stdin.flush().unwrap();
+
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = out.read_line(&mut line);
+        let _ = tx.send(line);
+    });
+
+    let first = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("no output before EOF: --fix is buffering, not streaming");
+    assert_eq!(first, "we don't buffer\n");
 
     drop(stdin);
     child.wait().unwrap();

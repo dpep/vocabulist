@@ -9,7 +9,7 @@ use std::io::Write;
 use serde_json::json;
 
 use crate::cli::Format;
-use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus, TypoPair};
+use crate::types::{Entry, Finding, Fix, SeedReport, StatusPayload, StoreStatus, TypoPair};
 
 /// The single structured-output path for findings. `-j` is a pretty array,
 /// `-J` is one object per line, so single-blob and streamed input emit an
@@ -24,6 +24,29 @@ use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus, TypoP
 pub fn stream_finding(out: &mut impl Write, finding: &Finding) -> std::io::Result<()> {
     writeln!(out, "{}", serde_json::to_string(finding).unwrap())?;
     out.flush()
+}
+
+/// One applied fix. Human and `-J` report it as it happens; `-j` collects
+/// them for `render_fixes`.
+pub fn stream_fix(out: &mut impl Write, fix: &Fix, format: Format) -> std::io::Result<()> {
+    match format {
+        Format::Human => writeln!(
+            out,
+            "{}:{:<4} {} -> {}",
+            fix.line, fix.col, fix.from, fix.to
+        )?,
+        Format::Ndjson => writeln!(out, "{}", serde_json::to_string(fix).unwrap())?,
+        Format::Json => return Ok(()),
+    }
+    out.flush()
+}
+
+/// The fixes as one `-j` document; the other formats already streamed them.
+pub fn render_fixes(out: &mut impl Write, fixes: &[Fix], format: Format) -> std::io::Result<()> {
+    if format == Format::Json {
+        writeln!(out, "{}", serde_json::to_string_pretty(fixes).unwrap())?;
+    }
+    Ok(())
 }
 
 pub fn render_findings(

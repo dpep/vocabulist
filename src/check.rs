@@ -615,6 +615,24 @@ impl Checker {
         findings
     }
 
+    /// The replacement `--fix` may write for this finding, if any.
+    ///
+    /// Never a guess: a contraction, whose mapping is exact, or a typo pair
+    /// the user confirmed. A derived pair is not enough — `repros` is a derived
+    /// typo of `repos`, and the ratio does not separate those from `teh`
+    /// (PLAN §12l).
+    pub fn correction(&self, finding: &Finding) -> Option<String> {
+        match finding.kind {
+            FindingKind::Contraction => finding.suggestions.first().map(|s| s.word.clone()),
+            FindingKind::Unknown => self
+                .trust
+                .typo_of(&text::normalize(&finding.word), |w| self.in_dictionary(w))
+                .filter(|pair| pair.source == crate::types::Provenance::User)
+                .map(|pair| pair.intended),
+            FindingKind::RealWord => None,
+        }
+    }
+
     fn unknown_finding(&self, token: &Token, word: &str, line_no: usize) -> Finding {
         // Capitalization is the only evidence available about whether a
         // *name* was meant, and it is lost by normalization, so it has to be

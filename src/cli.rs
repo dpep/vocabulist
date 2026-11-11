@@ -43,6 +43,7 @@ Examples:
   cat notes.md | vocab -J          stream stdin as NDJSON
   vocab list rubo                  lexicon entries matching \"rubo\"
   vocab typos                      your habitual typos, and what each means
+  vocab --fix -f notes.md          write it back with confirmed typos fixed
   vocab sync                       export into cSpell and the macOS dictionary
   vocab phrases                    the phrases you actually use
   vocab analyze --lexicon          vocabulary and readability of your corpus
@@ -95,6 +96,22 @@ pub struct Cli {
     /// Read input from this file, checked line by line (like piped stdin).
     #[arg(short, long, global = true)]
     pub file: Option<PathBuf>,
+
+    /// Write the text back with corrections applied, instead of reporting
+    /// findings.
+    ///
+    /// Only corrections that are never guesses: a missing apostrophe (`dont`)
+    /// and typos you confirmed with `vocab typos`. Code spans, URLs and fenced
+    /// blocks are left alone, and the typed case is kept (`Teh` -> `The`).
+    /// The text goes to stdout, line by line as it is read; what changed goes
+    /// to stderr, in the -j/-J format when one is given. Exits 1 when anything
+    /// changed.
+    #[arg(long)]
+    pub fix: bool,
+
+    /// With --fix, rewrite --file in place rather than printing it.
+    #[arg(long, requires_all = ["fix", "file"])]
+    pub in_place: bool,
 
     /// Lexicon database. Defaults to `$XDG_DATA_HOME/vocabulist/lexicon.db`.
     #[arg(long, env = "VOCAB_DB", global = true)]
@@ -900,6 +917,7 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
+        None if cli.fix => fix_input(cli, &store, format, &mut out, profile),
         None => check_input(cli, &store, format, &mut out, profile),
     }
 }
@@ -1056,15 +1074,7 @@ fn check_input(
     // pretty array being a single document, which is why both formats exist.
     let streaming = format == Format::Ndjson && !cli.quiet;
 
-    // One loop over all three input sources, so streaming is not implemented
-    // three times and cannot drift between them.
-    let lines: Box<dyn Iterator<Item = io::Result<String>> + '_> = if let Some(text) = &cli.text {
-        Box::new(text.lines().map(|line| Ok(line.to_string())))
-    } else if let Some(path) = &cli.file {
-        Box::new(io::BufReader::new(std::fs::File::open(path)?).lines())
-    } else if !io::stdin().is_terminal() {
-        Box::new(io::stdin().lock().lines())
-    } else {
+    let Some(lines) = input_lines(cli)? else {
         Cli::command().print_help()?;
         return Ok(ExitCode::SUCCESS);
     };
@@ -1073,7 +1083,8 @@ fn check_input(
     let mut found = false;
     for line in lines {
         let line = line?;
-        let batch = profile.time("check", || scanner.feed(&line, &mut evidence));
+        let line = line.trim_end_matches(['\n', '\r']);
+        let batch = profile.time("check", || scanner.feed(line, &mut evidence));
         found |= !batch.is_empty();
         if streaming {
             for finding in &batch {
@@ -1100,6 +1111,105 @@ fn check_input(
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    })
+}
+
+/// Each line of the input — the positional text, `--file`, or piped stdin —
+/// with its terminator, so `--fix` can write the text back byte for byte.
+/// `None` when there is no input at all.
+///
+/// One source of lines for checking and fixing, so streaming is implemented
+/// once and cannot drift between them.
+type Lines<'a> = Box<dyn Iterator<Item = io::Result<String>> + 'a>;
+fn input_lines(cli: &Cli) -> io::Result<Option<Lines<'_>>> {
+    fn terminated(mut reader: impl BufRead) -> impl Iterator<Item = io::Result<String>> {
+        std::iter::from_fn(move || {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => None,
+                Ok(_) => Some(Ok(line)),
+                Err(e) => Some(Err(e)),
+            }
+        })
+    }
+    Ok(if let Some(text) = &cli.text {
+        Some(Box::new(
+            text.split_inclusive('\n').map(|l| Ok(l.to_string())),
+        ))
+    } else if let Some(path) = &cli.file {
+        Some(Box::new(terminated(io::BufReader::new(
+            std::fs::File::open(path)?,
+        ))))
+    } else if !io::stdin().is_terminal() {
+        Some(Box::new(terminated(io::stdin().lock())))
+    } else {
+        None
+    })
+}
+
+/// `--fix`: the text back on stdout (or into the file), what changed on
+/// stderr.
+fn fix_input(
+    cli: &Cli,
+    store: &Store,
+    format: Format,
+    out: &mut impl Write,
+    profile: &Rc<Profile>,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let checker = build_checker(store, profile)?;
+    let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
+    let mut scanner = crate::check::Scanner::new(&checker);
+    let Some(lines) = input_lines(cli)? else {
+        Cli::command().print_help()?;
+        return Ok(ExitCode::SUCCESS);
+    };
+
+    let mut log = io::stderr().lock();
+    let mut rewritten = String::new();
+    let mut applied = Vec::new();
+    for (index, raw) in lines.enumerate() {
+        let raw = raw?;
+        let body = raw.trim_end_matches(['\n', '\r']);
+        let ending = &raw[body.len()..];
+        let wanted = scanner
+            .feed(body, &mut evidence)
+            .into_iter()
+            .filter_map(|finding| {
+                let to = checker.correction(&finding)?;
+                Some(crate::types::Fix {
+                    line: index + 1,
+                    col: finding.col,
+                    from: finding.word,
+                    to,
+                    kind: finding.kind,
+                })
+            })
+            .collect();
+        let (fixed, landed) = crate::fix::apply(body, wanted);
+        for fix in &landed {
+            output::stream_fix(&mut log, fix, format)?;
+        }
+        applied.extend(landed);
+        if cli.in_place {
+            rewritten.push_str(&fixed);
+            rewritten.push_str(ending);
+        } else if !cli.quiet {
+            // Written as each line is read, so a pipe sees it straight away.
+            write!(out, "{fixed}{ending}")?;
+            out.flush()?;
+        }
+    }
+    if let (true, Some(path)) = (cli.in_place, &cli.file)
+        && !applied.is_empty()
+    {
+        std::fs::write(path, rewritten)?;
+    }
+    output::render_fixes(&mut log, &applied, format)?;
+    // A change is a finding, as in checking: 1 says the text was not clean.
+    Ok(if applied.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     })
 }
 
