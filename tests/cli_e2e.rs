@@ -495,6 +495,26 @@ fn a_shorthand_that_says_nothing_is_refused() {
 }
 
 #[test]
+fn a_shorthand_that_could_never_apply_is_refused() {
+    let db = scratch_db("shorthand-guarded");
+    assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
+    // A dictionary word would be rewritten in every sentence that uses it.
+    assert_eq!(vocab(&db, &["shorthand", "the=then"]).code, 2);
+    // A word from a deliberate source is a word, not an abbreviation.
+    assert_eq!(vocab(&db, &["shorthand", "zblorg=zebra"]).code, 2);
+    // Nothing is stored when one of several is refused.
+    assert_eq!(vocab(&db, &["shorthand", "zrepro=x", "the=then"]).code, 2);
+    assert_eq!(vocab(&db, &["shorthand"]).code, 1);
+
+    assert_eq!(vocab(&db, &["shorthand", "zrepro=REPRODUCE"]).code, 0);
+    let out = run(&db, &["--expand"], Some("Zrepro it\n"));
+    assert_eq!(
+        out.stdout, "Reproduce it\n",
+        "the meaning is stored lowercase"
+    );
+}
+
+#[test]
 fn assistant_authored_text_gives_vocabulary_but_not_voice() {
     let db = scratch_db("watermark");
     let body = "the frobnicator handles retries\n\nCo-Authored-By: Claude Opus 5 <x>";

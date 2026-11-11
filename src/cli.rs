@@ -234,7 +234,9 @@ pub enum Command {
     /// Otherwise `repro'd`, `reproed` and `reproing` read as reproduced and
     /// reproducing, and an -s reads as a plural only when the meaning is not
     /// also a verb: `args` is arguments, but `repros` stays a guess, since
-    /// "it repros on main" and "the repros" mean different things.
+    /// "it repros on main" and "the repros" mean different things. A
+    /// dictionary word, or one from a deliberate source, is refused, as by
+    /// `vocab typos`.
     Shorthand {
         /// A shorthand and what it means, or any number of `SHORT=MEANING`;
         /// with `--rm`, just the shorthands.
@@ -1090,25 +1092,12 @@ fn typos(
             if typo == intended {
                 return Err(format!("{typo} cannot be a typo of itself").into());
             }
-            if let Some(standing) = store.trust()?.standing(typo)
-                && standing.provenance > crate::types::Provenance::Observed
-            {
-                // Provenance ratchets: a deliberate source outranks a
-                // confirmation, so storing one would do nothing.
-                return Err(format!(
-                    "{typo} is in your lexicon from a deliberate source ({}) — \
-                     `vocab rm {typo}` first if it really is a typo",
-                    standing.provenance.as_str()
-                )
-                .into());
-            }
-            if crate::dict::load().is_some_and(|d| crate::dict::contains(&d, typo)) {
-                // A real word is only wrong in context; that is the
-                // real-word checker's job, not a blanket replacement.
-                return Err(
-                    format!("{typo} is a dictionary word, so it cannot always be a typo").into(),
-                );
-            }
+            refuse_a_word(
+                &store.trust()?,
+                crate::dict::load().as_ref(),
+                typo,
+                "a typo",
+            )?;
             // The latest word on a form wins: it is a typo, not a shorthand.
             store.forget_shorthand(typo)?;
             store.confirm_typo(typo, intended)?;
@@ -1119,6 +1108,34 @@ fn typos(
         }
         _ => Err("give a typo and the word it means, or `--rm` and the typo".into()),
     }
+}
+
+/// Refuse to call `word` a typo or a shorthand (`what`) when it is a word.
+///
+/// A blanket replacement of a dictionary word is wrong in every sentence that
+/// meant the word — that is the real-word checker's job, decided in context.
+/// And provenance ratchets: a word from a deliberate source outranks a
+/// confirmation, so storing one would do nothing.
+fn refuse_a_word(
+    trust: &crate::trust::Trust,
+    dictionary: Option<&crate::dict::Dictionary>,
+    word: &str,
+    what: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(standing) = trust.standing(word)
+        && standing.provenance > crate::types::Provenance::Observed
+    {
+        return Err(format!(
+            "{word} is in your lexicon from a deliberate source ({}) — \
+             `vocab rm {word}` first if it really is {what}",
+            standing.provenance.as_str()
+        )
+        .into());
+    }
+    if dictionary.is_some_and(|d| crate::dict::contains(d, word)) {
+        return Err(format!("{word} is a dictionary word, so it cannot always be {what}").into());
+    }
+    Ok(())
 }
 
 /// `vocab shorthand`: list them, confirm some, or forget some.
@@ -1179,8 +1196,10 @@ fn shorthand(
     }
     let confirmed: Vec<(String, String)> = confirmed
         .into_iter()
-        .map(|(s, m)| (text::normalize(s.trim()), m.trim().to_string()))
+        .map(|(s, m)| (text::normalize(s.trim()), m.trim().to_lowercase()))
         .collect();
+    let trust = store.trust()?;
+    let dictionary = crate::dict::load();
     for (short, means) in &confirmed {
         if short.is_empty() || means.is_empty() {
             return Err("a shorthand and its meaning are both needed".into());
@@ -1188,6 +1207,7 @@ fn shorthand(
         if short.eq_ignore_ascii_case(means) {
             return Err(format!("{short} cannot be a shorthand for itself").into());
         }
+        refuse_a_word(&trust, dictionary.as_ref(), short, "a shorthand")?;
     }
     store.transaction(|| -> Result<(), rusqlite::Error> {
         for (short, means) in &confirmed {

@@ -35,6 +35,11 @@
 - **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code
   spans**, so their contents are neither flagged nor rewritten, and a `<pre>`
   block spanning lines is skipped like a fenced one.
+- **`vocab shorthand` refuses what `vocab typos` refuses:** a dictionary
+  word (`the=then`) and a word from a deliberate source (`trekr=trek`). The
+  meaning is stored lowercase (`repro=REPRODUCE`). A shorthand you already
+  confirmed for a dictionary word is kept; `vocab shorthand --rm` it if
+  `--expand` writes it where you meant the word.
 
 ## 0.6.0 — 2026-11-11
 

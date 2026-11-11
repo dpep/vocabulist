@@ -1017,6 +1017,12 @@ a shorthand forgets a typo confirmation of the same form and vice versa: the
 latest word on a form wins. Only the exact form confirmed as a typo outranks
 an inflected shorthand.
 
+The guards are `vocab typos`'s: a dictionary word is refused (`the=then`
+would rewrite every sentence that meant `the`, and so would `prod`, whatever
+it costs a user who writes it), and so is a word from a deliberate source
+(`trekr` is a repo, not an abbreviation). The meaning is stored lowercase,
+like a typo's, and written back in the case the shorthand was typed.
+
 ### Inflections
 
 Inflections are read off a confirmed form by rule, never stored:
