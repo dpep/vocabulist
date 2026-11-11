@@ -1327,3 +1327,15 @@ fn an_unseeded_lexicon_still_knows_how_common_words_are() {
     assert_eq!(out.stdout, "what is the plan\n", "{}", out.stderr);
     assert!(fingerprint(&db) == before, "reading never writes");
 }
+
+#[test]
+fn a_very_long_line_is_checked_in_linear_time() {
+    let db = scratch_db("long-line");
+    // One line of ~96 KB, as a pasted log or a minified file arrives.
+    let line = "the widget ships today. ".repeat(4000) + "\n";
+    let started = std::time::Instant::now();
+    let out = run(&db, &["--fix", "-J"], Some(&line));
+    let took = started.elapsed();
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
+}

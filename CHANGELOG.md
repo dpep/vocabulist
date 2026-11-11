@@ -47,6 +47,9 @@
 - **Decomposed accents no longer split words.** `cafe` plus a combining
   acute (NFD, as macOS filenames and PDF copies carry it) was read as `cafe`
   and flagged; it is now judged exactly as the composed `café` is.
+- **A very long line no longer takes minutes.** Checking was quadratic in
+  the length of a line, so a 96 KB single line (a pasted log, a minified
+  file) ran for minutes; it now takes seconds.
 
 ### Docs
 

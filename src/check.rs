@@ -473,6 +473,7 @@ impl Checker {
         // itself.
         names.observe(&line, &masked);
         let tokens = text::tokenize(&masked);
+        let chars: Vec<char> = masked.chars().collect();
 
         let normalized: Vec<String> = tokens.iter().map(|t| text::normalize(&t.text)).collect();
         self.profile.count("tokens", tokens.len() as u64);
@@ -482,7 +483,7 @@ impl Checker {
         for (i, token) in tokens.iter().enumerate() {
             let starts_sentence = sentence_initial;
             // The next token begins a sentence only if this one ended one.
-            sentence_initial = ends_sentence(&masked, token, &tokens.get(i + 1).map(|t| t.col));
+            sentence_initial = ends_sentence(&chars, token, &tokens.get(i + 1).map(|t| t.col));
 
             if !text::is_checkable(&token.text) {
                 continue;
@@ -663,11 +664,12 @@ impl Checker {
         let line = text::normalize_typography(line);
         let masked = text::mask_non_prose(&line);
         let tokens = text::tokenize(&masked);
+        let chars: Vec<char> = masked.chars().collect();
         let mut out = Vec::new();
         let mut sentence_initial = true;
         for (i, token) in tokens.iter().enumerate() {
             let starts_sentence = sentence_initial;
-            sentence_initial = ends_sentence(&masked, token, &tokens.get(i + 1).map(|t| t.col));
+            sentence_initial = ends_sentence(&chars, token, &tokens.get(i + 1).map(|t| t.col));
             let start = token.col - 1;
             // Not even reported as left alone: `args.len()` is code, not a
             // shorthand whose meaning is in doubt.
@@ -960,8 +962,10 @@ fn lead_with(mut suggestions: Vec<Suggestion>, intended: &str, belief: f32) -> V
 ///
 /// Looks at the characters separating them rather than the token itself, so
 /// `e.g.` mid-sentence doesn't reset the state for every abbreviation.
-fn ends_sentence(line: &str, token: &Token, next_col: &Option<usize>) -> bool {
-    let chars: Vec<char> = line.chars().collect();
+///
+/// Takes the line's chars, collected once by the caller: collecting them here,
+/// per token, made a long line quadratic.
+fn ends_sentence(chars: &[char], token: &Token, next_col: &Option<usize>) -> bool {
     let start = token.col - 1 + token.text.chars().count();
     let end = next_col.map_or(chars.len(), |c| (c - 1).min(chars.len()));
     if start >= end {
