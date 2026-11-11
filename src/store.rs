@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, Result, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, params};
 
 use crate::types::{Entry, Kind, Provenance, Register, StoreStatus};
 
@@ -303,6 +303,47 @@ impl Store {
         migrate(&conn)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn, path })
+    }
+
+    /// Open an existing lexicon for reading only: never creates, migrates,
+    /// or stamps it.
+    ///
+    /// The schema must match exactly. A newer one is a newer vocabulist's to
+    /// read, and an older one hasn't been migrated yet — and migrating or
+    /// stamping either would be a write. Under WAL a reader never waits on
+    /// the capture hooks' write lock.
+    pub fn open_read_only(
+        path: impl AsRef<Path>,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let path = path.as_ref().to_path_buf();
+        if !path.exists() {
+            return Err(format!(
+                "no lexicon at {} — run `vocab seed` to create one",
+                path.display()
+            )
+            .into());
+        }
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let store = Self { conn, path };
+        let found = store.schema_version()?;
+        if found > SCHEMA_VERSION {
+            return Err(format!(
+                "lexicon at {} is schema v{found}, newer than this vocab understands \
+                 (v{SCHEMA_VERSION}) — upgrade vocab",
+                store.path.display()
+            )
+            .into());
+        }
+        if found < SCHEMA_VERSION {
+            return Err(format!(
+                "lexicon at {} is schema v{found}, older than this vocab (v{SCHEMA_VERSION}) \
+                 — any writing command, such as `vocab process`, upgrades it",
+                store.path.display()
+            )
+            .into());
+        }
+        Ok(store)
     }
 
     pub fn path(&self) -> &Path {
@@ -1177,6 +1218,72 @@ mod tests {
         s.replace_mined_frequencies(&counts).unwrap();
         s.replace_mined_frequencies(&counts).unwrap();
         assert_eq!(s.frequencies().unwrap()["zzzunique"], 1);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vocabulist-store-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("lexicon.db")
+    }
+
+    #[test]
+    fn a_read_only_open_refuses_a_missing_database() {
+        let path = scratch("ro-missing")
+            .with_file_name("absent")
+            .join("lexicon.db");
+        assert!(Store::open_read_only(&path).is_err());
+        assert!(!path.exists(), "a read must not create the database");
+        assert!(!path.parent().unwrap().exists(), "nor its directory");
+    }
+
+    #[test]
+    fn a_read_only_open_refuses_a_newer_schema_without_downgrading_it() {
+        let path = scratch("ro-newer");
+        Store::open(&path).unwrap();
+        let newer = SCHEMA_VERSION + 1;
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", newer)
+            .unwrap();
+
+        let err = Store::open_read_only(&path).err().expect("refused");
+        assert!(err.to_string().contains("newer"));
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, newer);
+    }
+
+    #[test]
+    fn a_read_only_open_refuses_an_older_schema_without_migrating_it() {
+        let path = scratch("ro-older");
+        Store::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+            .unwrap();
+
+        assert!(Store::open_read_only(&path).is_err());
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION - 1);
+    }
+
+    #[test]
+    fn a_read_only_store_reads_but_cannot_write() {
+        let path = scratch("ro-reads");
+        Store::open(&path)
+            .unwrap()
+            .upsert_word("zblorg", "zblorg", Provenance::User, 1)
+            .unwrap();
+
+        let store = Store::open_read_only(&path).unwrap();
+        assert!(store.contains("zblorg").unwrap());
+        assert!(store.remove("zblorg").is_err());
     }
 
     #[test]
