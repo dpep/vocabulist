@@ -82,8 +82,8 @@ const MIN_SUGGESTION_SCORE: f32 = 0.02;
 
 /// The share of the edit model's belief a transposition needs before `--fix`
 /// writes it over a slip the lexicon has never paired: more than every other
-/// reading together. Below it on a real store sat `gary` → `gray`, the one
-/// real word among 61 rewrites of 7,775 observed words read cold.
+/// reading together. Measured in PLAN §12l, where the only real word a cold
+/// read rewrote (`gary` → `gray`) fell below it.
 const UNSEEN_SHARE: f32 = 0.5;
 
 /// The resolved word sets a check runs against. The lexicon is the authority;

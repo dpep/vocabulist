@@ -178,11 +178,10 @@ impl Trust {
 /// reason. Shared by derived pairs and by a slip never seen before, which the
 /// checker judges against general English.
 ///
-/// Only a transposition qualifies. Among the derived pairs on a real store
-/// they were 65 slips to 2 words, and both words were three letters (`cmp`
-/// beside `mcp`, `esc` beside `sec`). One-letter changes were 68 to 18: real
-/// words (`repros`, `codecs`, `behaviour`) and slips aimed at the wrong word
-/// (`laywer` for `layer`).
+/// Only a transposition qualifies: on a real store nearly every one was a
+/// slip, while one-letter changes reached real words (`repros`, `codecs`)
+/// and slips aimed at the wrong word (`laywer` for `layer`). PLAN §12l has
+/// the counts.
 pub fn held_back(typo: &str, intended: &str, edit: Option<Edit>) -> Option<HeldBack> {
     if is_british_spelling(typo, intended) {
         return Some(HeldBack::Variant);
