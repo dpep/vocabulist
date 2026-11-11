@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, params};
 
+use crate::trust::{Standing, Trust};
 use crate::types::{Entry, Kind, Provenance, Register, StoreStatus};
 
 /// How many exemplars we keep per register. A voice profile needs real quoted
@@ -265,15 +266,6 @@ fn add_column(conn: &Connection, sql: &str) -> Result<()> {
     }
 }
 
-/// The lexicon split by how much it has earned: words from a deliberate
-/// source, merely-observed words paired with the number of distinct days
-/// backing each, and the subset that are people.
-pub type Checkable = (
-    Vec<(String, Provenance)>,
-    Vec<(String, i64)>,
-    Vec<(String, i64, String)>,
-);
-
 /// One staged body awaiting processing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpoolRow {
@@ -450,53 +442,47 @@ impl Store {
             .is_some())
     }
 
-    /// Every word in the lexicon, for building the in-memory check set.
-    /// The lexicon split by how much it has earned: words from a deliberate
-    /// source, and merely-observed words with the number of distinct documents
-    /// backing each.
+    /// Every word's standing, for the trust rule (`crate::trust`).
     ///
-    /// Checking needs the split. `words()` hands back everything, which meant
-    /// one sighting in one document made a word known forever — so a typo
-    /// typed once was learned, and the checker went permanently blind to it.
-    pub fn checkable(&self) -> Result<Checkable> {
-        // Distinct *days*, not distinct documents. Typos are bursty in time as
-        // well as within a message — you mistype a word twice in one sitting
-        // and never again — so two sightings in one afternoon is one piece of
-        // evidence wearing two hats. Counting days is the cheapest honest
-        // version of "independent contexts".
+    /// Documents, not days (PLAN §12l): `first_seen` is processing time, so a
+    /// backfill collapses months of writing into one day, and jargon bursts
+    /// within a session anyway. What recurrence cannot settle, the neighbour
+    /// test does.
+    pub fn trust(&self) -> Result<Trust> {
         let mut stmt = self.conn.prepare(
-            "SELECT l.word, l.provenance, l.kind, l.display,
-                    (SELECT COUNT(DISTINCT date(s.first_seen))
-                       FROM word_sources s WHERE s.word = l.word)
+            "SELECT l.word, l.provenance, l.count,
+                    (SELECT COUNT(*) FROM word_sources s WHERE s.word = l.word)
              FROM lexicon l",
         )?;
-        let mut trusted = Vec::new();
-        let mut observed = Vec::new();
-        let mut people = Vec::new();
         let rows = stmt.query_map([], |r| {
+            let provenance =
+                Provenance::parse(&r.get::<_, String>(1)?).unwrap_or(Provenance::Observed);
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, Option<String>>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, i64>(4)?,
+                Standing {
+                    provenance,
+                    count: r.get(2)?,
+                    docs: r.get(3)?,
+                },
             ))
         })?;
-        for row in rows {
-            let (word, provenance, kind, display, sources) = row?;
-            let provenance = Provenance::parse(&provenance).unwrap_or(Provenance::Observed);
-            if kind.as_deref() == Some("person") {
-                // Display form carried alongside: a name should be suggested
-                // the way it is written, not the way it is keyed.
-                people.push((word.clone(), sources, display));
-            }
-            if provenance > Provenance::Observed {
-                trusted.push((word, provenance));
-            } else {
-                observed.push((word, sources));
-            }
-        }
-        Ok((trusted, observed, people))
+        rows.collect()
+    }
+
+    /// The people seen in captured messages: key, distinct days seen, and
+    /// display form.
+    ///
+    /// Days, not documents: a name typed twice in one sitting is as likely the
+    /// typo as the target (PLAN §12j).
+    pub fn people(&self) -> Result<Vec<(String, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.word, l.display,
+                    (SELECT COUNT(DISTINCT date(s.first_seen))
+                       FROM word_sources s WHERE s.word = l.word)
+             FROM lexicon l WHERE l.kind = 'person'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(2)?, r.get(1)?)))?;
+        rows.collect()
     }
 
     pub fn words(&self) -> Result<Vec<String>> {
@@ -1376,11 +1362,12 @@ mod tests {
     }
 
     #[test]
-    fn corroboration_counts_days_not_documents() {
+    fn corroboration_counts_documents() {
         let s = store();
-        s.upsert_word("zblorg", "zblorg", Provenance::Observed, 1)
+        s.upsert_word("zblorg", "zblorg", Provenance::Observed, 3)
             .unwrap();
-        // Two documents, one afternoon: the shape a typo makes.
+        // One afternoon, or one backfill: `first_seen` is processing time,
+        // so days would collapse these into one.
         for doc in ["a", "b"] {
             s.conn
                 .execute(
@@ -1390,21 +1377,9 @@ mod tests {
                 )
                 .unwrap();
         }
-        let (_, observed, _) = s.checkable().unwrap();
-        let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
-        assert_eq!(sources, 1, "one sitting is one piece of evidence");
-
-        // A separate day is a genuinely independent context.
-        s.conn
-            .execute(
-                "INSERT INTO word_sources (word, doc, first_seen)
-                 VALUES ('zblorg', 'c', '2026-03-14 11:00:00')",
-                [],
-            )
-            .unwrap();
-        let (_, observed, _) = s.checkable().unwrap();
-        let sources = observed.iter().find(|(w, _)| w == "zblorg").unwrap().1;
-        assert_eq!(sources, 2);
+        let trust = s.trust().unwrap();
+        let standing = trust.standing("zblorg").unwrap();
+        assert_eq!((standing.docs, standing.count), (2, 3));
     }
 
     #[test]
@@ -1448,23 +1423,17 @@ mod tests {
     fn a_person_is_recorded_as_one() {
         let s = store();
         s.record_person("Ada Lovelace", "msg-1").unwrap();
-        let (_, _, people) = s.checkable().unwrap();
-        let (key, _, display) = people.iter().find(|(w, _, _)| w == "ada lovelace").unwrap();
+        let people = s.people().unwrap();
+        let (key, days, display) = people.iter().find(|(w, _, _)| w == "ada lovelace").unwrap();
         assert_eq!(key, "ada lovelace");
         assert_eq!(
             display, "Ada Lovelace",
             "the display form is what gets suggested"
         );
 
-        // And corroborates by day like everything else: one sighting is not
-        // yet evidence that this is how the name is spelled.
-        let (_, observed, _) = s.checkable().unwrap();
-        let days = observed
-            .iter()
-            .find(|(w, _)| w == "ada lovelace")
-            .map(|(_, d)| *d)
-            .unwrap();
-        assert_eq!(days, 1);
+        // And corroborates by day: one sighting is not yet evidence that this
+        // is how the name is spelled.
+        assert_eq!(*days, 1);
     }
 
     #[test]

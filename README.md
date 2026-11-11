@@ -47,6 +47,12 @@ Provenance only ever ratchets upward, so a word first noticed in prose is
 *upgraded* when it later turns up as a binary you installed — never the
 reverse.
 
+A word seen only in your prose earns trust by turning up in two separate
+documents — unless it's a slip of a word you write far more often. `teh`
+recurs as reliably as any jargon, but you write `the` hundreds of times as
+often, so it stays a typo however often you make it. `trekr`, a repo you own,
+is yours even though `trek` is a word.
+
 ## Reluctant on purpose
 
 A false "misspelled" is expensive: it teaches you to ignore the squiggle, and

@@ -70,7 +70,8 @@ decisions — reach for it before inventing a method that has a name.
   corrupts it. A new command picks its access in that exhaustive match; pick
   write only if it really writes.
 - **Consumers read the rule, never copy it.** A set another tool wants (the
-  trusted words, the export set) is defined once in `sync` and exposed through
+  trusted words, the export set) is defined once — trust in `trust.rs`, which
+  the checker reads too; the export set in `sync` — and exposed through
   `vocab list` flags. A consumer that re-derives the rule drifts the first time
   the bar moves.
 - **Every command is agent/script-friendly.** *All* output honors the format —
@@ -140,6 +141,7 @@ vocabulist/
     inbound.rs    ← the user's own messages, parsed out of tool responses
     identity.rs   ← which handles are the user's, detected not configured
     ingest.rs     ← bulk load from JSON on stdin
+    trust.rs      ← the one trust rule, and the habitual-typo veto
     sync.rs       ← export into cSpell and the macOS dictionary
     eval.rs       ← labeled-corpus measurement (inject typos, score)
     profile.rs    ← --profile timings and counters

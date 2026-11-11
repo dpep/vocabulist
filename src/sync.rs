@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 
 use crate::dict::Dictionary;
 use crate::store::{Store, default_db_path};
-use crate::types::{Entry, Provenance};
+use crate::trust::Trust;
+use crate::types::Entry;
 
 /// Whether the consuming application is actually pointed at our file.
 ///
@@ -369,17 +370,16 @@ fn read_lines(path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Whether a word has earned trust outside this tool: a deliberate source, or
-/// two distinct documents.
+/// Keep the words that have earned trust (`crate::trust`): what `list
+/// --trusted` shows and, with `retain_uncommon`, what `sync` exports.
 ///
-/// The bar for an observed word is **two distinct documents**, not two
-/// occurrences. Repetition inside a single message is worth nothing here: a
-/// typo written three times in one prompt is still one mistake, and teaching
-/// it to every editor on the machine is the most expensive false positive
-/// this tool can produce — it outlives the session and shows up somewhere you
-/// won't connect back to us.
-pub fn is_trusted(entry: &Entry) -> bool {
-    entry.provenance > Provenance::Observed || entry.sources >= 2
+/// A typo taught to every editor on the machine is the most expensive false
+/// positive this tool can produce: it outlives the session and shows up
+/// somewhere you won't connect back to us. Without a dictionary every near
+/// miss faces the veto, which errs toward exporting less.
+pub fn retain_trusted(entries: &mut Vec<Entry>, trust: &Trust, dictionary: Option<&Dictionary>) {
+    let in_dictionary = |w: &str| dictionary.is_some_and(|d| crate::dict::contains(d, w));
+    entries.retain(|entry| trust.trusts(&entry.word, in_dictionary));
 }
 
 /// Drop the words an ordinary dictionary already knows.
@@ -402,8 +402,9 @@ pub fn retain_uncommon(
 /// bloat — the value is entirely in the jargon it *doesn't* have.
 fn exportable_entries(store: &Store) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
     let mut entries = store.list(None, usize::MAX)?;
-    entries.retain(is_trusted);
-    retain_uncommon(&mut entries, crate::dict::load().as_ref())?;
+    let dictionary = crate::dict::load();
+    retain_trusted(&mut entries, &store.trust()?, dictionary.as_ref());
+    retain_uncommon(&mut entries, dictionary.as_ref())?;
     Ok(entries)
 }
 
@@ -545,6 +546,7 @@ fn write_all(path: &Path, words: &[String]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Provenance;
 
     /// The path the ${userHome} fixture resolves to on whatever machine the
     /// suite is running on.

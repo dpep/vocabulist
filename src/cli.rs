@@ -156,7 +156,8 @@ pub enum Command {
         #[arg(long)]
         limit: Option<usize>,
         /// Only words that have earned trust: a deliberate source, or two
-        /// independent documents. Ordinary English words included.
+        /// independent documents and not a habitual typo of a word you write
+        /// far more often. Ordinary English words included.
         ///
         /// With `--uncommon`, exactly what `vocab sync` exports. For tools
         /// that want your vocabulary — read this rather than re-deriving the
@@ -578,11 +579,12 @@ fn dispatch_inner(
                 limit
             };
             let mut entries = store.list(filter.as_deref(), fetch)?;
+            let dictionary = (*trusted || *uncommon).then(crate::dict::load).flatten();
             if *trusted {
-                entries.retain(sync::is_trusted);
+                sync::retain_trusted(&mut entries, &store.trust()?, dictionary.as_ref());
             }
             if *uncommon {
-                sync::retain_uncommon(&mut entries, crate::dict::load().as_ref())?;
+                sync::retain_uncommon(&mut entries, dictionary.as_ref())?;
             }
             entries.truncate(limit);
             if !cli.quiet {
@@ -799,19 +801,7 @@ fn dispatch_inner(
             }
 
             let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
-            let (trusted, observed, people) = store.checkable()?;
-            let (lexicon, mut names) = split_trusted(trusted);
-            names.extend(people.iter().map(|(n, _, _)| n.clone()));
-            let checker = Checker::with_profile(lexicon, Rc::clone(profile))
-                .with_observed(observed.into_iter().collect())
-                .with_naming_sources(names)
-                .with_people(
-                    people
-                        .into_iter()
-                        .map(|(n, d, disp)| (n, (d, disp)))
-                        .collect(),
-                )
-                .with_frequency(store.frequencies()?);
+            let checker = build_checker(&store, profile)?;
             let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
 
             let mut scanner = crate::check::Scanner::new(&checker);
@@ -903,29 +893,46 @@ fn resolve_targets(name: Option<&str>) -> Result<Vec<sync::Target>, Box<dyn std:
     }
 }
 
-/// Split trusted lexicon entries into every word, and the subset that came
-/// from a source containing nothing but names.
-fn split_trusted(
-    trusted: Vec<(String, crate::types::Provenance)>,
-) -> (
-    std::collections::HashSet<String>,
-    std::collections::HashSet<String>,
-) {
+/// The checker over this lexicon: deliberate words as the lexicon proper,
+/// observed ones behind the trust rule, people, and frequencies.
+fn build_checker(
+    store: &Store,
+    profile: &Rc<Profile>,
+) -> Result<Checker, Box<dyn std::error::Error>> {
     use crate::types::Provenance;
-    let mut all = std::collections::HashSet::new();
+    let trust = profile.time("lexicon_load", || store.trust())?;
+    let people = store.people()?;
+    let mut lexicon = std::collections::HashSet::new();
     let mut names = std::collections::HashSet::new();
-    for (word, provenance) in trusted {
+    for (word, provenance) in trust.deliberate() {
         // Repos, taps, binaries and manifests hold names and nothing else.
         // Hand-added words are whatever the user meant, so they stay neutral.
         if matches!(
             provenance,
             Provenance::Owned | Provenance::Tap | Provenance::Installed | Provenance::Dependency
         ) {
-            names.insert(word.clone());
+            names.insert(word.to_string());
         }
-        all.insert(word);
+        lexicon.insert(word.to_string());
     }
-    (all, names)
+    // People rank as names for suggestion purposes: a colleague's name is not
+    // a candidate correction for a lowercase ordinary word.
+    names.extend(people.iter().map(|(n, _, _)| n.clone()));
+    profile.count("people", people.len() as u64);
+    profile.count("lexicon_words", lexicon.len() as u64);
+    profile.count("names", names.len() as u64);
+
+    let frequency = profile.time("frequency_load", || store.frequencies())?;
+    Ok(Checker::with_profile(lexicon, Rc::clone(profile))
+        .with_trust(trust)
+        .with_naming_sources(names)
+        .with_people(
+            people
+                .into_iter()
+                .map(|(n, d, disp)| (n, (d, disp)))
+                .collect(),
+        )
+        .with_frequency(frequency))
 }
 
 /// Check a positional string as one blob, or stream stdin/`--file` line by
@@ -937,28 +944,7 @@ fn check_input(
     out: &mut impl Write,
     profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let (trusted, observed, people) = profile.time("lexicon_load", || store.checkable())?;
-    let (lexicon, mut names) = split_trusted(trusted);
-    // People rank as names for suggestion purposes: a colleague's name is not
-    // a candidate correction for a lowercase ordinary word.
-    profile.count("people", people.len() as u64);
-    names.extend(people.iter().map(|(n, _, _)| n.clone()));
-    let observed: std::collections::HashMap<String, i64> = observed.into_iter().collect();
-    profile.count("lexicon_words", lexicon.len() as u64);
-    profile.count("observed_words", observed.len() as u64);
-    profile.count("names", names.len() as u64);
-
-    let frequency = profile.time("frequency_load", || store.frequencies())?;
-    let checker = Checker::with_profile(lexicon, Rc::clone(profile))
-        .with_observed(observed)
-        .with_naming_sources(names)
-        .with_people(
-            people
-                .into_iter()
-                .map(|(n, d, disp)| (n, (d, disp)))
-                .collect(),
-        )
-        .with_frequency(frequency);
+    let checker = build_checker(store, profile)?;
     let mut evidence = |gram: &str| {
         profile.count("ngram_queries", 1);
         profile.time("ngram_lookup", || store.ngram_count(gram).unwrap_or(0))

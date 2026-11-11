@@ -5,8 +5,8 @@
 ### Added
 
 - **`vocab list --trusted`** lists the words that have earned trust: a
-  deliberate source, or two independent documents. Ordinary English words
-  you really use are included. It lists every match unless you pass `--limit`.
+  deliberate source, or two independent documents and not a habitual typo.
+  Ordinary English words you really use are included. It lists every match unless you pass `--limit`.
 - **`vocab list --uncommon`** drops words an ordinary dictionary already
   knows. It works on a plain `list` (keeping its default of 50) and composes
   with `--trusted`: `vocab list --trusted --uncommon -J` is exactly what
@@ -15,6 +15,13 @@
 
 ### Changed
 
+- **One trust rule, and your habitual typos stay typos.** The checker,
+  `list --trusted` and `sync` now share one rule: a deliberate source, or two
+  distinct documents and not a near miss of a word you write at least five
+  times as often (`teh` for `the`, `shoudl` for `should`). Recurrence no
+  longer teaches the checker your typos, and a word seen on two documents is
+  accepted without waiting for a second day. Nothing to do: it applies to the
+  lexicon you already have.
 - **Reading the lexicon no longer writes it.** `list`, `status`, `phrases`,
   `eval`, `sync`, `analyze --lexicon`, and the read-only forms of `self`,
   `templates` and `prune --dry-run` open the database read-only. They never

@@ -13,6 +13,7 @@ use crate::names::Names;
 use crate::ngram;
 use crate::profile::Profile;
 use crate::text::{self, Token};
+use crate::trust::Trust;
 use crate::types::{Finding, FindingKind, Suggestion};
 
 /// Maximum edit distance we'll suggest across.
@@ -53,28 +54,9 @@ const MIN_NAME_LENGTH: usize = 4;
 /// convict another. A name typed once is as likely the typo as the target.
 const NAME_CORROBORATION: i64 = 2;
 
-/// Distinct documents an observed word needs before it stops being checked.
-///
-/// One sighting is not evidence of a word — it is equally evidence of a typo,
-/// and typos are bursty within a single document. Two independent contexts is
-/// the same bar `sync` already applies before exporting a word to another
-/// speller, and it should not have been lower here: a word learned from one
-/// occurrence makes the checker permanently blind to that spelling.
-const MIN_SOURCES: i64 = 2;
-
-/// What a word needs when it sits one edit from a common English word.
-///
-/// `owrk`, `shoudl`, `kepe`, `insstead` — a chronic misspelling looks exactly
-/// like new vocabulary from the inside, and the thing that distinguishes them
-/// is that the misspelling shadows a word the writer already knows. Demanding
-/// more corroboration there costs a little recall on genuinely new jargon that
-/// happens to resemble a common word, and buys back the typos this tool was
-/// otherwise teaching itself to ignore.
-const SHADOW_SOURCES: i64 = 3;
-
-/// How common the shadowed word must be for the suspicion to apply. Level 35
-/// is roughly the top 50k words — resembling something obscure says nothing.
-const SHADOW_LEVEL: u8 = 35;
+/// Level 35 is roughly the top 50k words: common enough that a split into
+/// two of them is not a coincidence.
+const COMMON_LEVEL: u8 = 35;
 
 const MIN_CORPUS_EVIDENCE: i64 = 2;
 
@@ -107,9 +89,8 @@ pub struct Checker {
     /// Loaded on first miss, not up front. Reading ~236k words costs tens of
     /// milliseconds, and text whose words are all in the lexicon never needs
     /// it — which is the common case once the lexicon is seeded.
-    /// Merely-observed words, and how many distinct documents back each.
-    /// Kept apart from `lexicon` because they have not earned the same trust.
-    observed: std::collections::HashMap<String, i64>,
+    /// Every word's standing, for the trust rule observed words must pass.
+    trust: Trust,
     /// Lexicon words that came from a source containing nothing but names —
     /// repos, taps, installed binaries, dependency manifests.
     from_naming_source: HashSet<String>,
@@ -133,7 +114,7 @@ impl Checker {
         Self {
             lexicon,
             frequency: std::collections::HashMap::new(),
-            observed: std::collections::HashMap::new(),
+            trust: Trust::default(),
             from_naming_source: HashSet::new(),
             people: std::collections::HashMap::new(),
             dictionary: cell,
@@ -147,7 +128,7 @@ impl Checker {
         Self {
             lexicon,
             frequency: std::collections::HashMap::new(),
-            observed: std::collections::HashMap::new(),
+            trust: Trust::default(),
             from_naming_source: HashSet::new(),
             people: std::collections::HashMap::new(),
             dictionary: OnceCell::new(),
@@ -180,9 +161,9 @@ impl Checker {
                 .is_some_and(|d| crate::dict::contains(d, word))
     }
 
-    /// Attach merely-observed words with their corroboration counts.
-    pub fn with_observed(mut self, observed: std::collections::HashMap<String, i64>) -> Self {
-        self.observed = observed;
+    /// Attach the lexicon's standings, so observed words face the trust rule.
+    pub fn with_trust(mut self, trust: Trust) -> Self {
+        self.trust = trust;
         self
     }
 
@@ -238,66 +219,6 @@ impl Checker {
             })
             .get(word)
             .map(String::as_str)
-    }
-
-    /// Does this sit one edit from a word common enough to have been meant?
-    ///
-    /// Generates the edit-distance-1 neighbourhood and looks each candidate up,
-    /// rather than scanning the dictionary: a few hundred hash lookups against
-    /// a hundred thousand comparisons.
-    fn shadows_a_common_word(&self, word: &str) -> bool {
-        let Some(dict) = self.dictionary() else {
-            return false;
-        };
-        let common = |candidate: &str| {
-            crate::dict::level(dict, candidate).is_some_and(|level| level <= SHADOW_LEVEL)
-        };
-        let chars: Vec<char> = word.chars().collect();
-        if chars.len() < 4 {
-            // Short words are one edit from half the language; the test says
-            // nothing about them.
-            return false;
-        }
-
-        for i in 0..chars.len() {
-            // Deletion.
-            let mut candidate: Vec<char> = chars.clone();
-            candidate.remove(i);
-            if common(&candidate.iter().collect::<String>()) {
-                return true;
-            }
-            // Transposition of this pair.
-            if i + 1 < chars.len() {
-                let mut candidate = chars.clone();
-                candidate.swap(i, i + 1);
-                if common(&candidate.iter().collect::<String>()) {
-                    return true;
-                }
-            }
-            // Substitution.
-            for letter in b'a'..=b'z' {
-                let letter = letter as char;
-                if letter == chars[i] {
-                    continue;
-                }
-                let mut candidate = chars.clone();
-                candidate[i] = letter;
-                if common(&candidate.iter().collect::<String>()) {
-                    return true;
-                }
-            }
-        }
-        // Insertion, at every position including the end.
-        for i in 0..=chars.len() {
-            for letter in b'a'..=b'z' {
-                let mut candidate = chars.clone();
-                candidate.insert(i, letter as char);
-                if common(&candidate.iter().collect::<String>()) {
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     /// The compound this token and its neighbour would be if the space
@@ -365,7 +286,7 @@ impl Checker {
             // offered neither — while `chail` became `ch ail`.
             self.dictionary()
                 .and_then(|d| crate::dict::level(d, part))
-                .is_some_and(|level| level <= SHADOW_LEVEL)
+                .is_some_and(|level| level <= COMMON_LEVEL)
         };
         let mut found = None;
         for at in 1..chars.len() {
@@ -487,25 +408,20 @@ impl Checker {
         if self.lexicon.contains(word) {
             return true;
         }
-        if let Some(&sources) = self.observed.get(word) {
-            let needed = if self.shadows_a_common_word(word) {
-                SHADOW_SOURCES
-            } else {
-                MIN_SOURCES
-            };
-            if sources >= needed {
-                return true;
-            }
-            // Not enough evidence yet — fall through, because the dictionary
-            // may still vouch for it.
+        // Not trusted may still be vouched for below: the dictionary knows
+        // `form` however often it is a slip for `from`.
+        if self.trust.trusts(word, |w| self.in_dictionary(w)) {
+            return true;
         }
         if self.frequency_of(word) >= MIN_CORPUS_EVIDENCE {
             return true;
         }
-        match self.dictionary() {
-            Some(d) => crate::dict::contains(d, word),
-            None => false,
-        }
+        self.in_dictionary(word)
+    }
+
+    fn in_dictionary(&self, word: &str) -> bool {
+        self.dictionary()
+            .is_some_and(|d| crate::dict::contains(d, word))
     }
 
     /// Check one line as a document unto itself. Test convenience — real
@@ -1101,6 +1017,7 @@ impl Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Provenance;
 
     fn checker(lexicon: &[&str], dictionary: &[&'static str]) -> Checker {
         Checker::new(
@@ -1256,12 +1173,32 @@ mod tests {
         );
     }
 
+    /// Words with their provenance and the documents behind each; the count
+    /// is taken to be one per document.
+    fn standings(words: &[(&str, Provenance, i64)]) -> Trust {
+        words
+            .iter()
+            .map(|&(w, provenance, docs)| {
+                let standing = crate::trust::Standing {
+                    provenance,
+                    count: docs,
+                    docs,
+                };
+                (w.to_string(), standing)
+            })
+            .collect()
+    }
+
     fn observed(pairs: &[(&str, i64)], dictionary: &[&'static str]) -> Checker {
+        let words: Vec<_> = pairs
+            .iter()
+            .map(|&(w, n)| (w, Provenance::Observed, n))
+            .collect();
         Checker::new(
             HashSet::new(),
             Some(crate::dict::from_words(dictionary.iter().copied())),
         )
-        .with_observed(pairs.iter().map(|(w, n)| (w.to_string(), *n)).collect())
+        .with_trust(standings(&words))
     }
 
     fn with_people(pairs: &[(&str, i64)]) -> Checker {
@@ -1437,28 +1374,26 @@ mod tests {
     }
 
     #[test]
-    fn a_word_shadowing_a_common_one_is_held_to_a_higher_bar() {
-        // `shoudl` is a chronic misspelling, and from the inside it looks
-        // exactly like new vocabulary. That it sits one edit from a word the
-        // writer already knows is the thing that tells them apart.
-        //
-        // The shadowed word has to be *common* for that to mean anything, so
-        // this fixture states a level rather than taking the default —
-        // resembling something obscure is not evidence of a slip.
-        let common: crate::dict::Dictionary = [("should", 10u8), ("shout", 10), ("the", 10)]
-            .into_iter()
-            .collect();
-        let with = |sources| {
-            Checker::new(HashSet::new(), Some(common.clone()))
-                .with_observed([("shoudl".to_string(), sources)].into_iter().collect())
-        };
-        assert!(!with(2).knows("shoudl"));
-        assert!(with(3).knows("shoudl"));
-
-        // Jargon that shadows nothing clears the ordinary bar at two.
-        let jargon = Checker::new(HashSet::new(), Some(common))
-            .with_observed([("zblorg".to_string(), 2)].into_iter().collect());
-        assert!(jargon.knows("zblorg"));
+    fn a_habitual_typo_is_flagged_however_often_it_recurs() {
+        // Recurrence cannot tell `teh` from jargon; the word the user writes
+        // far more often, one slip away, can.
+        let trust = standings(&[
+            ("the", Provenance::Dependency, 600),
+            ("should", Provenance::Dependency, 300),
+            ("work", Provenance::Dependency, 300),
+            ("teh", Provenance::Observed, 9),
+            ("shoudl", Provenance::Observed, 9),
+            ("zblorg", Provenance::Observed, 9),
+            ("widgetr", Provenance::Owned, 9),
+        ]);
+        let c = Checker::new(
+            HashSet::from(["widgetr".to_string()]),
+            Some(crate::dict::from_words(["the", "should", "work", "widget"])),
+        )
+        .with_trust(trust);
+        let f = c.check_line_alone("the teh widgetr shoudl zblorg work", 1, &mut no_evidence);
+        let flagged: Vec<&str> = f.iter().map(|f| f.word.as_str()).collect();
+        assert_eq!(flagged, ["teh", "shoudl"]);
     }
 
     #[test]

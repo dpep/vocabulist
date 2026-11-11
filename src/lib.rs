@@ -28,5 +28,6 @@ pub mod store;
 pub mod sync;
 pub mod template;
 pub mod text;
+pub mod trust;
 pub mod types;
 pub mod watermark;

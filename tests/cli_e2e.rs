@@ -134,12 +134,35 @@ fn capture_then_process_teaches_the_lexicon() {
     say("first");
     assert_eq!(vocab(&db, &["zblorg shipped"]).code, 1);
 
-    // Nor is a second sighting the same day. Typos are bursty in time as well
-    // as within a message, so one sitting is one piece of evidence however
-    // many documents it spans. Earning standing takes another day — see
-    // `store::tests` for that half, which needs control of the clock.
+    // A second document is: recurrence establishes a word, and only a near
+    // miss of one the user writes far more often is held back (PLAN §12l).
     say("second");
-    assert_eq!(vocab(&db, &["zblorg shipped"]).code, 1);
+    assert_eq!(vocab(&db, &["zblorg shipped"]).code, 0);
+}
+
+/// Capture `body` as one document of the user's prose, then process it.
+fn learn(db: &PathBuf, body: &str, source: &str) {
+    let captured = vocab(db, &["capture", "-r", "slack", body, "--source", source]);
+    assert_eq!(captured.code, 0);
+    assert_eq!(vocab(db, &["process"]).code, 0);
+}
+
+#[test]
+fn a_habitual_typo_is_never_learned() {
+    let db = scratch_db("habitual");
+    let body = "the zblorg and the widget, the rest of the day the plan was the \
+                same as the last, with teh usual result";
+    for source in ["first", "second", "third"] {
+        learn(&db, body, source);
+    }
+    // Both recur in three documents; only one sits a slip from `the`.
+    assert_eq!(vocab(&db, &["list", "--trusted", "zblorg"]).code, 0);
+    assert_eq!(vocab(&db, &["list", "--trusted", "teh"]).code, 1);
+    let out = vocab(&db, &["-j", "i think teh zblorg works"]);
+    assert_eq!(out.code, 1);
+    let findings: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(findings[0]["word"], "teh");
+    assert_eq!(findings.as_array().unwrap().len(), 1);
 }
 
 #[test]

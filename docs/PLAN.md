@@ -444,10 +444,11 @@ onboarding path a new user can't be expected to know about.
 
 A reader that wants the user's vocabulary reads it from `vocab list` rather
 than copying the rule, which would drift the first time the bar moved. Two
-composable steps, each defined once in `sync`:
+composable steps, each defined once:
 
-- `--trusted` (`sync::is_trusted`) keeps words that earned trust (bar under review, §12l): a
-  deliberate source, or two distinct documents. Ordinary English stays,
+- `--trusted` (`trust::Trust::trusts`, the checker's own rule) keeps words
+  that earned trust (§12l): a deliberate source, or two distinct documents
+  and not a habitual typo. Ordinary English stays,
   because a word the user really writes helps a consumer like transcription
   even when every dictionary has it. It names a set, so it lists all of it
   unless `--limit` is given.
@@ -488,7 +489,7 @@ counting, because the substitute may never co-occur with the original. That's
 phase 3, and `ae`'s `embed.rs` (ONNX with a deterministic hash fallback) is the
 model to copy. Nothing before then needs a model download.
 
-## 12f. Learning a typo, and going blind to it **[fixed]**
+## 12f. Learning a typo, and going blind to it **[fixed; tier 2 superseded by §12l]**
 
 The lexicon was consulted as a flat set: a word in it was known, full stop. So
 one occurrence in one document taught a word permanently — and an audit of a
@@ -506,27 +507,18 @@ The corroboration machinery already existed and was already applied to
 before writing a word into another speller. Checking never asked. It does now,
 at the same bar.
 
-**And a second tier for words that shadow a common one.** A chronic
-misspelling is indistinguishable from new vocabulary from the inside; what
-separates them is that the misspelling sits one edit from a word the writer
-already knows. `owrk`/`work`, `kepe`/`keep`, `shoudl`/`should`. Those need
-three independent contexts rather than two.
-
-Implemented by generating the edit-distance-1 neighbourhood and looking each
-candidate up — a few hundred hash lookups — rather than scanning a hundred
-thousand dictionary entries. Only words at level 35 or better count as shadowed:
-resembling something obscure says nothing.
-
-The cost is recall on genuinely new jargon that happens to resemble a common
-word, and it is real. Measured against held-out prose on a warm lexicon it was
-paid back several times over, because the typos already learned had been
-suppressing detections:
+**A second tier for words that shadow a common one — retired (§12l).** A
+word one edit from a common *dictionary* word needed three contexts rather
+than two. It skipped words under four letters, so `teh` and `hte` were learned
+anyway, and it only ever delayed a typo that kept recurring. §12l replaces it
+with a test against the user's own lexicon that holds however often the typo
+recurs. Its measurement, for the record:
 
 | | before | after |
 |---|---|---|
-| recall | 0.665 | **0.720** |
-| precision | 0.939 | **0.951** |
-| FP per 1k | 1.19 | **1.02** |
+| recall | 0.665 | 0.720 |
+| precision | 0.939 | 0.951 |
+| FP per 1k | 1.19 | 1.02 |
 
 ## 12g. The derived cue table **[measured]**
 
@@ -613,7 +605,7 @@ The general lesson is worth keeping: the weakest cues are function words, and
 function words carry their meaning only in adjacency. A rule that widens the
 window uniformly widens it most for the cues that can least afford it.
 
-## 12i. Corroboration counts days, not documents **[measured]**
+## 12i. Corroboration counts days, not documents **[reversed by §12l]**
 
 A word earned its standing from the number of distinct documents it appeared
 in — the rule that keeps a typo hammered into one message from counting three
@@ -636,6 +628,11 @@ learned under the old rule.
 It also surfaced one: `-----------------` was a lexicon entry. `is_lexical`
 allowed hyphens, as it must for `re-word`, but never required a letter, so a
 separator line in a captured message became a word.
+
+**Reversed (§12l).** On a labelled sample days did worse than documents:
+jargon bursts within one session just as typos do, and `first_seen` is
+processing time, so a backfill collapses months into one day. Names still
+count days (§12j).
 
 **Decay is deliberately not part of this.** Forgetting a name or a word someone
 still uses is the most embarrassing false positive available, and recency
@@ -729,30 +726,75 @@ What stays invisible is a split compound where both halves are ordinary words
 and the join is nonetheless intended. Those are precisely the ambiguous ones,
 and silence is the right answer.
 
-## 12l. The trusted bar lags the checker's **[open]**
+## 12l. One trust rule, and the habitual typo **[measured]**
 
-`sync::is_trusted` (export, `list --trusted`) still asks for a deliberate
-source or **two distinct documents**. The checker's bar is stricter: it counts
-distinct days (§12i), and a word one edit from a common word needs three
-(§12f). So the set handed to other tools, soundly's transcript correction
-among them, admits words the checker itself wouldn't trust. Two documents
-from one sitting is exactly how a typo gets in.
+`sync::is_trusted` (export, `list --trusted`) asked for a deliberate source or
+two distinct documents; the checker asked for two distinct days (§12i), and
+three for a word one edit from a common dictionary word (§12f). Two rules, and
+neither could keep out a typo the user makes every week.
 
-Requirements for the replacement, from the user:
+There is one rule now, `trust::Trust::trusts`, and the checker, `list
+--trusted` and `sync` all call it:
 
-- **Repeated use establishes a word**, especially an uncommon one: recurrence
-  over time, not a pair of documents.
-- **A habitual typo is never learned, however often it recurs.** `teh` typed
-  for `the` every week still sits one transposition from a word the user
-  writes thousands of times. Recurrence alone eventually trusts it, and the
-  three-context shadow tier of §12f only delays it. The likely signal is
-  relative frequency against the near neighbour *in this lexicon*: real
-  jargon near a common word (`trekr`/`trek`) has a neighbour the user rarely
-  writes.
+> a deliberate source, **or** observed in ≥2 distinct documents **and** not a
+> habitual typo.
 
-A calibration study is running on a copy of a real store (labelled sample,
-precision/recall per candidate rule). The rule lands with its numbers here,
-and `is_trusted` and the checker's bar should then be one rule, not two.
+**A habitual typo** is a non-dictionary word that is an adjacent
+transposition of a word the user writes ≥5× as often (length ≥3), or a
+one-letter change strictly inside it — not the first or last letter — (length
+≥5). `teh`/the ×658, `shoudl`/should ×131. The neighbour is any lexicon word,
+whatever its provenance, and its count is the user's own.
+
+- **Never for a deliberate source.** `trekr` is `owned`; that the user also
+  writes `trek` says nothing.
+- **Never for a dictionary word**, or `form` would be a typo of `from`. The
+  checker would accept it from the dictionary anyway; this keeps `--trusted`
+  consistent with it.
+- **Edges are where vocabulary grows.** Real near misses mostly change the
+  first or last letter: `jsonl`, `readmes`. Slips mostly don't.
+- **Hyphenation is spelling variance**, so a hyphenated word is never vetoed.
+
+### Why not more recurrence
+
+A calibration study on a copy of a real store, 590 labelled observed words
+with ≥2 documents (529 real, 30 typos, 31 machine junk):
+
+- `teh` had 9 documents across 8 days; `taht` and `shoudl` 4 each. Raising
+  the bar from 2 documents to 4 kept 34% of real words with precision flat.
+- Days did worse than documents (§12i reversed): jargon bursts within one
+  session, and `first_seen` is processing time, so a backfill is one day.
+- What separates them is the neighbour the user writes far more often, and
+  where the difference sits.
+
+| rule | real kept | typos admitted | precision |
+|---|---|---|---|
+| ≥2 documents (export before) | 529 | 30 | 0.946 |
+| ≥2 days (checker before) | 316 | 28 | 0.919 |
+| **≥2 documents, not a habitual typo** | **526** | **16** | **0.970** |
+
+Measured on the implementation, not just the study's script: `vocab list
+--trusted` on the store copy reproduces the bottom row exactly. The three
+real words lost are `behaviour`, `repros` and `resolvers`. Across the whole
+store, the study counted 136 single-document typos the veto blocks before
+they can recur.
+
+The checker moves from days to documents with it. Run over the labelled words
+themselves, it flagged 13 of 279 real words before and none after, and caught
+15 of the 30 typos against 16 before: it now catches `teh`, `hte`, `taht`,
+`shoudl`, `mabye`, `experiement` and `statusbuar`, and no longer catches eight
+that recur on a single day with no dominant neighbour (`guage`, `relavant`,
+`indicies`, …). On held-out upstream prose (`vocab eval`, five seeds, 8k
+words) it measures identically, because injected typos never collide with a
+learned word:
+
+| | before | after |
+|---|---|---|
+| recall | 0.703 | 0.703 |
+| precision | 0.923 | 0.923 |
+| FP per 1k | 0.85 | 0.85 |
+
+On the store copy, `echo 'i think teh trekr repo shoudl work' | vocab` said
+"No issues found". It now flags `teh` and `shoudl` and accepts `trekr`.
 
 **`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
 probability: a provenance constant plus a corroboration curve, never checked
@@ -761,10 +803,9 @@ real" with nothing behind it. The same labelled sample is what would calibrate
 it; until then the named sets (`--trusted`, `--uncommon`) are the honest
 surface.
 
-**Smaller follow-ups:** a `--min-docs N` filter for exploring (a real count);
-and the checker's internal "trusted" (`Store::checkable`, `cli::split_trusted`:
-deliberate provenance only) now collides with the public `--trusted`, so rename
-the internal one (e.g. `deliberate`).
+**Smaller follow-up:** a `--min-docs N` filter for exploring (a real count).
+The checker's internal "trusted" set, which collided with the public
+`--trusted`, is gone: it reads `Trust::deliberate`.
 
 ## 12a. Performance, and the size of the backstop **[open]**
 
