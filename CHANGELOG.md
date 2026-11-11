@@ -15,6 +15,10 @@
 - **`--in-place` replaces the file atomically**, through a symlink to its
   target and keeping its permissions, refuses a read-only file, and reports
   fixes only once they are written.
+- **A writing command refuses a lexicon from a newer vocab** instead of
+  stamping it back to its own schema version, which a newer binary would
+  then misread. A hook skips the event. Opening a lexicon already at the
+  current schema no longer writes to it.
 
 ## 0.6.0 — 2026-11-11
 

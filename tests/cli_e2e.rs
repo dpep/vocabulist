@@ -1175,3 +1175,28 @@ fn a_hook_does_not_wait_on_a_held_writer_lock() {
         "the prompt waited {waited:?}"
     );
 }
+
+#[test]
+fn a_newer_schema_is_never_stamped_down() {
+    let db = scratch_db("newer_schema");
+    vocab(&db, &["add", "zblorg"]);
+    let newer = vocabulist::store::SCHEMA_VERSION + 1;
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .pragma_update(None, "user_version", newer)
+        .unwrap();
+
+    let hook = run(&db, &["hook", "user-prompt-submit"], Some(PROMPT));
+    assert_eq!(hook.code, 0, "a hook skips it: {}", hook.stderr);
+    assert_eq!(
+        vocab(&db, &["add", "widget"]).code,
+        2,
+        "a writer refuses it"
+    );
+
+    let version: i64 = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, newer);
+}

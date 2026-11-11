@@ -35,11 +35,15 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// without distorting the range real prose lives in.
 pub const MAX_SENTENCE_BUCKET: i64 = 60;
 
-const SCHEMA: &str = "
+/// Per-connection settings, run on every writing open. WAL persists in the
+/// file, so re-asserting it on a lexicon already in WAL writes nothing.
+const PRAGMAS: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
+";
 
+const SCHEMA: &str = "
 -- The lexicon proper. One row per normalized word. `provenance` holds the
 -- strongest evidence seen so far and only ever ratchets upward, so a word
 -- first noticed in prose is upgraded (never downgraded) when it later turns
@@ -309,23 +313,48 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         Self::open_waiting(path, BUSY_TIMEOUT)
     }
 
     /// [`Store::open`], giving up on a held write lock after `busy` rather
     /// than the default — for callers that cannot afford to wait.
-    pub fn open_waiting(path: impl AsRef<Path>, busy: Duration) -> Result<Self> {
+    ///
+    /// Creates and migrates as needed, but a lexicon already at this schema
+    /// is left unwritten, and a newer one is refused: stamping it with this
+    /// version would hand it back to a newer vocab as an older schema.
+    pub fn open_waiting(
+        path: impl AsRef<Path>,
+        busy: Duration,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let path = path.as_ref().to_path_buf();
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(&path)?;
         conn.busy_timeout(busy)?;
-        conn.execute_batch(SCHEMA)?;
-        migrate(&conn)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        Ok(Self { conn, path })
+        conn.execute_batch(PRAGMAS)?;
+        let store = Self { conn, path };
+        let found = store.schema_version()?;
+        if found > SCHEMA_VERSION {
+            return Err(store.newer_schema(found).into());
+        }
+        if found < SCHEMA_VERSION {
+            store.conn.execute_batch(SCHEMA)?;
+            migrate(&store.conn)?;
+            store
+                .conn
+                .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        Ok(store)
+    }
+
+    fn newer_schema(&self, found: i64) -> String {
+        format!(
+            "lexicon at {} is schema v{found}, newer than this vocab understands \
+             (v{SCHEMA_VERSION}) — upgrade vocab",
+            self.path.display()
+        )
     }
 
     /// Open an existing lexicon for reading only: never creates, migrates,
@@ -351,12 +380,7 @@ impl Store {
         let store = Self { conn, path };
         let found = store.schema_version()?;
         if found > SCHEMA_VERSION {
-            return Err(format!(
-                "lexicon at {} is schema v{found}, newer than this vocab understands \
-                 (v{SCHEMA_VERSION}) — upgrade vocab",
-                store.path.display()
-            )
-            .into());
+            return Err(store.newer_schema(found).into());
         }
         if found < SCHEMA_VERSION {
             return Err(format!(
@@ -1335,6 +1359,25 @@ mod tests {
 
         let err = Store::open_read_only(&path).err().expect("refused");
         assert!(err.to_string().contains("newer"));
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, newer);
+    }
+
+    #[test]
+    fn a_writing_open_refuses_a_newer_schema_without_downgrading_it() {
+        let path = scratch("rw-newer");
+        Store::open(&path).unwrap();
+        let newer = SCHEMA_VERSION + 1;
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", newer)
+            .unwrap();
+
+        let err = Store::open(&path).err().expect("refused");
+        assert!(err.to_string().contains("newer"), "{err}");
         let version: i64 = Connection::open(&path)
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
