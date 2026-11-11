@@ -61,6 +61,18 @@ decisions — reach for it before inventing a method that has a name.
   weeks before anyone looked. Assume the next capture path has the same hole.
 - **stdout is for data, stderr is for logs.** All logging goes through
   `env_logger` to stderr so a consumer piping `vocab` gets clean output.
+- **Reading never writes.** Every command declares what it needs from the
+  lexicon (`Command::access()` in `src/cli.rs`: none, read, or write), and a
+  read opens it `SQLITE_OPEN_READ_ONLY`: no create, no migrate, no version
+  stamp, and a schema it doesn't expect is refused (exit 2), never converted.
+  Other tools read this lexicon (soundly's transcript correction), and a
+  reader that migrates or re-stamps it under a different binary version
+  corrupts it. A new command picks its access in that exhaustive match; pick
+  write only if it really writes.
+- **Consumers read the rule, never copy it.** A set another tool wants (the
+  trusted words, the export set) is defined once in `sync` and exposed through
+  `vocab list` flags. A consumer that re-derives the rule drifts the first time
+  the bar moves.
 - **Every command is agent/script-friendly.** *All* output honors the format —
   analysis and command status alike. Resolve it once via `Cli::format()`;
   render through `output::`. `-j/--json` is a pretty array or object,

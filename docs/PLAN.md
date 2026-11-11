@@ -446,7 +446,7 @@ A reader that wants the user's vocabulary reads it from `vocab list` rather
 than copying the rule, which would drift the first time the bar moved. Two
 composable steps, each defined once in `sync`:
 
-- `--trusted` (`sync::is_trusted`) keeps words that earned trust: a
+- `--trusted` (`sync::is_trusted`) keeps words that earned trust (bar under review, §12l): a
   deliberate source, or two distinct documents. Ordinary English stays,
   because a word the user really writes helps a consumer like transcription
   even when every dictionary has it. It names a set, so it lists all of it
@@ -728,6 +728,43 @@ have been, and it costs nothing.
 What stays invisible is a split compound where both halves are ordinary words
 and the join is nonetheless intended. Those are precisely the ambiguous ones,
 and silence is the right answer.
+
+## 12l. The trusted bar lags the checker's **[open]**
+
+`sync::is_trusted` (export, `list --trusted`) still asks for a deliberate
+source or **two distinct documents**. The checker's bar is stricter: it counts
+distinct days (§12i), and a word one edit from a common word needs three
+(§12f). So the set handed to other tools, soundly's transcript correction
+among them, admits words the checker itself wouldn't trust. Two documents
+from one sitting is exactly how a typo gets in.
+
+Requirements for the replacement, from the user:
+
+- **Repeated use establishes a word**, especially an uncommon one: recurrence
+  over time, not a pair of documents.
+- **A habitual typo is never learned, however often it recurs.** `teh` typed
+  for `the` every week still sits one transposition from a word the user
+  writes thousands of times. Recurrence alone eventually trusts it, and the
+  three-context shadow tier of §12f only delays it. The likely signal is
+  relative frequency against the near neighbour *in this lexicon*: real
+  jargon near a common word (`trekr`/`trek`) has a neighbour the user rarely
+  writes.
+
+A calibration study is running on a copy of a real store (labelled sample,
+precision/recall per candidate rule). The rule lands with its numbers here,
+and `is_trusted` and the checker's bar should then be one rule, not two.
+
+**`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
+probability: a provenance constant plus a corroboration curve, never checked
+against outcomes. A `--confidence 80` filter would claim "80% of these are
+real" with nothing behind it. The same labelled sample is what would calibrate
+it; until then the named sets (`--trusted`, `--uncommon`) are the honest
+surface.
+
+**Smaller follow-ups:** a `--min-docs N` filter for exploring (a real count);
+and the checker's internal "trusted" (`Store::checkable`, `cli::split_trusted`:
+deliberate provenance only) now collides with the public `--trusted`, so rename
+the internal one (e.g. `deliberate`).
 
 ## 12a. Performance, and the size of the backstop **[open]**
 
