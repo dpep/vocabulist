@@ -222,7 +222,7 @@ pub struct Fix {
 }
 
 /// Why a word was rewritten. Its own type, not [`FindingKind`]: a real-word
-/// finding is never written back.
+/// finding is never written back, and a shorthand is never a finding.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum FixKind {
@@ -230,6 +230,41 @@ pub enum FixKind {
     Unknown,
     /// An apostrophe restored.
     Contraction,
+    /// A shorthand written out, by `--expand`.
+    Shorthand,
+}
+
+/// A shorthand `--expand` saw and would not write out, because what it means
+/// here would be a guess.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LeftAlone {
+    pub line: usize,
+    pub col: usize,
+    /// As typed.
+    pub word: String,
+    pub kind: FixKind,
+    /// What it may mean. Empty when nothing fits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub maybe: Vec<String>,
+}
+
+/// One entry in `--fix`/`--expand`'s report: a change, or a shorthand left
+/// alone. Untagged, so a change is exactly a [`Fix`]; one left alone has
+/// `word` and no `to`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Rewrite {
+    Fix(Fix),
+    LeftAlone(LeftAlone),
+}
+
+impl Rewrite {
+    pub fn col(&self) -> usize {
+        match self {
+            Rewrite::Fix(f) => f.col,
+            Rewrite::LeftAlone(l) => l.col,
+        }
+    }
 }
 
 /// What the hand did to the intended word to produce a typo.

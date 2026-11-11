@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::cli::Format;
 use crate::types::{
-    Entry, Finding, Fix, SeedReport, ShorthandEntry, StatusPayload, StoreStatus, TypoPair,
+    Entry, Finding, Rewrite, SeedReport, ShorthandEntry, StatusPayload, StoreStatus, TypoPair,
 };
 
 /// The single structured-output path for findings. `-j` is a pretty array,
@@ -28,25 +28,46 @@ pub fn stream_finding(out: &mut impl Write, finding: &Finding) -> std::io::Resul
     out.flush()
 }
 
-/// One applied fix. Human and `-J` report it as it happens; `-j` collects
-/// them for `render_fixes`.
-pub fn stream_fix(out: &mut impl Write, fix: &Fix, format: Format) -> std::io::Result<()> {
-    match format {
-        Format::Human => writeln!(
+/// One applied fix, or a shorthand left alone. Human and `-J` report it as
+/// it happens; `-j` collects them for `render_rewrites`.
+pub fn stream_rewrite(
+    out: &mut impl Write,
+    rewrite: &Rewrite,
+    format: Format,
+) -> std::io::Result<()> {
+    match (format, rewrite) {
+        (Format::Human, Rewrite::Fix(fix)) => writeln!(
             out,
             "{}:{:<4} {} -> {}",
             fix.line, fix.col, fix.from, fix.to
         )?,
-        Format::Ndjson => writeln!(out, "{}", serde_json::to_string(fix).unwrap())?,
-        Format::Json => return Ok(()),
+        (Format::Human, Rewrite::LeftAlone(left)) => {
+            let maybe = left.maybe.join("? ");
+            let maybe = if maybe.is_empty() {
+                maybe
+            } else {
+                format!(" ({maybe}?)")
+            };
+            writeln!(
+                out,
+                "{}:{:<4} {} left alone{maybe}",
+                left.line, left.col, left.word
+            )?
+        }
+        (Format::Ndjson, _) => writeln!(out, "{}", serde_json::to_string(rewrite).unwrap())?,
+        (Format::Json, _) => return Ok(()),
     }
     out.flush()
 }
 
-/// The fixes as one `-j` document; the other formats already streamed them.
-pub fn render_fixes(out: &mut impl Write, fixes: &[Fix], format: Format) -> std::io::Result<()> {
+/// The report as one `-j` document; the other formats already streamed it.
+pub fn render_rewrites(
+    out: &mut impl Write,
+    rewrites: &[Rewrite],
+    format: Format,
+) -> std::io::Result<()> {
     if format == Format::Json {
-        writeln!(out, "{}", serde_json::to_string_pretty(fixes).unwrap())?;
+        writeln!(out, "{}", serde_json::to_string_pretty(rewrites).unwrap())?;
     }
     Ok(())
 }

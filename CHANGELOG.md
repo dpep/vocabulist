@@ -37,6 +37,12 @@
   which are only suggestions. `--rm` forgets one. The lexicon moves to schema
   8, so as with schema 7, read-only commands wait for any writing command to
   migrate it.
+- **`vocab --expand`** writes your confirmed shorthands out in full
+  (`repro'd` → `reproduced`), with `--fix`'s handling of code, case, files and
+  streaming; `--fix --expand` does both. A form whose meaning would be a
+  guess is left alone and reported, and does not by itself exit 1. In the
+  report a `Fix` now has `kind: shorthand` for an expansion, and an entry
+  left alone has `word` and `maybe` instead of `from` and `to`.
 - **`vocab eval`** also scores what `--fix` would write: injected typos fixed
   to the original, rewritten to another word, and rewrites of words nobody
   corrupted, each wrong one listed.

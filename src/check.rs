@@ -12,9 +12,12 @@ use std::rc::Rc;
 use crate::names::Names;
 use crate::ngram;
 use crate::profile::Profile;
+use crate::shorthand::Reading;
 use crate::text::{self, Token};
 use crate::trust::Trust;
-use crate::types::{Edit, Finding, FindingKind, Fix, FixKind, Suggestion, Tier};
+use crate::types::{
+    Edit, Finding, FindingKind, Fix, FixKind, LeftAlone, Rewrite, Suggestion, Tier,
+};
 
 /// Maximum edit distance we'll suggest across.
 const MAX_EDIT_DISTANCE: usize = 2;
@@ -635,18 +638,58 @@ impl Checker {
                     Some(pair) => (pair.tier >= Tier::Inferred).then_some(pair.intended),
                     None => unseen_slip(&word, &finding.suggestions),
                 }?;
-                // `normalize` dropped a possessive, and the fix replaces the
-                // whole token.
-                let possessive =
-                    finding.word.to_lowercase().ends_with("'s") && !word.ends_with("'s");
-                Some(if possessive {
-                    intended + "'s"
-                } else {
-                    intended
-                })
+                Some(keep_possessive(&finding.word, &word, intended))
             }
             FindingKind::RealWord => None,
         }
+    }
+
+    /// The shorthands on one prose line, as `--expand` writes them: a change
+    /// where the reading is settled, a report where it would be a guess.
+    ///
+    /// The walk mirrors `check_line`'s, so code spans, URLs, proper nouns and
+    /// names the document introduced are left alone here as they are there.
+    fn expansions(&self, line: &str, line_no: usize, names: &Names) -> Vec<Rewrite> {
+        let shorthands = self.trust.shorthands();
+        if shorthands.is_empty() {
+            return Vec::new();
+        }
+        let line = text::normalize_typography(line);
+        let masked = text::mask_non_prose(&line);
+        let tokens = text::tokenize(&masked);
+        let mut out = Vec::new();
+        let mut sentence_initial = true;
+        for (i, token) in tokens.iter().enumerate() {
+            let starts_sentence = sentence_initial;
+            sentence_initial = ends_sentence(&masked, token, &tokens.get(i + 1).map(|t| t.col));
+            if !text::is_checkable(&token.text)
+                || text::is_proper_noun(&token.text, starts_sentence)
+            {
+                continue;
+            }
+            let word = text::normalize(&token.text);
+            if names.contains(&word) {
+                continue;
+            }
+            out.push(match shorthands.read(&word, |w| self.in_dictionary(w)) {
+                None => continue,
+                Some(Reading::Means(to)) => Rewrite::Fix(Fix {
+                    line: line_no,
+                    col: token.col,
+                    from: token.text.clone(),
+                    to: keep_possessive(&token.text, &word, to),
+                    kind: FixKind::Shorthand,
+                }),
+                Some(Reading::Maybe(maybe)) => Rewrite::LeftAlone(LeftAlone {
+                    line: line_no,
+                    col: token.col,
+                    word: token.text.clone(),
+                    kind: FixKind::Shorthand,
+                    maybe,
+                }),
+            });
+        }
+        out
     }
 
     /// The finding as the change `--fix` would make, if it would make one.
@@ -919,6 +962,16 @@ fn ends_sentence(line: &str, token: &Token, next_col: &Option<usize>) -> bool {
         .any(|c| matches!(c, '.' | '!' | '?' | ':'))
 }
 
+/// `replacement` for the whole token `typed`, keeping the possessive that
+/// `normalize` dropped to give `word`.
+fn keep_possessive(typed: &str, word: &str, replacement: String) -> String {
+    if typed.to_lowercase().ends_with("'s") && !word.ends_with("'s") {
+        replacement + "'s"
+    } else {
+        replacement
+    }
+}
+
 /// A stateful pass over a whole document.
 ///
 /// Some things that shouldn't be spell-checked can't be recognized one line
@@ -936,6 +989,8 @@ pub struct Scanner<'a> {
     /// Names the document has revealed so far. Lives on the scanner, not the
     /// checker, because it is scoped to one document rather than the machine.
     names: Names,
+    /// Whether the line last fed was prose, and so checked.
+    prose: bool,
 }
 
 impl<'a> Scanner<'a> {
@@ -946,13 +1001,24 @@ impl<'a> Scanner<'a> {
             in_front_matter: false,
             line_no: 0,
             names: Names::new(),
+            prose: false,
         }
+    }
+
+    /// The shorthands `--expand` writes out on the line just fed, judged by
+    /// the same regions and names as its findings.
+    pub fn expansions(&self, line: &str) -> Vec<Rewrite> {
+        if !self.prose || !text::is_prose_line(line) {
+            return Vec::new();
+        }
+        self.checker.expansions(line, self.line_no, &self.names)
     }
 
     /// Feed the next line. Returns findings for it, or nothing if the line
     /// sits in a region where spelling doesn't apply.
     pub fn feed(&mut self, line: &str, evidence: &mut impl FnMut(&str) -> i64) -> Vec<Finding> {
         self.line_no += 1;
+        self.prose = false;
         let trimmed = line.trim();
 
         // Front matter: `---` on the very first line opens it.
@@ -988,6 +1054,7 @@ impl<'a> Scanner<'a> {
             return Vec::new();
         }
 
+        self.prose = true;
         self.checker
             .check_line(line, self.line_no, &mut self.names, evidence)
     }

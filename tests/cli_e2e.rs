@@ -291,7 +291,7 @@ fn fix_edits_a_file_only_when_asked() {
     assert_eq!(
         vocab(&db, &["--in-place", "-f", file]).code,
         2,
-        "needs --fix"
+        "needs --fix or --expand"
     );
 }
 
@@ -350,6 +350,65 @@ fn a_shorthand_is_never_flagged_and_lists_what_it_means() {
 
     assert_eq!(vocab(&db, &["shorthand", "--rm", "zrepro"]).code, 0);
     assert_eq!(vocab(&db, &["shorthand", "--rm", "zrepro"]).code, 1);
+}
+
+#[test]
+fn expand_spells_out_what_is_settled_and_reports_what_is_not() {
+    let db = scratch_db("expand");
+    assert_eq!(
+        vocab(&db, &["shorthand", "zrepro", "reproduce", "zarg=argument"]).code,
+        0
+    );
+    let input = "Zrepro it, zrepro'd and zargs, but the zrepros wait\r\n\
+                 ```\nzrepro in a fence\n```\n\
+                 run `zrepro`, and zrepro is now a name here\n";
+    let out = run(&db, &["--expand", "-J"], Some(input));
+    assert_eq!(out.code, 1, "a change exits 1");
+    assert_eq!(
+        out.stdout,
+        "Reproduce it, reproduced and arguments, but the zrepros wait\r\n\
+         ```\nzrepro in a fence\n```\n\
+         run `zrepro`, and zrepro is now a name here\n",
+        "case kept, code and names untouched, an ambiguous form left alone"
+    );
+    let report: Vec<serde_json::Value> = out
+        .stderr
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(report.len(), 4);
+    assert_eq!(report[0]["from"], "Zrepro");
+    assert_eq!(report[0]["to"], "Reproduce");
+    assert_eq!(report[0]["kind"], "shorthand");
+    assert_eq!(report[3]["word"], "zrepros");
+    assert_eq!(report[3]["maybe"][0], "reproduces");
+    assert!(report[3].get("to").is_none(), "left alone has no `to`");
+
+    // Confirming the form settles it; a guess left alone is not a change.
+    let only_guess = run(&db, &["--expand"], Some("the zrepros wait\n"));
+    assert_eq!(only_guess.code, 0);
+    assert!(only_guess.stderr.contains("left alone"));
+    assert_eq!(vocab(&db, &["shorthand", "zrepros=reproductions"]).code, 0);
+    let out = run(&db, &["--expand"], Some("the zrepros wait\n"));
+    assert_eq!(out.stdout, "the reproductions wait\n");
+}
+
+#[test]
+fn expand_composes_with_fix_and_leaves_clean_prose_alone() {
+    let db = scratch_db("expand-fix");
+    assert_eq!(vocab(&db, &["shorthand", "zrepro", "reproduce"]).code, 0);
+    let out = run(&db, &["--fix", "--expand"], Some("we dont zrepro it\n"));
+    assert_eq!(out.stdout, "we don't reproduce it\n");
+    let out = run(&db, &["--expand"], Some("we dont zrepro it\n"));
+    assert_eq!(
+        out.stdout, "we dont reproduce it\n",
+        "--expand alone fixes nothing"
+    );
+
+    let corpus = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/prose.md");
+    let out = vocab(&db, &["--expand", "-J", "--file", corpus]);
+    assert_eq!((out.code, out.stderr.as_str()), (0, ""));
+    assert_eq!(out.stdout, std::fs::read_to_string(corpus).unwrap());
 }
 
 #[test]
@@ -812,6 +871,41 @@ fn fix_streams_rather_than_buffering() {
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("no output before EOF: --fix is buffering, not streaming");
     assert_eq!(first, "we don't buffer\n");
+
+    drop(stdin);
+    child.wait().unwrap();
+}
+
+#[test]
+fn expand_streams_rather_than_buffering() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let db = scratch_db("expand_stream");
+    assert_eq!(vocab(&db, &["shorthand", "zrepro", "reproduce"]).code, 0);
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .args(["--db", db.to_str().unwrap(), "--expand"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "we zrepro it").unwrap();
+    stdin.flush().unwrap();
+
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = out.read_line(&mut line);
+        let _ = tx.send(line);
+    });
+
+    let first = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("no output before EOF: --expand is buffering, not streaming");
+    assert_eq!(first, "we reproduce it\n");
 
     drop(stdin);
     child.wait().unwrap();

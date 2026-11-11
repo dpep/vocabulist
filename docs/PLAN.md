@@ -1049,6 +1049,59 @@ word. Frequency picks the family more often than not and the form rarely
 `--fix` the inferred bar was no wrong rewrite in 529 real words; one right in
 three is nowhere near it. Candidates carry `maybe` and are never expanded.
 
+### `--expand` **[done]**
+
+`vocab --expand` writes shorthands out in full, so the user can type fast and
+polish before sending. It is `--fix`'s machinery with a second source of
+changes, and `--fix --expand` applies both:
+
+- **What it writes:** a confirmed form, and an inflection whose reading is
+  `means`. A `maybe` is left alone and reported: `{"line","col","word",
+  "kind":"shorthand","maybe":[…]}`, with no `to`. A change is a `Fix` with
+  `kind: shorthand`. `-j` puts both in one array.
+- **The checker's regions and names.** `Scanner::expansions` runs only on a
+  line the scanner fed to the checker (not fenced, front matter, or code),
+  masks code spans and URLs the same way, skips proper nouns mid-sentence,
+  and skips a word the document has named (`run \`repro\``), because then it
+  is a name here.
+- **Case, columns, line endings, stdout, `--in-place`, per-line streaming:**
+  `fix::apply` and the `--fix` loop, unchanged. The timing test covers
+  `--expand` as it does `--fix`.
+- **Exit 1 when anything changed.** A shorthand left alone is not a change and
+  was never wrong, so on its own it exits 0.
+- **A confirmed form is written wherever it appears,** whatever part of
+  speech it plays there. That is the user's word, but it can be the wrong
+  one: `eval = evaluation` turns "eval the enums" into "evaluation the
+  enumerations". Confirm the reading used most, or confirm the forms one by
+  one.
+
+### Measured
+
+On the store copy:
+
+| | changes |
+|---|---|
+| `--expand`, no confirmations: `tests/corpus/prose.md` + held-out corpus (14k words) | 0 |
+| the same, 13 shorthands confirmed (`repro`, `arg`, `param`, `perf`, `impl`, `vec`, `struct`, `repo`, `sig`, `dup`, `dev`, `enum`, `eval`) | 0 |
+| checker findings on both corpora, before and after confirming | identical |
+
+The held-out corpus holds `vec`, `struct` and `repo` 20 times, all inside
+code, URLs or fenced blocks, so nothing there is prose to expand.
+
+Over 11 sentences written in the user's register using those shorthands,
+`--fix --expand` made 25 expansions and left 3 alone:
+
+- **15 confirmed forms:** 13 right, 2 wrong, both a confirmed noun used as
+  something else ("eval the enums" → evaluation, "Repro steps" →
+  Reproduce).
+- **10 inflections by rule** (`repro'd`, `reproed`, `args`, `params`,
+  `repos`, `devs`, `impls`, `enums`, `evals`): all right.
+- **Left alone:** `repros` twice, once meaning reproduces and once
+  reproductions, which is why it is left alone, and `structs`.
+
+`reproed`, flagged before confirming (`reproved 0.99`), is accepted after.
+`KNOWN_COLD_START_MISSES` is unchanged.
+
 ## 12a. Performance, and the size of the backstop **[open]**
 
 Measured with `--profile` on a 2,807-word lexicon:

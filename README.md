@@ -126,6 +126,23 @@ each one means where that is settled:
 as a plural only when the meaning isn't also a verb (`args`, `params`).
 `vocab shorthand repros=reproductions` settles a form yourself.
 
+Type fast, then polish before you send: `--expand` writes them out.
+
+```sh
+$ echo "I repro'd it with the args, but the repros differ" | vocab --expand
+1:3    repro'd -> reproduced
+1:23   args -> arguments
+1:37   repros left alone (reproduces?)
+I reproduced it with the arguments, but the repros differ
+```
+
+It is `--fix` with your shorthands as the corrections: code spans, URLs and
+fenced blocks are left alone, the case is kept, and the report goes to
+stderr (as JSON under `-j`/`-J`). `vocab --fix --expand` does both. A form
+you confirmed is written out wherever it appears, so confirm the meaning you
+use most: with `eval = evaluation`, "eval the enums" becomes "evaluation the
+enumerations".
+
 `vocab shorthand` with no words lists what you've confirmed, then
 candidates: words you write that begin a word you also write, with what each
 may mean. They are suggestions. Guessing the meaning from your counts gets

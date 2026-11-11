@@ -13,7 +13,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use crate::check::Checker;
 use crate::profile::Profile;
 use crate::store::{Store, default_db_path};
-use crate::types::{Finding, Register};
+use crate::types::{Finding, Fix, Register, Rewrite};
 use crate::{ngram, output, seed, sync, text, watermark};
 
 const AFTER_HELP: &str = "\
@@ -45,6 +45,7 @@ Examples:
   vocab typos                      your habitual typos, and what each means
   vocab shorthand repro reproduce  say `repro` is yours, and what it means
   vocab --fix -f notes.md          write it back with confirmed typos fixed
+  vocab --fix --expand -f mail.txt  ...and your shorthands spelled out
   vocab sync                       export into cSpell and the macOS dictionary
   vocab phrases                    the phrases you actually use
   vocab analyze --lexicon          vocabulary and readability of your corpus
@@ -71,6 +72,7 @@ fn shell_from_env() -> Option<clap_complete::Shell> {
 
 #[derive(Parser, Debug)]
 #[command(disable_help_subcommand = true)]
+#[command(group = clap::ArgGroup::new("rewrite").multiple(true))]
 #[command(
     name = "vocab",
     author,
@@ -110,11 +112,24 @@ pub struct Cli {
     /// The text goes to stdout, line by line as it is read; what changed goes
     /// to stderr, in the -j/-J format when one is given. Exits 1 when anything
     /// changed.
-    #[arg(long)]
+    #[arg(long, group = "rewrite")]
     pub fix: bool,
 
-    /// With --fix, rewrite --file in place rather than printing it.
-    #[arg(long, requires_all = ["fix", "file"])]
+    /// Write the text back with your shorthands spelled out: `repro` ->
+    /// `reproduce`.
+    ///
+    /// Only what you confirmed with `vocab shorthand`, and an inflection of
+    /// it that reads one way (`repro'd` -> `reproduced`). A form whose
+    /// meaning would be a guess — `repros`, reproduces or reproductions? — is
+    /// left alone and reported. Otherwise it is `--fix`: the same regions
+    /// skipped, case kept, text on stdout as it is read, the report on
+    /// stderr. `--fix --expand` does both.
+    #[arg(long, group = "rewrite")]
+    pub expand: bool,
+
+    /// With --fix or --expand, rewrite --file in place rather than printing
+    /// it.
+    #[arg(long, requires_all = ["rewrite", "file"])]
     pub in_place: bool,
 
     /// Lexicon database. Defaults to `$XDG_DATA_HOME/vocabulist/lexicon.db`.
@@ -950,7 +965,7 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
-        None if cli.fix => fix_input(cli, &store, format, &mut out, profile),
+        None if cli.fix || cli.expand => fix_input(cli, &store, format, &mut out, profile),
         None => check_input(cli, &store, format, &mut out, profile),
     }
 }
@@ -1268,8 +1283,8 @@ fn input_lines(cli: &Cli) -> io::Result<Option<Lines<'_>>> {
     })
 }
 
-/// `--fix`: the text back on stdout (or into the file), what changed on
-/// stderr.
+/// `--fix` and `--expand`: the text back on stdout (or into the file), what
+/// changed on stderr.
 fn fix_input(
     cli: &Cli,
     store: &Store,
@@ -1287,21 +1302,35 @@ fn fix_input(
 
     let mut log = io::stderr().lock();
     let mut rewritten = String::new();
-    let mut applied = Vec::new();
+    let mut report: Vec<Rewrite> = Vec::new();
+    let mut changed = false;
     for raw in lines {
         let raw = raw?;
         let body = raw.trim_end_matches(['\n', '\r']);
         let ending = &raw[body.len()..];
-        let wanted = scanner
-            .feed(body, &mut evidence)
-            .iter()
-            .filter_map(|finding| checker.fix(finding))
-            .collect();
-        let (fixed, landed) = crate::fix::apply(body, wanted);
-        for fix in &landed {
-            output::stream_fix(&mut log, fix, format)?;
+        let findings = scanner.feed(body, &mut evidence);
+        let mut wanted: Vec<Fix> = Vec::new();
+        if cli.fix {
+            wanted.extend(findings.iter().filter_map(|f| checker.fix(f)));
         }
-        applied.extend(landed);
+        let mut left_alone = Vec::new();
+        if cli.expand {
+            for rewrite in scanner.expansions(body) {
+                match rewrite {
+                    Rewrite::Fix(fix) => wanted.push(fix),
+                    other => left_alone.push(other),
+                }
+            }
+        }
+        let (fixed, landed) = crate::fix::apply(body, wanted);
+        changed |= !landed.is_empty();
+        let mut line_report: Vec<Rewrite> = landed.into_iter().map(Rewrite::Fix).collect();
+        line_report.extend(left_alone);
+        line_report.sort_by_key(Rewrite::col);
+        for rewrite in &line_report {
+            output::stream_rewrite(&mut log, rewrite, format)?;
+        }
+        report.extend(line_report);
         if cli.in_place {
             rewritten.push_str(&fixed);
             rewritten.push_str(ending);
@@ -1312,16 +1341,17 @@ fn fix_input(
         }
     }
     if let (true, Some(path)) = (cli.in_place, &cli.file)
-        && !applied.is_empty()
+        && changed
     {
         std::fs::write(path, rewritten)?;
     }
-    output::render_fixes(&mut log, &applied, format)?;
+    output::render_rewrites(&mut log, &report, format)?;
     // A change is a finding, as in checking: 1 says the text was not clean.
-    Ok(if applied.is_empty() {
-        ExitCode::SUCCESS
-    } else {
+    // A shorthand left alone is not: it was never wrong.
+    Ok(if changed {
         ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     })
 }
 
