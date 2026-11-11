@@ -796,6 +796,10 @@ learned word:
 On the store copy, `echo 'i think teh trekr repo shoudl work' | vocab` said
 "No issues found". It now flags `teh` and `shoudl` and accepts `trekr`.
 
+Counting documents is also cheaper: `--profile` on the store copy puts the
+checker's lexicon load at ~120 ms counting distinct days and ~12 ms counting
+documents, veto included.
+
 ### Typo pairs **[done]**
 
 When the veto fires it has found the word meant, so the pair is worth keeping:
