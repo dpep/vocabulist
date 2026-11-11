@@ -68,15 +68,13 @@ says so with the evidence:
 
 ```sh
 $ vocab typos
-teh                  the                  observed  transposition     9 docs  x660    0.99
-shoudl               should               observed  transposition     5 docs  x130    0.96
+teh                  the                  inferred              transposition     9 docs  x660    0.99
+behaviour            behavior             candidate (variant)   insertion         6 docs  x14     0.74
+repros               repos                candidate (edit)      insertion         6 docs  x10     0.67
 ```
 
-`vocab typos teh the` confirms a pair, so it holds whatever the counts later
-say. If one is wrong — a spelling you really use — `vocab add` it.
-
-A confirmed pair can then be fixed in place, along with missing apostrophes —
-the two corrections that are never guesses:
+`vocab --fix` writes the inferred ones back, along with missing apostrophes
+and any pair you confirmed:
 
 ```sh
 $ vocab --fix -f notes.md > fixed.md
@@ -85,11 +83,20 @@ $ vocab --fix -f notes.md > fixed.md
 1:33   dont -> don't
 ```
 
+A pair is inferred only when the slip is a swap of two letters and nothing
+counts against it. A one-letter difference stays a candidate, which the
+checker suggests but never writes: `repros` looks exactly like a slip of
+`repos` from the counts, and only you know it isn't. Three-letter words need
+the word meant to be a very common one (`teh`, not `cmp` for `mcp`), and a
+British spelling is never a slip.
+
+`vocab typos teh the` confirms a pair, so it holds whatever the counts later
+say. If one is wrong — a spelling you really use — `vocab add` it, and `--fix`
+leaves it alone from then on.
+
 The text goes to stdout as it is read (or back into the file with
 `--in-place`), and what changed goes to stderr. Code spans and URLs are left
-alone. A pair `vocab` only derived from your counts is suggested by the checker
-but never written into your text: `repros` looks exactly like a slip of `repos`
-from the counts, and only you know it isn't.
+alone.
 
 ## Contractions
 

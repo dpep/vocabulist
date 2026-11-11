@@ -244,6 +244,52 @@ impl Edit {
     }
 }
 
+/// How far a typo pair is trusted: what `--fix` does with it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    /// Suggested by the checker, never written back.
+    Candidate,
+    /// Earned from the counts: `--fix` applies it.
+    Inferred,
+    /// Confirmed by hand: always applied.
+    Confirmed,
+}
+
+impl Tier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::Candidate => "candidate",
+            Tier::Inferred => "inferred",
+            Tier::Confirmed => "confirmed",
+        }
+    }
+}
+
+/// Why a typo pair stays a candidate rather than being inferred.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HeldBack {
+    /// The slip is not a transposition. One-letter changes reach too many
+    /// real words: `repros`, `codecs`, `behaviour`.
+    Edit,
+    /// Three letters, and the word meant is not among the commonest English
+    /// words: `cmp` beside `mcp`.
+    Short,
+    /// The typo is the intended word in British spelling: `centre`.
+    Variant,
+}
+
+impl HeldBack {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeldBack::Edit => "edit",
+            HeldBack::Short => "short",
+            HeldBack::Variant => "variant",
+        }
+    }
+}
+
 /// A habitual typo and the word meant, with the evidence behind the pair.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TypoPair {
@@ -263,6 +309,11 @@ pub struct TypoPair {
     pub ratio: f64,
     /// How sure the pair is: 1 when confirmed, else derived from the ratio.
     pub score: f32,
+    /// Whether `--fix` applies it.
+    pub tier: Tier,
+    /// Why a derived pair stays a candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_back: Option<HeldBack>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

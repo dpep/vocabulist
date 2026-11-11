@@ -181,6 +181,7 @@ fn typos_are_learned_confirmed_and_retracted() {
     assert_eq!(pair["intended"], "the");
     assert_eq!(pair["source"], "observed");
     assert_eq!(pair["edit"], "transposition");
+    assert_eq!(pair["tier"], "inferred");
 
     // Confirming holds whatever the counts later say.
     assert_eq!(vocab(&db, &["typos", "zblorg", "widget"]).code, 0);
@@ -189,6 +190,7 @@ fn typos_are_learned_confirmed_and_retracted() {
         serde_json::from_str(out.stdout.lines().next().unwrap()).unwrap();
     assert_eq!(first["typo"], "zblorg");
     assert_eq!(first["source"], "user");
+    assert_eq!(first["tier"], "confirmed");
 
     // Saying a word is real retracts calling it a typo.
     assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
@@ -197,32 +199,65 @@ fn typos_are_learned_confirmed_and_retracted() {
 }
 
 #[test]
-fn fix_writes_back_only_what_is_never_a_guess() {
+fn fix_writes_back_slips_and_leaves_candidates_alone() {
     let db = scratch_db("fix");
-    // `teh` is a derived typo here, `shoudl` a confirmed one.
-    let body = "the zblorg and the widget, the rest of the day the plan was the \
-                same as the last, with teh usual result";
+    // `teh` is an inferred typo here (a transposition), `wiidget` a candidate
+    // (one letter off), `shoudl` a confirmed one.
+    let body = "the widget and the widget, the rest of the day the widget was the \
+                same as the last widget, with teh usual widget and a wiidget";
     learn(&db, body, "first");
     assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
 
-    let input = "Shoudl we ship? dont run `dont` or https://example.com/dont teh\r\nclean\n";
+    let input =
+        "Shoudl we ship? dont run `dont` or https://example.com/dont teh wiidget\r\nclean\n";
     let out = run(&db, &["--fix", "-J"], Some(input));
     assert_eq!(out.code, 1, "a change exits 1, as a finding does");
     assert_eq!(
-        out.stdout, "Should we ship? don't run `dont` or https://example.com/dont teh\r\nclean\n",
-        "case kept, code and URLs untouched, a derived pair left alone, line endings kept"
+        out.stdout,
+        "Should we ship? don't run `dont` or https://example.com/dont the wiidget\r\nclean\n",
+        "case kept, code and URLs untouched, a candidate left alone, line endings kept"
     );
     let fixes: Vec<serde_json::Value> = out
         .stderr
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(fixes.len(), 2);
+    assert_eq!(fixes.len(), 3);
     assert_eq!(fixes[0]["from"], "Shoudl");
     assert_eq!(fixes[0]["to"], "Should");
     assert_eq!(fixes[1]["kind"], "contraction");
 
     assert_eq!(run(&db, &["--fix"], Some("all clean\n")).code, 0);
+}
+
+#[test]
+fn typos_shows_each_tier_and_what_held_a_candidate_back() {
+    let db = scratch_db("typo-tiers");
+    let body = "the widget and the widget, the rest of the day the widget was the \
+                same as the last widget, with teh usual widget and a wiidget";
+    learn(&db, body, "first");
+    let out = vocab(&db, &["typos", "-J"]);
+    let pairs: Vec<serde_json::Value> = out
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let tier = |typo: &str| {
+        let p = pairs.iter().find(|p| p["typo"] == typo).unwrap();
+        (p["tier"].clone(), p["held_back"].clone())
+    };
+    assert_eq!(tier("teh"), ("inferred".into(), serde_json::Value::Null));
+    assert_eq!(tier("wiidget"), ("candidate".into(), "edit".into()));
+}
+
+#[test]
+fn fix_changes_nothing_in_clean_prose() {
+    let db = scratch_db("fix-prose");
+    let corpus = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/prose.md");
+    let out = vocab(&db, &["--fix", "-J", "--file", corpus]);
+    assert_eq!(out.stderr, "", "no fixes reported");
+    assert_eq!(out.code, 0);
+    assert_eq!(out.stdout, std::fs::read_to_string(corpus).unwrap());
 }
 
 #[test]

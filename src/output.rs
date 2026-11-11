@@ -745,16 +745,15 @@ pub fn render_typos(
             }
             for p in pairs {
                 let edit = p.edit.map_or("", |e| e.as_str());
+                // A candidate says what held it back; the others need no reason.
+                let tier = match p.held_back {
+                    Some(why) => format!("{} ({})", p.tier.as_str(), why.as_str()),
+                    None => p.tier.as_str().to_string(),
+                };
                 writeln!(
                     out,
-                    "{:<20} {:<20} {:<9} {:<14} {:>4} docs  x{:<6} {:.2}",
-                    p.typo,
-                    p.intended,
-                    p.source.as_str(),
-                    edit,
-                    p.docs,
-                    p.ratio,
-                    p.score
+                    "{:<20} {:<20} {:<21} {:<14} {:>4} docs  x{:<6} {:.2}",
+                    p.typo, p.intended, tier, edit, p.docs, p.ratio, p.score
                 )?;
             }
             Ok(())

@@ -14,7 +14,7 @@ use crate::ngram;
 use crate::profile::Profile;
 use crate::text::{self, Token};
 use crate::trust::Trust;
-use crate::types::{Finding, FindingKind, Suggestion};
+use crate::types::{Finding, FindingKind, Suggestion, Tier};
 
 /// Maximum edit distance we'll suggest across.
 const MAX_EDIT_DISTANCE: usize = 2;
@@ -617,18 +617,27 @@ impl Checker {
 
     /// The replacement `--fix` may write for this finding, if any.
     ///
-    /// Never a guess: a contraction, whose mapping is exact, or a typo pair
-    /// the user confirmed. A derived pair is not enough — `repros` is a derived
-    /// typo of `repos`, and the ratio does not separate those from `teh`
-    /// (PLAN §12l).
+    /// A contraction, whose mapping is exact, or a typo pair confirmed or
+    /// inferred (`trust::held_back`, PLAN §12l).
     pub fn correction(&self, finding: &Finding) -> Option<String> {
         match finding.kind {
             FindingKind::Contraction => finding.suggestions.first().map(|s| s.word.clone()),
-            FindingKind::Unknown => self
-                .trust
-                .typo_of(&text::normalize(&finding.word), |w| self.in_dictionary(w))
-                .filter(|pair| pair.source == crate::types::Provenance::User)
-                .map(|pair| pair.intended),
+            FindingKind::Unknown => {
+                let word = text::normalize(&finding.word);
+                let intended = match self.trust.typo_of(&word, |w| self.in_dictionary(w)) {
+                    Some(pair) => (pair.tier >= Tier::Inferred).then_some(pair.intended),
+                    None => None,
+                }?;
+                // `normalize` dropped a possessive, and the fix replaces the
+                // whole token.
+                let possessive =
+                    finding.word.to_lowercase().ends_with("'s") && !word.ends_with("'s");
+                Some(if possessive {
+                    intended + "'s"
+                } else {
+                    intended
+                })
+            }
             FindingKind::RealWord => None,
         }
     }
@@ -1455,6 +1464,69 @@ mod tests {
         );
         assert!(confidence >= overwhelming);
         assert_eq!(top(20, true).0, 1.0, "confirmed by hand is certain");
+    }
+
+    /// What `--fix` would write over each finding in `line`.
+    fn fixes(c: &Checker, line: &str) -> Vec<(String, Option<String>)> {
+        c.check_line_alone(line, 1, &mut no_evidence)
+            .iter()
+            .map(|f| (f.word.clone(), c.correction(f)))
+            .collect()
+    }
+
+    fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, Option<String>)> {
+        pairs
+            .iter()
+            .map(|(w, to)| (w.to_string(), (!to.is_empty()).then(|| to.to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn an_abbreviation_shaped_token_is_left_alone() {
+        // Three letters is too little evidence unless the word meant is one
+        // of the commonest; `mcp` is the user's, but nobody's common word.
+        let trust = standings(&[
+            ("mcp", Provenance::Dependency, 400),
+            ("cmp", Provenance::Observed, 1),
+        ]);
+        let c = Checker::new(HashSet::from(["mcp".to_string()]), Some(common(&["the"])))
+            .with_trust(trust);
+        assert_eq!(fixes(&c, "the cmp"), fixed(&[("cmp", "")]));
+    }
+
+    #[test]
+    fn an_owned_word_that_looks_like_a_slip_is_never_rewritten() {
+        let trust = standings(&[
+            ("widget", Provenance::Dependency, 400),
+            ("wigdet", Provenance::Owned, 1),
+        ]);
+        let c = Checker::new(
+            HashSet::from(["wigdet".to_string()]),
+            Some(common(&["widget", "the"])),
+        )
+        .with_trust(trust);
+        assert_eq!(fixes(&c, "the wigdet"), fixed(&[]));
+    }
+
+    #[test]
+    fn an_inferred_pair_is_fixed_and_a_candidate_is_not() {
+        let trust = standings(&[
+            ("would", Provenance::Dependency, 400),
+            ("repos", Provenance::Dependency, 400),
+            ("woudl", Provenance::Observed, 1),
+            ("repros", Provenance::Observed, 1),
+        ]);
+        let c =
+            Checker::new(HashSet::new(), Some(common(&["would", "repos", "it"]))).with_trust(trust);
+        assert_eq!(
+            fixes(&c, "it woudl repros"),
+            fixed(&[("woudl", "would"), ("repros", "")])
+        );
+        assert_eq!(
+            fixes(&c, "it woudl's"),
+            fixed(&[("woudl's", "would's")]),
+            "a possessive survives the fix"
+        );
     }
 
     #[test]

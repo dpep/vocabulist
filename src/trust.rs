@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::types::{Edit, Provenance, TypoPair};
+use crate::types::{Edit, HeldBack, Provenance, Tier, TypoPair};
 
 /// Distinct documents an observed word needs. One sighting is equally
 /// evidence of a typo, and typos are bursty within a document.
@@ -104,7 +104,17 @@ impl Trust {
         let pair = |intended: String, source, edit| {
             // Two significant figures is what a ratio of small counts holds.
             let ratio = significant(ratio(&intended), 2);
+            let held_back = (source != Provenance::User)
+                .then(|| held_back(word, &intended, edit))
+                .flatten();
+            let tier = match (source, held_back) {
+                (Provenance::User, _) => Tier::Confirmed,
+                (_, None) => Tier::Inferred,
+                _ => Tier::Candidate,
+            };
             TypoPair {
+                tier,
+                held_back,
                 score: belief(source, ratio),
                 intended_count: count_of(&intended),
                 typo: word.to_string(),
@@ -138,7 +148,7 @@ impl Trust {
         Some(pair(intended, Provenance::Observed, Some(edit)))
     }
 
-    /// Every typo pair, confirmed first, then by how often the typo recurs.
+    /// Every typo pair, by tier, then by how often the typo recurs.
     pub fn typos(&self, in_dictionary: impl Fn(&str) -> bool) -> Vec<TypoPair> {
         let observed = self
             .words
@@ -154,14 +164,60 @@ impl Trust {
             .filter_map(|w| self.typo_of(w, &in_dictionary))
             .collect();
         pairs.sort_by(|a, b| {
-            b.source
-                .cmp(&a.source)
+            b.tier
+                .cmp(&a.tier)
                 .then(b.docs.cmp(&a.docs))
                 .then(b.count.cmp(&a.count))
                 .then(a.typo.cmp(&b.typo))
         });
         pairs
     }
+}
+
+/// Why `--fix` must not write `intended` over `typo` unasked, if there is a
+/// reason. Shared by derived pairs and by a slip never seen before, which the
+/// checker judges against general English.
+///
+/// Only a transposition qualifies. Among the derived pairs on a real store
+/// they were 65 slips to 2 words, and both words were three letters (`cmp`
+/// beside `mcp`, `esc` beside `sec`). One-letter changes were 68 to 18: real
+/// words (`repros`, `codecs`, `behaviour`) and slips aimed at the wrong word
+/// (`laywer` for `layer`).
+pub fn held_back(typo: &str, intended: &str, edit: Option<Edit>) -> Option<HeldBack> {
+    if is_british_spelling(typo, intended) {
+        return Some(HeldBack::Variant);
+    }
+    if edit != Some(Edit::Transposition) {
+        return Some(HeldBack::Edit);
+    }
+    // Three letters hold too little evidence unless the word meant is one
+    // of the commonest there are: `teh`, but not `cmp`.
+    if typo.chars().count() <= 3 && !crate::frequency::CORE.contains(&intended) {
+        return Some(HeldBack::Short);
+    }
+    None
+}
+
+/// Is `typo` the British spelling of `intended`? The bundled list is US
+/// English, so `centre` reads as a slip of `center` without this.
+fn is_british_spelling(typo: &str, intended: &str) -> bool {
+    const UK_US: &[(&str, &str)] = &[
+        ("our", "or"),
+        ("ise", "ize"),
+        ("isa", "iza"),
+        ("yse", "yze"),
+        ("ence", "ense"),
+        ("ll", "l"),
+    ];
+    if let (Some(uk), Some(us)) = (typo.strip_suffix("re"), intended.strip_suffix("er"))
+        && uk == us
+    {
+        return true;
+    }
+    UK_US.iter().any(|(uk, us)| {
+        typo.match_indices(uk)
+            .any(|(i, _)| format!("{}{us}{}", &typo[..i], &typo[i + uk.len()..]) == intended)
+    })
 }
 
 /// How sure a typo pair is.
@@ -376,6 +432,67 @@ mod tests {
         );
         assert!(t.typo_of("wigdet", nowhere).is_none());
         assert!(t.trusts("wigdet", nowhere));
+    }
+
+    #[test]
+    fn a_transposition_of_a_dominant_word_is_inferred() {
+        let t = trust(&[("would", DEP, 900, 500), ("woudl", OBS, 1, 1)]);
+        let pair = t.typo_of("woudl", nowhere).unwrap();
+        assert_eq!(pair.tier, Tier::Inferred);
+        assert_eq!(pair.held_back, None);
+    }
+
+    #[test]
+    fn a_one_letter_change_stays_a_candidate() {
+        // An own word's inflection sits one letter from a commoner word.
+        let t = trust(&[("repos", DEP, 900, 500), ("repros", OBS, 6, 6)]);
+        let pair = t.typo_of("repros", nowhere).unwrap();
+        assert_eq!(pair.tier, Tier::Candidate);
+        assert_eq!(pair.held_back, Some(HeldBack::Edit));
+    }
+
+    #[test]
+    fn a_short_transposition_needs_a_common_word() {
+        // `cmp` beside `mcp` is an abbreviation; `teh` beside `the` is a slip.
+        let t = trust(&[
+            ("mcp", DEP, 900, 500),
+            ("cmp", OBS, 1, 1),
+            ("the", DEP, 900, 500),
+            ("teh", OBS, 1, 1),
+        ]);
+        assert_eq!(
+            t.typo_of("cmp", nowhere).unwrap().held_back,
+            Some(HeldBack::Short)
+        );
+        assert_eq!(t.typo_of("teh", nowhere).unwrap().tier, Tier::Inferred);
+    }
+
+    #[test]
+    fn a_british_spelling_is_not_a_slip() {
+        for (uk, us) in [
+            ("centre", "center"),
+            ("behaviour", "behavior"),
+            ("licence", "license"),
+            ("organise", "organize"),
+            ("travelled", "traveled"),
+        ] {
+            assert_eq!(
+                held_back(uk, us, Some(Edit::Transposition)),
+                Some(HeldBack::Variant),
+                "{uk}"
+            );
+        }
+        assert_eq!(held_back("tehre", "there", Some(Edit::Transposition)), None);
+    }
+
+    #[test]
+    fn a_confirmed_pair_is_confirmed_whatever_its_shape() {
+        let t = confirmed(
+            trust(&[("widget", DEP, 3, 3), ("wdgt", OBS, 4, 4)]),
+            &[("wdgt", "widget")],
+        );
+        let pair = t.typo_of("wdgt", nowhere).unwrap();
+        assert_eq!((pair.tier, pair.held_back), (Tier::Confirmed, None));
     }
 
     #[test]

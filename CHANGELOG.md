@@ -9,14 +9,19 @@
   Ordinary English words you really use are included. It lists every match unless you pass `--limit`.
 - **`vocab typos`** lists your habitual typos and the word each one means,
   with the evidence: how often you made it, how much more often you write the
-  real word, and the slip (`transposition`, …). `vocab typos teh the` confirms
+  real word, the slip (`transposition`, …), and its tier — `confirmed`,
+  `inferred` (what `--fix` writes) or `candidate`, with what held it back. `vocab typos teh the` confirms
   a pair so it holds whatever the counts say; `vocab add` says a word is real
   instead. The lexicon moves to schema 7 for the confirmations, so straight
   after upgrading, read-only commands wait for any writing command to migrate
   it (see below).
 - **`vocab --fix`** writes text back with corrections applied: missing
-  apostrophes (`dont`) and typos you confirmed with `vocab typos`, never a
-  guess. It reads the text argument, `--file`, or stdin (line by line, as it
+  apostrophes (`dont`), typos you confirmed with `vocab typos`, and typos
+  inferred from your counts — a swap of two letters in a word you write far
+  more often (`teh`, `shoudl`). A one-letter difference is only suggested,
+  since it reaches real words (`repros` beside `repos`); so is a three-letter
+  swap of anything but a very common word (`cmp` beside `mcp`) and a British
+  spelling. `vocab add` a word to keep `--fix` off it. It reads the text argument, `--file`, or stdin (line by line, as it
   arrives) and writes stdout; `--in-place` rewrites the `--file` instead. Code
   spans and URLs are left alone and the typed case is kept (`Teh` → `The`).
   What changed goes to stderr, as JSON under `-j`/`-J`. Exits 1 when anything

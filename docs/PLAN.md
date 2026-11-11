@@ -845,21 +845,14 @@ score. No field changed (`Finding`, `Suggestion`).
 prose top-1 correction rose 0.826 → 0.831 with detection unchanged: a few
 injected slips happen to be ones this user makes.
 
-### `--fix`: corrections that are never guesses **[done]**
+### `--fix`: corrections that are never guesses **[done; widened below]**
 
 `vocab --fix` reads the positional text, `--file`, or stdin and writes it back
 with corrections applied. It edits a file only with `--in-place`.
 
-- **Only two kinds qualify:** a missing apostrophe (`dont`, an exact mapping)
-  and a typo pair the user **confirmed**. Derived pairs are not applied,
-  however strong. Their ratio does not separate slips from words: on the store
-  copy, `codecs`/codes (×20) and `cmp`/mcp (×39) sit among `runing`/running
-  (×23) and `mabye`/maybe (×47), and `repros`, `behaviour` and `resolvers` are
-  derived pairs at six and two documents. The checker *suggests* a derived
-  pair; writing it into someone's text needs their say-so, which
-  `vocab typos teh the` gives. Restricting to transpositions at ≥2 documents
-  was 8 for 8 on the store copy, which is too few to build a silent rewrite on;
-  it is the candidate if confirmations prove too much work.
+- **What qualifies:** a missing apostrophe (`dont`, an exact mapping) and a
+  typo pair at tier `confirmed` or `inferred` (below). A `candidate` pair is
+  suggested by the checker and never written.
 - **It rides the checker.** A finding becomes a fix only if
   `Checker::correction` says so, so masking (code spans, URLs, fenced blocks,
   indented lines), names the document introduces, and proper nouns all carry
@@ -880,6 +873,73 @@ with corrections applied. It edits a file only with `--in-place`.
   `tests/cli_e2e.rs` as `-J` is.
 - **Exit 1 when anything changed**, as checking exits 1 on a finding; 0 when
   the text was already clean; 2 on an error.
+
+### Tiers: what `--fix` may write **[done]**
+
+Every typo pair has a tier, shown by `vocab typos` (`tier`, and `held_back`
+for a candidate):
+
+- **confirmed:** `vocab typos teh the`. Always applied.
+- **inferred:** derived from the counts, a **transposition**, and nothing
+  held against it. `--fix` applies it.
+- **candidate:** derived, but held back. The checker leads with it; `--fix`
+  leaves it alone.
+
+`vocab add` takes a word out of all three at once: a `user` word is trusted,
+so it is never flagged and never fixed. `vocab typos --rm` forgets a
+confirmation, which drops the pair back to whatever the counts say.
+
+`trust::held_back` is the whole rule, and the checker and `vocab typos` both
+read it. A derived pair stays a candidate when:
+
+- **the slip is not a transposition** (`edit`). On the store copy's 153
+  derived pairs, transpositions were 65 slips to 2 real words. One-letter
+  changes were 68 slips to 18 misses: 9 real words (`repros`, `codecs`,
+  `resolvers`, `langs`, `linted`, `behaviour`, `automagically`, …) and 9 slips
+  aimed at the wrong word (`laywer` for `layer`, `hasing` for `having`,
+  `chome` for `come`). That is one wrong rewrite in five, and no
+  counter-signal tried brought it near zero.
+- **it is three letters and the word meant is not in the common-English core**
+  (`short`). The two real words among the transpositions were `cmp` (beside
+  `mcp`, ×39) and `esc` (beside `sec`). `teh` and `hte` still qualify, because
+  `the` is in the core.
+- **it is the British spelling** (`variant`): `-our`, `-ise`/`-isation`,
+  `-yse`, `-ence`, `-ll`, and a final `-re`. The bundled list is SCOWL's US
+  English and carries none of them, so without this `centre` reads as a slip
+  of `center`. Patterns, not a list: a variant list would mean a second
+  generated data file for one rule.
+
+Counter-signals measured and **not** used, because the edit rule already
+excludes every word they catch:
+
+- **Plural of a word the user writes** (`repros` = repro+s): 5 real words
+  among the derived pairs, no slips. It would be the first rule to add if
+  one-letter changes are ever reconsidered.
+- **Shorthand** (a prefix of a dictionary word the user writes, `repro` <
+  `reproduce`): it does not separate. On the labelled sample it fires on 36 of
+  279 real words and 3 of 30 typos. The real hits are real shorthands (`arg`,
+  `param`, `perf`, `impl`, `vec`, `repo`, `repro`, `config`-shaped), but the
+  expansion is often wrong (`sha` < `shape`, `foo` < `footer`, `nan` < `nanny`,
+  `wal` < `walking`, `substring` < `substrate`), and it also fires on slips
+  (`simplier`, `skils`, `sym`).
+- **Recurrence while the neighbour is not much more frequent** is already the
+  trust rule: such a word is trusted, never flagged, never fixed.
+
+Measured on the store copy with `vocab --fix` over the labelled sample, one
+word per line, and over held-out prose with `vocab eval` (two corpora, five
+seeds, 63k words, 693 injected errors):
+
+| | `--fix` before | tiers |
+|---|---|---|
+| labelled real words rewritten | 0 of 529 | 0 of 529 |
+| labelled typos fixed | 1 of 30 | 9 of 30 |
+| injected errors fixed | 0 | 7 |
+| fixed to the wrong word | 0 | 0 |
+| words changed in clean prose | 0 | 0 |
+
+The typos it now fixes are `teh`, `hte`, `taht`, `wiht`, `owrk`, `shoudl`,
+`mabye` and `tackel`. Injected errors mostly never collide with a learned slip,
+which is what the next step is for.
 
 **`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
 probability: a provenance constant plus a corroboration curve, never checked

@@ -100,8 +100,10 @@ pub struct Cli {
     /// Write the text back with corrections applied, instead of reporting
     /// findings.
     ///
-    /// Only corrections that are never guesses: a missing apostrophe (`dont`)
-    /// and typos you confirmed with `vocab typos`. Code spans, URLs and fenced
+    /// A missing apostrophe (`dont`), a typo you confirmed with `vocab typos`,
+    /// and one inferred from your counts: a swap of two letters in a word you
+    /// write far more often. Candidates are suggested, never written; `vocab
+    /// add` a word to keep `--fix` off it. Code spans, URLs and fenced
     /// blocks are left alone, and the typed case is kept (`Teh` -> `The`).
     /// The text goes to stdout, line by line as it is read; what changed goes
     /// to stderr, in the -j/-J format when one is given. Exits 1 when anything
@@ -190,9 +192,12 @@ pub enum Command {
     /// Your habitual typos and the word each one means — learned from the
     /// counts, or confirmed by hand.
     ///
-    /// With no words, lists them. `vocab typos teh the` confirms a pair: it
-    /// is then always a typo, whatever the counts say. To say a word is real
-    /// instead, `vocab add` it.
+    /// With no words, lists them with their tier: `confirmed` and `inferred`
+    /// pairs are what `--fix` writes back, a `candidate` is only suggested,
+    /// and says what held it back (`edit`: not a swap of two letters;
+    /// `short`: three letters; `variant`: a British spelling).
+    /// `vocab typos teh the` confirms a pair: it is then always a typo,
+    /// whatever the counts say. To say a word is real instead, `vocab add` it.
     Typos {
         /// A typo and the word it means, to confirm; with `--rm`, just the
         /// typo.
