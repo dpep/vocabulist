@@ -382,6 +382,19 @@ fn a_typo_confirmation_that_could_never_apply_is_refused() {
         2,
         "a pair needs both words"
     );
+    // --fix replaces one word with one word.
+    for (typo, intended) in [
+        ("teh", "the end"),
+        ("teh", "!!"),
+        ("te h", "the"),
+        ("t3h", "the"),
+    ] {
+        assert_eq!(
+            vocab(&db, &["typos", typo, intended]).code,
+            2,
+            "{typo} -> {intended}"
+        );
+    }
     assert_eq!(vocab(&db, &["typos", "--rm", "teh"]).code, 1);
 }
 

@@ -52,6 +52,8 @@
   file) ran for minutes; it now takes seconds.
 - **`vocab list | head` exits quietly** instead of printing `Broken pipe (os
   error 32)` and exiting 2.
+- **`vocab typos` refuses a pair that is not one word each** (`teh "the
+  end"`, `t3h the`), which `--fix` could never apply sensibly.
 
 ### Docs
 

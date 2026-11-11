@@ -1100,6 +1100,14 @@ fn typos(
             if typo == intended {
                 return Err(format!("{typo} cannot be a typo of itself").into());
             }
+            // `--fix` swaps one word for one word.
+            if let Some(bad) = [typo, intended].into_iter().find(|w| !text::is_lexical(w)) {
+                return Err(format!(
+                    "`{bad}` is not a word: give one word each, of letters, \
+                     apostrophes and hyphens"
+                )
+                .into());
+            }
             refuse_a_word(
                 &store.trust()?,
                 crate::dict::load().as_ref(),
