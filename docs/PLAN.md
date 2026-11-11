@@ -442,10 +442,24 @@ lock. Only checking stays a writer among the commands that don't obviously
 write, because it seeds the default lexicon on first use. That's the one
 onboarding path a new user can't be expected to know about.
 
-A reader that wants the user's distinctive terms reads `vocab list
---exportable`, which is the export set (`sync::exportable_entries`) in
-`list`'s shape. The rule then lives in one place. A consumer that copied it
-would drift the first time the bar moved.
+A reader that wants the user's vocabulary reads it from `vocab list` rather
+than copying the rule, which would drift the first time the bar moved. Two
+composable steps, each defined once in `sync`:
+
+- `--trusted` (`sync::is_trusted`) keeps words that earned trust: a
+  deliberate source, or two distinct documents. Ordinary English stays,
+  because a word the user really writes helps a consumer like transcription
+  even when every dictionary has it. It names a set, so it lists all of it
+  unless `--limit` is given.
+- `--uncommon` (`sync::retain_uncommon`) drops what the dictionary knows. It
+  is a filter, not a set, so on a plain `list` it keeps the browse's default
+  limit of 50. Without a dictionary it refuses (exit 2) rather than passing
+  everything through: "uncommon" is a claim the dictionary backs, and a
+  warning on stderr is invisible to a `-J` consumer. The dictionary is
+  bundled, so only a broken build reaches that.
+
+`sync` exports their intersection, so `vocab list --trusted --uncommon` is
+exactly the export set.
 
 **Tier 2 — be the checker.** An LSP server serves VS Code, Neovim, Zed, and
 Helix from one implementation, and its "add to lexicon" code action is the
@@ -488,7 +502,7 @@ itself not to catch this user's characteristic mistakes — the failure
 compounds in the one direction that matters.
 
 The corroboration machinery already existed and was already applied to
-*export*: `sync::exportable` requires `provenance > observed || sources >= 2`
+*export*: `sync::is_trusted` requires `provenance > observed || sources >= 2`
 before writing a word into another speller. Checking never asked. It does now,
 at the same bar.
 

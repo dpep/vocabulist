@@ -152,16 +152,21 @@ pub enum Command {
     List {
         filter: Option<String>,
         /// How many to show. Defaults to 50, or to all of them with
-        /// `--exportable`.
+        /// `--trusted`.
         #[arg(long)]
         limit: Option<usize>,
-        /// Only the words `vocab sync` would export: earned (a deliberate
-        /// source, or two independent documents) and not ordinary English.
+        /// Only words that have earned trust: a deliberate source, or two
+        /// independent documents. Ordinary English words included.
         ///
-        /// For tools that want your distinctive terms — read this rather than
-        /// re-deriving the rule.
+        /// With `--uncommon`, exactly what `vocab sync` exports. For tools
+        /// that want your vocabulary — read this rather than re-deriving the
+        /// rule.
         #[arg(long)]
-        exportable: bool,
+        trusted: bool,
+        /// Drop words an ordinary dictionary already knows, leaving jargon,
+        /// names, and coinages.
+        #[arg(long)]
+        uncommon: bool,
     },
     /// Show store-wide counts, what has been read, and where it exports to.
     Status,
@@ -559,19 +564,27 @@ fn dispatch_inner(
         Some(Command::List {
             filter,
             limit,
-            exportable,
+            trusted,
+            uncommon,
         }) => {
-            let filter = filter.as_deref();
-            // `--exportable` is a set, so it's whole unless asked otherwise.
-            let entries = if *exportable {
-                let mut entries = store.list(filter, usize::MAX)?;
-                entries.retain(sync::is_trusted);
-                sync::retain_uncommon(&mut entries, crate::dict::load().as_ref())?;
-                entries.truncate(limit.unwrap_or(usize::MAX));
-                entries
+            // `--trusted` is a set, so it's whole unless asked otherwise;
+            // `--uncommon` only narrows a browse.
+            let limit = limit.unwrap_or(if *trusted { usize::MAX } else { 50 });
+            // The steps filter after the fetch, so they need every row to fill
+            // the limit.
+            let fetch = if *trusted || *uncommon {
+                usize::MAX
             } else {
-                store.list(filter, limit.unwrap_or(50))?
+                limit
             };
+            let mut entries = store.list(filter.as_deref(), fetch)?;
+            if *trusted {
+                entries.retain(sync::is_trusted);
+            }
+            if *uncommon {
+                sync::retain_uncommon(&mut entries, crate::dict::load().as_ref())?;
+            }
+            entries.truncate(limit);
             if !cli.quiet {
                 output::render_entries(&mut out, &entries, format)?;
             }

@@ -581,7 +581,7 @@ fn reading_commands_leave_the_database_untouched() {
 
     for args in [
         &["list"][..],
-        &["list", "--exportable"],
+        &["list", "--trusted", "--uncommon"],
         &["status"],
         &["phrases"],
         &["self"],
@@ -636,12 +636,12 @@ fn reading_does_not_wait_on_a_writer() {
     );
 }
 
-#[test]
-fn list_exportable_is_exactly_what_sync_exports() {
+/// A lexicon that separates the trust bar from the dictionary filter.
+fn trust_fixture(name: &str) -> PathBuf {
     use vocabulist::store::Store;
     use vocabulist::types::Provenance;
 
-    let db = scratch_db("list_exportable");
+    let db = scratch_db(name);
     {
         let store = Store::open(&db).unwrap();
         // More than `list`'s default limit, so a truncated answer shows.
@@ -653,7 +653,7 @@ fn list_exportable_is_exactly_what_sync_exports() {
                     .unwrap();
             }
         }
-        // A dictionary word is never exported, however it was learned.
+        // Trusted, but ordinary English: listed by `--trusted`, never exported.
         store
             .upsert_word("widget", "widget", Provenance::User, 1)
             .unwrap();
@@ -667,24 +667,53 @@ fn list_exportable_is_exactly_what_sync_exports() {
             }
         }
     }
+    db
+}
+
+/// The words in a `-j` array or a `-J` stream, sorted.
+fn listed_words(stdout: &str) -> Vec<String> {
+    let mut words: Vec<String> = serde_json::Deserializer::from_str(stdout)
+        .into_iter::<serde_json::Value>()
+        .map(|v| v.unwrap())
+        .flat_map(|v| match v {
+            serde_json::Value::Array(items) => items,
+            one => vec![one],
+        })
+        .map(|e| e["word"].as_str().unwrap().to_string())
+        .collect();
+    words.sort();
+    words
+}
+
+#[test]
+fn list_trusted_uncommon_is_exactly_what_sync_exports() {
+    use vocabulist::store::Store;
+
+    let db = trust_fixture("list_trusted_uncommon");
     let expected = vocabulist::sync::exportable(&Store::open(&db).unwrap()).unwrap();
 
     for format in ["-j", "-J"] {
-        let out = vocab(&db, &["list", "--exportable", format]);
+        let out = vocab(&db, &["list", "--trusted", "--uncommon", format]);
         assert_eq!(out.code, 0);
-        let mut listed: Vec<String> = serde_json::Deserializer::from_str(&out.stdout)
-            .into_iter::<serde_json::Value>()
-            .map(|v| v.unwrap())
-            .flat_map(|v| match v {
-                serde_json::Value::Array(items) => items,
-                one => vec![one],
-            })
-            .map(|e| e["word"].as_str().unwrap().to_string())
-            .collect();
-        listed.sort();
-        assert_eq!(listed, expected, "{format}");
+        assert_eq!(listed_words(&out.stdout), expected, "{format}");
     }
     assert!(expected.contains(&"quuxly".to_string()));
     assert!(!expected.contains(&"frobnix".to_string()));
     assert!(!expected.contains(&"widget".to_string()));
+}
+
+#[test]
+fn trusted_keeps_ordinary_words_and_uncommon_drops_them() {
+    let db = trust_fixture("list_trusted_or_uncommon");
+
+    let trusted = listed_words(&vocab(&db, &["list", "--trusted", "-J"]).stdout);
+    assert!(trusted.contains(&"widget".to_string()));
+    assert!(!trusted.contains(&"frobnix".to_string()));
+
+    // A filter on a browse: untrusted words stay, and the default limit still
+    // fills after the dictionary word is dropped.
+    let uncommon = listed_words(&vocab(&db, &["list", "--uncommon", "-J"]).stdout);
+    assert!(!uncommon.contains(&"widget".to_string()));
+    assert!(uncommon.contains(&"frobnix".to_string()));
+    assert_eq!(uncommon.len(), 50);
 }

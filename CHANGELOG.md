@@ -4,12 +4,14 @@
 
 ### Added
 
-- **`vocab list --exportable`** lists exactly the words `vocab sync` exports:
-  earned (a deliberate source, or two independent documents) and not ordinary
-  English. A tool that wants your distinctive terms can read them with
-  `vocab list --exportable -J` rather than copying the rule, which then drifts.
-  It lists every match unless you pass `--limit`, and honors the filter and
-  `-j`/`-J` the same way `list` does.
+- **`vocab list --trusted`** lists the words that have earned trust: a
+  deliberate source, or two independent documents. Ordinary English words
+  you really use are included. It lists every match unless you pass `--limit`.
+- **`vocab list --uncommon`** drops words an ordinary dictionary already
+  knows. It works on a plain `list` (keeping its default of 50) and composes
+  with `--trusted`: `vocab list --trusted --uncommon -J` is exactly what
+  `vocab sync` exports. A tool that wants your vocabulary can read it this way
+  rather than copying the rule, which then drifts.
 
 ### Changed
 
