@@ -90,6 +90,41 @@ fn push_token(
     });
 }
 
+/// Is the word at `chars[start..end]` joined to code — `teh.rs`, `$teh`,
+/// `--teh`, `foo::teh`, `teh()`, `x.teh`, `teh=1`?
+///
+/// A rewrite must never touch one: it names a file, a variable or a flag,
+/// whatever it looks like. Prose punctuation is not code, so `.`, `:` count
+/// only with a word on their far side (`teh.rs`, not `teh.`), and brackets
+/// only as a call or an index (`teh()`, not `(teh)`). Read off the line as
+/// typed, so an em dash is not mistaken for a hyphen.
+pub fn joined_to_code(chars: &[char], start: usize, end: usize) -> bool {
+    const ALWAYS: &[char] = &[
+        '$', '_', '=', '/', '\\', '-', '#', '@', '%', '&', '+', '^', '~', '|', '<', '>', '{', '}',
+    ];
+    let wordish = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+    let before = start.checked_sub(1).and_then(|i| chars.get(i));
+    let after = chars.get(end);
+    let joined_before = match before {
+        Some(c) if ALWAYS.contains(c) => true,
+        Some('.') => wordish(start.checked_sub(2).and_then(|i| chars.get(i))),
+        Some(':') => start
+            .checked_sub(2)
+            .and_then(|i| chars.get(i))
+            .is_some_and(|c| *c == ':' || c.is_alphanumeric()),
+        _ => false,
+    };
+    let joined_after = match after {
+        Some(c) if ALWAYS.contains(c) || *c == '(' || *c == '[' => true,
+        Some('.') => wordish(chars.get(end + 1)),
+        Some(':') => chars
+            .get(end + 1)
+            .is_some_and(|c| *c == ':' || c.is_alphanumeric()),
+        _ => false,
+    };
+    joined_before || joined_after
+}
+
 /// Should this token be checked at all? Anything that isn't plausibly prose
 /// is skipped outright — the conservative bias starts here.
 pub fn is_checkable(token: &str) -> bool {

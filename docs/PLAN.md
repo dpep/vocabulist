@@ -871,6 +871,12 @@ the argument.
 - **A fix lands only where the line still holds the word, at its column.**
   Columns are characters, and typography folding preserves them; a mismatch
   leaves the text alone.
+- **Never on a word joined to code** (`text::joined_to_code`, applied in
+  `fix::apply` so `--fix` and `--expand` share it): `teh.rs`, `$teh`,
+  `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. Backticks are not the only
+  way prose names code. `.` and `:` count only with a word on their far side,
+  and brackets only as a call or an index, so sentence punctuation still
+  allows a fix.
 - **Byte for byte otherwise.** Lines keep their own terminators (`\r\n`
   stays), and a file without a trailing newline doesn't gain one.
 - **Text on stdout, what changed on stderr.** stdout carries the corrected

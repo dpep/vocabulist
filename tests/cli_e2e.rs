@@ -1258,3 +1258,21 @@ fn checking_does_not_wait_on_a_writer() {
         );
     }
 }
+
+#[test]
+fn fix_and_expand_leave_code_shaped_words_alone() {
+    let db = scratch_db("fix-code-shaped");
+    assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
+    assert_eq!(vocab(&db, &["shorthand", "zarg=argument"]).code, 0);
+
+    let input = "open shoudl.rs, $shoudl, --dont, foo::shoudl, shoudl(), x.shoudl \
+                 and zarg.len() --zarg $zarg zarg=1, but shoudl we, zarg?\n";
+    let out = run(&db, &["--fix", "--expand"], Some(input));
+    assert_eq!(
+        out.stdout,
+        "open shoudl.rs, $shoudl, --dont, foo::shoudl, shoudl(), x.shoudl \
+         and zarg.len() --zarg $zarg zarg=1, but should we, argument?\n",
+        "{}",
+        out.stderr
+    );
+}

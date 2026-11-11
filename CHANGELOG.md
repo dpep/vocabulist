@@ -23,6 +23,10 @@
   opened it for writing on every run, so each check could wait on a capture
   hook's lock. Only the first run on the default lexicon, which seeds it,
   writes. A check against a `--db` that does not exist no longer creates it.
+- **`--fix` and `--expand` leave code-shaped words alone** outside backticks
+  too: `teh.rs`, `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`.
+  They also now agree on this, where `--fix` rewrote `teh.rs` and `--expand`
+  left `repro.rs`.
 
 ## 0.6.0 — 2026-11-11
 

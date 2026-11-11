@@ -14,7 +14,8 @@ use crate::types::Fix;
 /// A fix lands only where the line still holds the word it names, at the
 /// column it names. Columns are characters, and the checker's typography
 /// folding keeps them aligned, so a mismatch means something unexpected and
-/// the safe answer is to leave the text alone.
+/// the safe answer is to leave the text alone. Nor does one land on a word
+/// joined to code (`teh.rs`, `$teh`): one rule for `--fix` and `--expand`.
 pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
     let mut chars: Vec<char> = line.chars().collect();
     let mut landed = Vec::new();
@@ -28,7 +29,7 @@ pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
             continue;
         };
         let typed: String = crate::text::normalize_typography(&span.iter().collect::<String>());
-        if typed != fix.from {
+        if typed != fix.from || crate::text::joined_to_code(&chars, start, end) {
             continue;
         }
         fix.to = match_case(&fix.from, &fix.to);
@@ -132,6 +133,54 @@ mod tests {
     fn columns_count_characters_not_bytes() {
         let (out, _) = apply("café — teh", vec![fix(8, "teh", "the")]);
         assert_eq!(out, "café — the");
+    }
+
+    fn column_of(line: &str, word: &str) -> usize {
+        line[..line.find(word).unwrap()].chars().count() + 1
+    }
+
+    #[test]
+    fn a_word_joined_to_code_is_left_alone() {
+        for line in [
+            "edit teh.rs",
+            "set $teh",
+            "pass --teh",
+            "use foo::teh",
+            "call teh()",
+            "read x.teh",
+            "a->teh",
+            "teh=1",
+            "teh/x",
+            "_teh",
+            "teh[0]",
+            "#teh",
+        ] {
+            let col = column_of(line, "teh");
+            let (out, landed) = apply(line, vec![fix(col, "teh", "the")]);
+            assert_eq!(out, line, "{line}");
+            assert!(landed.is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn prose_punctuation_does_not_make_a_word_code() {
+        for line in [
+            "teh.",
+            "teh, then",
+            "(teh)",
+            "teh: then",
+            "\"teh\"",
+            "*teh*",
+            "teh?",
+            "[teh](x)",
+            "it's teh!",
+            "wait — teh",
+        ] {
+            let col = column_of(line, "teh");
+            let (out, landed) = apply(line, vec![fix(col, "teh", "the")]);
+            assert_eq!(out, line.replace("teh", "the"), "{line}");
+            assert_eq!(landed.len(), 1, "{line}");
+        }
     }
 
     #[test]

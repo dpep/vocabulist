@@ -654,6 +654,7 @@ impl Checker {
         if shorthands.is_empty() {
             return Vec::new();
         }
+        let typed: Vec<char> = line.chars().collect();
         let line = text::normalize_typography(line);
         let masked = text::mask_non_prose(&line);
         let tokens = text::tokenize(&masked);
@@ -662,8 +663,12 @@ impl Checker {
         for (i, token) in tokens.iter().enumerate() {
             let starts_sentence = sentence_initial;
             sentence_initial = ends_sentence(&masked, token, &tokens.get(i + 1).map(|t| t.col));
+            let start = token.col - 1;
+            // Not even reported as left alone: `args.len()` is code, not a
+            // shorthand whose meaning is in doubt.
             if !text::is_checkable(&token.text)
                 || text::is_proper_noun(&token.text, starts_sentence)
+                || text::joined_to_code(&typed, start, start + token.text.chars().count())
             {
                 continue;
             }
