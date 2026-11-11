@@ -431,6 +431,17 @@ Every export is a **lossy projection** — a flat membership set, filtered to
 what an ordinary dictionary doesn't already know. The rich store stays rich;
 the dumbest consumer must not shape the schema.
 
+**Reading never writes.** Other tools read the lexicon too, through the CLI,
+and they must not change it. So every command declares what it needs from
+the store (`cli::Access`): nothing, a read, or a write. Readers go through
+`Store::open_read_only`, which never creates, migrates, or stamps the
+database. It refuses a missing file and any schema version other than its
+own, because a newer schema belongs to a newer binary and migrating an older
+one is a write. Under WAL a reader never waits on a capture hook's write
+lock. Only checking stays a writer among the commands that don't obviously
+write, because it seeds the default lexicon on first use. That's the one
+onboarding path a new user can't be expected to know about.
+
 **Tier 2 — be the checker.** An LSP server serves VS Code, Neovim, Zed, and
 Helix from one implementation, and its "add to lexicon" code action is the
 highest-quality signal available: an explicit human vote, straight to `user`

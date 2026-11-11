@@ -564,3 +564,73 @@ fn ndjson_streams_rather_than_buffering() {
     drop(stdin);
     child.wait().unwrap();
 }
+
+/// The bytes and the mtime of the main database file — what a backup, a sync
+/// daemon, or a second reader would notice changing.
+fn fingerprint(db: &PathBuf) -> (Vec<u8>, std::time::SystemTime) {
+    let bytes = std::fs::read(db).unwrap();
+    let mtime = std::fs::metadata(db).unwrap().modified().unwrap();
+    (bytes, mtime)
+}
+
+#[test]
+fn reading_commands_leave_the_database_untouched() {
+    let db = scratch_db("read_untouched");
+    vocab(&db, &["add", "zblorg", "widget"]);
+    let before = fingerprint(&db);
+
+    for args in [
+        &["list"][..],
+        &["status"],
+        &["phrases"],
+        &["self"],
+        &["analyze", "--lexicon"],
+        &["templates"],
+        &["prune", "--dry-run"],
+    ] {
+        let out = vocab(&db, args);
+        assert_ne!(out.code, 2, "{args:?} failed");
+        assert!(fingerprint(&db) == before, "{args:?} wrote the database");
+    }
+}
+
+#[test]
+fn reading_a_missing_database_is_refused_not_created() {
+    let db = scratch_db("read_missing");
+    assert_eq!(vocab(&db, &["list"]).code, 2);
+    assert!(!db.exists(), "a read must not create the database");
+}
+
+#[test]
+fn commands_that_never_read_the_lexicon_work_without_one() {
+    let db = scratch_db("storeless");
+    assert_eq!(vocab(&db, &["help", "list"]).code, 0);
+    assert_eq!(vocab(&db, &["analyze", "a widget and a gadget"]).code, 0);
+    assert!(!db.exists(), "nothing asked for a lexicon");
+}
+
+#[test]
+fn reading_does_not_wait_on_a_writer() {
+    let db = scratch_db("read_while_writing");
+    vocab(&db, &["add", "zblorg"]);
+
+    // What a capture hook does mid-process: hold the write lock.
+    let writer = rusqlite::Connection::open(&db).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+        .execute("UPDATE lexicon SET count = count + 1", [])
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let out = vocab(&db, &["list"]);
+    let waited = started.elapsed();
+    writer.execute_batch("ROLLBACK").unwrap();
+
+    assert_eq!(out.code, 0);
+    assert!(out.stdout.contains("zblorg"));
+    // Well under the busy timeout a writer would sit through.
+    assert!(
+        waited < std::time::Duration::from_secs(2),
+        "waited {waited:?}"
+    );
+}

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Reading the lexicon no longer writes it.** `list`, `status`, `phrases`,
+  `eval`, `sync`, `analyze --lexicon`, and the read-only forms of `self`,
+  `templates` and `prune --dry-run` open the database read-only. They never
+  create, migrate, or re-stamp it, and they don't wait on a capture hook that
+  is mid-write. What you may notice:
+  - On a lexicon that doesn't exist yet, they now exit `2` with a message
+    instead of creating an empty one. Run `vocab seed` (or just check some
+    text) to create it.
+  - They no longer seed the default lexicon on first use. Checking text still
+    does.
+  - Straight after upgrading `vocab`, they refuse the old schema until any
+    writing command (`vocab process`, or the next capture hook) has migrated
+    it. A schema newer than the binary is refused too, rather than being
+    stamped back down to the older version.
+- `help`, `unsync`, `sync --list` and `analyze <text>` no longer open the
+  lexicon at all, so they work on a machine that has none and no longer
+  create one.
+
 ## 0.5.1 — 2026-09-19
 
 ### Added

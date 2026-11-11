@@ -317,6 +317,56 @@ pub enum Command {
     },
 }
 
+/// What a command needs from the lexicon, and so how it opens it.
+///
+/// Reading never writes: a reader that created, migrated or stamped the
+/// database could stall behind a capture hook's write lock, or drag a newer
+/// lexicon back to its own schema version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Access {
+    /// Never touches the lexicon, so must work without one.
+    None,
+    Read,
+    Write,
+}
+
+impl Command {
+    // Exhaustive on purpose: a new command has to choose.
+    fn access(&self) -> Access {
+        match self {
+            Command::Help { .. } | Command::Unsync { .. } | Command::Sync { list: true, .. } => {
+                Access::None
+            }
+            Command::Analyze { lexicon, .. } => {
+                if *lexicon {
+                    Access::Read
+                } else {
+                    Access::None
+                }
+            }
+            // Sync writes the spell checkers' files, never the lexicon.
+            Command::List { .. }
+            | Command::Status
+            | Command::Phrases { .. }
+            | Command::Eval { .. }
+            | Command::Sync { .. } => Access::Read,
+            Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
+            Command::Templates { apply: false, .. } => Access::Read,
+            Command::Prune { dry_run: true, .. } => Access::Read,
+            Command::Identity { .. }
+            | Command::Templates { .. }
+            | Command::Prune { .. }
+            | Command::Seed { .. }
+            | Command::Add { .. }
+            | Command::Rm { .. }
+            | Command::Capture { .. }
+            | Command::Process { .. }
+            | Command::Ingest { .. }
+            | Command::Hook { .. } => Access::Write,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Human,
@@ -408,7 +458,19 @@ fn dispatch_inner(
     cli: &Cli,
     profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let store = profile.time("store_open", || Store::open(cli.db_path()))?;
+    // Checking is a writer: it seeds the default lexicon on first use.
+    let access = cli.command.as_ref().map_or(Access::Write, Command::access);
+    let store = profile.time(
+        "store_open",
+        || -> Result<Store, Box<dyn std::error::Error>> {
+            match access {
+                // An empty stand-in, so no arm needs an Option it never reads.
+                Access::None => Ok(Store::open(":memory:")?),
+                Access::Read => Store::open_read_only(cli.db_path()),
+                Access::Write => Ok(Store::open(cli.db_path())?),
+            }
+        },
+    )?;
     let format = cli.format();
     let mut out = io::stdout().lock();
 
@@ -418,6 +480,7 @@ fn dispatch_inner(
     // both surprising and wrong. Excludes `seed`, which does its own, and
     // `hook`, which must stay fast; the Stop hook seeds asynchronously.
     if cli.db.is_none()
+        && access == Access::Write
         && !matches!(
             cli.command,
             Some(Command::Seed { .. }) | Some(Command::Hook { .. })

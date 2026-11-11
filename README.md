@@ -277,6 +277,10 @@ a CI step without a wrapper. *Querying* — `list`, `phrases`, `self` — is gre
 a result exits `0` and an empty one exits `1`, so `vocab list foo && …` means
 "if any". `2` is always an operational error, never a verdict.
 
+Reading never writes. `list`, `status`, `phrases` and the other queries open
+the lexicon read-only. They won't create, migrate, or lock it, so another
+tool can read it while the capture hooks keep learning.
+
 ## Local, always
 
 No network calls, at install or at run time. The lexicon is a SQLite database
