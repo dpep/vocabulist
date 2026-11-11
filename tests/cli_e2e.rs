@@ -581,6 +581,7 @@ fn reading_commands_leave_the_database_untouched() {
 
     for args in [
         &["list"][..],
+        &["list", "--exportable"],
         &["status"],
         &["phrases"],
         &["self"],
@@ -633,4 +634,57 @@ fn reading_does_not_wait_on_a_writer() {
         waited < std::time::Duration::from_secs(2),
         "waited {waited:?}"
     );
+}
+
+#[test]
+fn list_exportable_is_exactly_what_sync_exports() {
+    use vocabulist::store::Store;
+    use vocabulist::types::Provenance;
+
+    let db = scratch_db("list_exportable");
+    {
+        let store = Store::open(&db).unwrap();
+        // More than `list`'s default limit, so a truncated answer shows.
+        for a in 'a'..='h' {
+            for b in 'a'..='h' {
+                let word = format!("zblorg{a}{b}");
+                store
+                    .upsert_word(&word, &word, Provenance::User, 1)
+                    .unwrap();
+            }
+        }
+        // A dictionary word is never exported, however it was learned.
+        store
+            .upsert_word("widget", "widget", Provenance::User, 1)
+            .unwrap();
+        // Observed: one document is not enough, two are.
+        for (word, docs) in [("frobnix", 1), ("quuxly", 2)] {
+            store
+                .upsert_word(word, word, Provenance::Observed, 1)
+                .unwrap();
+            for doc in 0..docs {
+                store.record_word_source(word, &doc.to_string()).unwrap();
+            }
+        }
+    }
+    let expected = vocabulist::sync::exportable(&Store::open(&db).unwrap()).unwrap();
+
+    for format in ["-j", "-J"] {
+        let out = vocab(&db, &["list", "--exportable", format]);
+        assert_eq!(out.code, 0);
+        let mut listed: Vec<String> = serde_json::Deserializer::from_str(&out.stdout)
+            .into_iter::<serde_json::Value>()
+            .map(|v| v.unwrap())
+            .flat_map(|v| match v {
+                serde_json::Value::Array(items) => items,
+                one => vec![one],
+            })
+            .map(|e| e["word"].as_str().unwrap().to_string())
+            .collect();
+        listed.sort();
+        assert_eq!(listed, expected, "{format}");
+    }
+    assert!(expected.contains(&"quuxly".to_string()));
+    assert!(!expected.contains(&"frobnix".to_string()));
+    assert!(!expected.contains(&"widget".to_string()));
 }

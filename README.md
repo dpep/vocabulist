@@ -245,6 +245,7 @@ vocab "text to check"          # check one string
 cat notes.md | vocab -J        # stream stdin, NDJSON per finding
 vocab -f README.md -j          # check a file, pretty JSON
 vocab list rubo                # lexicon entries matching "rubo"
+vocab list --exportable -J     # exactly what `sync` exports: your distinctive terms
 vocab add contextdb iriq       # add by hand (top provenance, never pruned)
 vocab status                   # what the store knows, and where it exports
 vocab phrases -n 3             # the three-word phrases you actually repeat

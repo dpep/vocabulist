@@ -151,8 +151,17 @@ pub enum Command {
     /// List lexicon entries, strongest first.
     List {
         filter: Option<String>,
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
+        /// How many to show. Defaults to 50, or to all of them with
+        /// `--exportable`.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Only the words `vocab sync` would export: earned (a deliberate
+        /// source, or two independent documents) and not ordinary English.
+        ///
+        /// For tools that want your distinctive terms — read this rather than
+        /// re-deriving the rule.
+        #[arg(long)]
+        exportable: bool,
     },
     /// Show store-wide counts, what has been read, and where it exports to.
     Status,
@@ -547,8 +556,20 @@ fn dispatch_inner(
             })
         }
 
-        Some(Command::List { filter, limit }) => {
-            let entries = store.list(filter.as_deref(), *limit)?;
+        Some(Command::List {
+            filter,
+            limit,
+            exportable,
+        }) => {
+            let filter = filter.as_deref();
+            // `--exportable` is a set, so it's whole unless asked otherwise.
+            let entries = if *exportable {
+                let mut entries = sync::exportable_entries(&store, filter)?;
+                entries.truncate(limit.unwrap_or(usize::MAX));
+                entries
+            } else {
+                store.list(filter, limit.unwrap_or(50))?
+            };
             if !cli.quiet {
                 output::render_entries(&mut out, &entries, format)?;
             }

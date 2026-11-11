@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **`vocab list --exportable`** lists exactly the words `vocab sync` exports:
+  earned (a deliberate source, or two independent documents) and not ordinary
+  English. A tool that wants your distinctive terms can read them with
+  `vocab list --exportable -J` rather than copying the rule, which then drifts.
+  It lists every match unless you pass `--limit`, and honors the filter and
+  `-j`/`-J` the same way `list` does.
+
 ### Changed
 
 - **Reading the lexicon no longer writes it.** `list`, `status`, `phrases`,

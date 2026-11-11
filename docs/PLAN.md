@@ -442,6 +442,11 @@ lock. Only checking stays a writer among the commands that don't obviously
 write, because it seeds the default lexicon on first use. That's the one
 onboarding path a new user can't be expected to know about.
 
+A reader that wants the user's distinctive terms reads `vocab list
+--exportable`, which is the export set (`sync::exportable_entries`) in
+`list`'s shape. The rule then lives in one place. A consumer that copied it
+would drift the first time the bar moved.
+
 **Tier 2 — be the checker.** An LSP server serves VS Code, Neovim, Zed, and
 Helix from one implementation, and its "add to lexicon" code action is the
 highest-quality signal available: an explicit human vote, straight to `user`
