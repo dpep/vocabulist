@@ -21,6 +21,9 @@
   spans and URLs are left alone and the typed case is kept (`Teh` → `The`).
   What changed goes to stderr, as JSON under `-j`/`-J`. Exits 1 when anything
   changed.
+- **`vocab eval`** also scores what `--fix` would write: injected typos fixed
+  to the original, rewritten to another word, and rewrites of words nobody
+  corrupted, each wrong one listed.
 - **`vocab list --uncommon`** drops words an ordinary dictionary already
   knows. It works on a plain `list` (keeping its default of 50) and composes
   with `--trusted`: `vocab list --trusted --uncommon -J` is exactly what

@@ -25,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::Finding;
+use crate::types::{Finding, Fix};
 
 /// Adjacent keys on a QWERTY keyboard, for substitutions that resemble real
 /// slips rather than random letters.
@@ -388,6 +388,16 @@ pub struct EvalReport {
     pub by_kind: Vec<KindScore>,
     /// A sample of false positives, for reading rather than counting.
     pub false_positive_sample: Vec<String>,
+    /// Injected errors `--fix` would write back as the original word.
+    pub fixed: usize,
+    /// Injected errors `--fix` would rewrite to some other word.
+    pub misfixed: usize,
+    /// Rewrites of words nobody corrupted: the number `--fix` must keep at 0.
+    pub false_fixes: usize,
+    /// fixed / injected.
+    pub fix_rate: f64,
+    /// Every misfix and false fix, as `line:col from -> to`.
+    pub wrong_fixes: Vec<String>,
 }
 
 /// How many false positives to keep for inspection.
@@ -502,6 +512,31 @@ pub fn score(
     report.correction_rate = ratio(report.corrected, report.caught);
     report.top1_rate = ratio(report.corrected_top1, report.caught);
     report
+}
+
+/// Score what `--fix` would write: each fix lands on an injected word, as the
+/// original or as something else, or on a word nobody corrupted.
+pub fn score_fixes(report: &mut EvalReport, fixes: &[Fix], injections: &[Injection]) {
+    for fix in fixes {
+        let injected = injections
+            .iter()
+            .find(|i| i.line == fix.line && i.mutated.to_lowercase() == fix.from.to_lowercase());
+        match injected {
+            Some(i) if i.original.to_lowercase() == fix.to.to_lowercase() => report.fixed += 1,
+            other => {
+                if other.is_some() {
+                    report.misfixed += 1;
+                } else {
+                    report.false_fixes += 1;
+                }
+                report.wrong_fixes.push(format!(
+                    "{}:{} {} -> {}",
+                    fix.line, fix.col, fix.from, fix.to
+                ));
+            }
+        }
+    }
+    report.fix_rate = ratio(report.fixed, report.injected);
 }
 
 fn ratio(a: usize, b: usize) -> f64 {
@@ -700,6 +735,44 @@ mod tests {
         assert_eq!(report.caught, 1);
         assert_eq!(report.corrected, 0);
         assert_eq!(report.correction_rate, 0.0);
+    }
+
+    #[test]
+    fn a_fix_is_right_wrong_or_false() {
+        let injections = vec![
+            Injection {
+                line: 1,
+                original: "change".into(),
+                mutated: "chagne".into(),
+                kind: ErrorKind::Transposition,
+            },
+            Injection {
+                line: 2,
+                original: "widget".into(),
+                mutated: "wdiget".into(),
+                kind: ErrorKind::Transposition,
+            },
+        ];
+        let fix = |line, from: &str, to: &str| Fix {
+            line,
+            col: 1,
+            from: from.into(),
+            to: to.into(),
+            kind: FindingKind::Unknown,
+        };
+        let mut report = score(&[], &injections, 3, 30);
+        let fixes = [
+            fix(1, "Chagne", "Change"),
+            fix(2, "wdiget", "midget"),
+            fix(3, "recency", "regency"),
+        ];
+        score_fixes(&mut report, &fixes, &injections);
+        assert_eq!(
+            (report.fixed, report.misfixed, report.false_fixes),
+            (1, 1, 1)
+        );
+        assert_eq!(report.fix_rate, 0.5);
+        assert_eq!(report.wrong_fixes.len(), 2);
     }
 
     #[test]

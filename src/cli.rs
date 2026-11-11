@@ -853,7 +853,21 @@ fn dispatch_inner(
                 .lines()
                 .map(|l| crate::text::prose_words(l).len())
                 .sum();
-            let report = crate::eval::score(&findings, &injections, mutated.lines().count(), words);
+            let fixes: Vec<crate::types::Fix> = findings
+                .iter()
+                .filter_map(|f| {
+                    Some(crate::types::Fix {
+                        line: f.line,
+                        col: f.col,
+                        from: f.word.clone(),
+                        to: checker.correction(f)?,
+                        kind: f.kind,
+                    })
+                })
+                .collect();
+            let mut report =
+                crate::eval::score(&findings, &injections, mutated.lines().count(), words);
+            crate::eval::score_fixes(&mut report, &fixes, &injections);
             if !cli.quiet {
                 output::render_eval(&mut out, &report, format)?;
             }

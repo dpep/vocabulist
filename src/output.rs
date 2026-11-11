@@ -679,6 +679,19 @@ pub fn render_eval(
                     )?;
                 }
             }
+            writeln!(out, "\n  --fix (fixed/injected, misfixed, false fixes):")?;
+            writeln!(
+                out,
+                "    {:>4}/{:<4} {:>4.0}%   {:>4}   {:>4}",
+                report.fixed,
+                report.injected,
+                report.fix_rate * 100.0,
+                report.misfixed,
+                report.false_fixes
+            )?;
+            for line in &report.wrong_fixes {
+                writeln!(out, "    {line}")?;
+            }
             if !report.false_positive_sample.is_empty() {
                 writeln!(out, "\n  false positives (sample):")?;
                 for line in &report.false_positive_sample {
