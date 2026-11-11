@@ -18,6 +18,9 @@ use crate::types::Fix;
 /// joined to code (`teh.rs`, `$teh`): one rule for `--fix` and `--expand`.
 pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
     let mut chars: Vec<char> = line.chars().collect();
+    // Corrections carry a straight apostrophe; a line typed with curly ones
+    // (as macOS, Slack and Gmail write them) keeps its typography.
+    let curly = line.contains('\u{2019}');
     let mut landed = Vec::new();
     // Right to left, so an earlier column is not shifted by a later edit.
     let mut fixes = fixes;
@@ -33,6 +36,9 @@ pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
             continue;
         }
         fix.to = match_case(&fix.from, &fix.to);
+        if curly {
+            fix.to = fix.to.replace('\'', "\u{2019}");
+        }
         chars.splice(start..end, fix.to.chars());
         landed.push(fix);
     }
@@ -183,6 +189,22 @@ mod tests {
             assert_eq!(out, line.replace("teh", "the"), "{line}");
             assert_eq!(landed.len(), 1, "{line}");
         }
+    }
+
+    #[test]
+    fn a_curly_apostrophe_stays_curly() {
+        let (out, landed) = apply("Teh\u{2019}s plan", vec![fix(1, "Teh's", "the's")]);
+        assert_eq!(out, "The\u{2019}s plan");
+        assert_eq!(
+            landed[0].to, "The\u{2019}s",
+            "the report says what was written"
+        );
+        // A contraction typed with no apostrophe gets the typographer's one
+        // only when the line already uses it.
+        let (out, _) = apply("it\u{2019}s fine, dont", vec![fix(12, "dont", "don't")]);
+        assert_eq!(out, "it\u{2019}s fine, don\u{2019}t");
+        let (out, _) = apply("it's fine, dont", vec![fix(12, "dont", "don't")]);
+        assert_eq!(out, "it's fine, don't");
     }
 
     #[test]

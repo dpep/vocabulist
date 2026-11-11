@@ -56,6 +56,8 @@
   end"`, `t3h the`), which `--fix` could never apply sensibly.
 - **`vocab add` reports an upgrade:** adding a word already learned from
   your text said `added 0`; it now says `added 0, upgraded 1`.
+- **`--fix` keeps curly apostrophes curly:** on a line typed with `’`,
+  `dont` becomes `don’t` and `Teh’s` becomes `The’s`, not a straight `'`.
 
 ### Docs
 
