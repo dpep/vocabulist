@@ -42,6 +42,7 @@ Examples:
   vocab \"ship the small change\"     check one string
   cat notes.md | vocab -J          stream stdin as NDJSON
   vocab list rubo                  lexicon entries matching \"rubo\"
+  vocab typos                      your habitual typos, and what each means
   vocab sync                       export into cSpell and the macOS dictionary
   vocab phrases                    the phrases you actually use
   vocab analyze --lexicon          vocabulary and readability of your corpus
@@ -168,6 +169,21 @@ pub enum Command {
         /// names, and coinages.
         #[arg(long)]
         uncommon: bool,
+    },
+    /// Your habitual typos and the word each one means — learned from the
+    /// counts, or confirmed by hand.
+    ///
+    /// With no words, lists them. `vocab typos teh the` confirms a pair: it
+    /// is then always a typo, whatever the counts say. To say a word is real
+    /// instead, `vocab add` it.
+    Typos {
+        /// A typo and the word it means, to confirm; with `--rm`, just the
+        /// typo.
+        #[arg(value_name = "TYPO [INTENDED]")]
+        words: Vec<String>,
+        /// Forget a confirmed pair instead of adding one.
+        #[arg(long)]
+        rm: bool,
     },
     /// Show store-wide counts, what has been read, and where it exports to.
     Status,
@@ -366,9 +382,11 @@ impl Command {
             | Command::Eval { .. }
             | Command::Sync { .. } => Access::Read,
             Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
+            Command::Typos { words, rm: false } if words.is_empty() => Access::Read,
             Command::Templates { apply: false, .. } => Access::Read,
             Command::Prune { dry_run: true, .. } => Access::Read,
             Command::Identity { .. }
+            | Command::Typos { .. }
             | Command::Templates { .. }
             | Command::Prune { .. }
             | Command::Seed { .. }
@@ -526,6 +544,8 @@ fn dispatch_inner(
                 let normalized = text::normalize(word);
                 let (is_new, _) =
                     store.upsert_word(&normalized, word, crate::types::Provenance::User, 1)?;
+                // Saying a word is real retracts calling it a typo.
+                store.forget_typo(&normalized)?;
                 added += usize::from(is_new);
             }
             if !cli.quiet {
@@ -596,6 +616,8 @@ fn dispatch_inner(
                 ExitCode::SUCCESS
             })
         }
+
+        Some(Command::Typos { words, rm }) => typos(cli, &store, words, *rm, &mut out),
 
         Some(Command::Help { topic }) => {
             crate::help::render(&mut out, topic.as_deref())?;
@@ -890,6 +912,79 @@ fn resolve_targets(name: Option<&str>) -> Result<Vec<sync::Target>, Box<dyn std:
             let known: Vec<_> = sync::targets().iter().map(|t| t.name).collect();
             format!("unknown target: {n} (known: {})", known.join(", ")).into()
         }),
+    }
+}
+
+/// `vocab typos`: list the pairs, confirm one, or forget one.
+fn typos(
+    cli: &Cli,
+    store: &Store,
+    words: &[String],
+    rm: bool,
+    out: &mut impl Write,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let format = cli.format();
+    let words: Vec<String> = words.iter().map(|w| text::normalize(w)).collect();
+    match (words.as_slice(), rm) {
+        ([], false) => {
+            let dictionary = crate::dict::load();
+            let in_dictionary = |w: &str| {
+                dictionary
+                    .as_ref()
+                    .is_some_and(|d| crate::dict::contains(d, w))
+            };
+            let pairs = store.trust()?.typos(in_dictionary);
+            if !cli.quiet {
+                output::render_typos(out, &pairs, format)?;
+            }
+            Ok(if pairs.is_empty() {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
+        }
+        ([typo], true) => {
+            let forgotten = store.forget_typo(typo)?;
+            if !cli.quiet {
+                let msg = if forgotten { "removed" } else { "not found" };
+                output::status(out, msg, format)?;
+            }
+            Ok(if forgotten {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        ([typo, intended], false) => {
+            if typo == intended {
+                return Err(format!("{typo} cannot be a typo of itself").into());
+            }
+            if let Some(standing) = store.trust()?.standing(typo)
+                && standing.provenance > crate::types::Provenance::Observed
+            {
+                // Provenance ratchets: a deliberate source outranks a
+                // confirmation, so storing one would do nothing.
+                return Err(format!(
+                    "{typo} is in your lexicon from a deliberate source ({}) — \
+                     `vocab rm {typo}` first if it really is a typo",
+                    standing.provenance.as_str()
+                )
+                .into());
+            }
+            if crate::dict::load().is_some_and(|d| crate::dict::contains(&d, typo)) {
+                // A real word is only wrong in context; that is the
+                // real-word checker's job, not a blanket replacement.
+                return Err(
+                    format!("{typo} is a dictionary word, so it cannot always be a typo").into(),
+                );
+            }
+            store.confirm_typo(typo, intended)?;
+            if !cli.quiet {
+                output::status(out, &format!("confirmed {typo} -> {intended}"), format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Err("give a typo and the word it means, or `--rm` and the typo".into()),
     }
 }
 

@@ -796,6 +796,29 @@ learned word:
 On the store copy, `echo 'i think teh trekr repo shoudl work' | vocab` said
 "No issues found". It now flags `teh` and `shoudl` and accepts `trekr`.
 
+### Typo pairs **[done]**
+
+When the veto fires it has found the word meant, so the pair is worth keeping:
+`vocab typos` lists each with its evidence — the typo's count and documents,
+the intended word's count, the ratio, and the edit.
+
+**Derived on read, not stored.** Every number in a pair is already in
+`lexicon`, the scan takes a quarter of a second on a real store, and a stored
+copy would go stale the moment either count moved. Only what cannot be
+derived is stored: **a confirmation.** `vocab typos teh the` writes the
+`typos` table (schema v7). A confirmed pair holds whatever the counts later
+say, which is the ratchet: `user` outranks `observed` here as it does for
+words.
+
+- **"This word is real" is `vocab add`,** not a second table. It gives the
+  word `user` provenance, which the veto never touches, and drops any
+  confirmation of it. `vocab typos --rm teh` forgets a confirmation without
+  claiming the word.
+- **Confirming is refused** (exit 2) for a word from a deliberate source,
+  where it could never apply, and for a dictionary word: `form` is only wrong
+  beside `apart`, which is the real-word checker's job (§8), not a blanket
+  rule.
+
 **`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
 probability: a provenance constant plus a corroboration curve, never checked
 against outcomes. A `--confidence 80` filter would claim "80% of these are

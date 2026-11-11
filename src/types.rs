@@ -206,6 +206,50 @@ pub struct Finding {
 }
 
 /// One lexicon entry, as surfaced by `list` / `stats`.
+/// What the hand did to the intended word to produce a typo.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Edit {
+    /// Two adjacent letters swapped: `teh`.
+    Transposition,
+    /// A letter dropped: `shoud`.
+    Deletion,
+    /// A letter added: `shoulld`.
+    Insertion,
+    /// A letter replaced: `shoyld`.
+    Substitution,
+}
+
+impl Edit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Edit::Transposition => "transposition",
+            Edit::Deletion => "deletion",
+            Edit::Insertion => "insertion",
+            Edit::Substitution => "substitution",
+        }
+    }
+}
+
+/// A habitual typo and the word meant, with the evidence behind the pair.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TypoPair {
+    pub typo: String,
+    pub intended: String,
+    /// `user` when confirmed by hand, `observed` when derived from the counts.
+    pub source: Provenance,
+    /// Absent when a confirmed pair is not a single slip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit: Option<Edit>,
+    /// How often, and in how many documents, the typo was written.
+    pub count: i64,
+    pub docs: i64,
+    /// How often the intended word was written.
+    pub intended_count: i64,
+    /// `intended_count` over `count`: how far the real word dominates.
+    pub ratio: f64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Entry {
     pub word: String,

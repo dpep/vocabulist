@@ -7,6 +7,13 @@
 - **`vocab list --trusted`** lists the words that have earned trust: a
   deliberate source, or two independent documents and not a habitual typo.
   Ordinary English words you really use are included. It lists every match unless you pass `--limit`.
+- **`vocab typos`** lists your habitual typos and the word each one means,
+  with the evidence: how often you made it, how much more often you write the
+  real word, and the slip (`transposition`, …). `vocab typos teh the` confirms
+  a pair so it holds whatever the counts say; `vocab add` says a word is real
+  instead. The lexicon moves to schema 7 for the confirmations, so straight
+  after upgrading, read-only commands wait for any writing command to migrate
+  it (see below).
 - **`vocab list --uncommon`** drops words an ordinary dictionary already
   knows. It works on a plain `list` (keeping its default of 50) and composes
   with `--trusted`: `vocab list --trusted --uncommon -J` is exactly what

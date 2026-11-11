@@ -9,9 +9,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
-use crate::types::Provenance;
+use crate::types::{Edit, Provenance, TypoPair};
 
 /// Distinct documents an observed word needs. One sighting is equally
 /// evidence of a typo, and typos are bursty within a document.
@@ -28,31 +26,6 @@ const MIN_EDIT_LENGTH: usize = 5;
 /// Shortest word a transposition can convict — `teh`, `hte`.
 const MIN_SWAP_LENGTH: usize = 3;
 
-/// What the hand did to the intended word to produce the typo.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Edit {
-    /// Two adjacent letters swapped: `teh`.
-    Transposition,
-    /// A letter dropped: `shoud`.
-    Deletion,
-    /// A letter added: `shoulld`.
-    Insertion,
-    /// A letter replaced: `shoyld`.
-    Substitution,
-}
-
-impl Edit {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Edit::Transposition => "transposition",
-            Edit::Deletion => "deletion",
-            Edit::Insertion => "insertion",
-            Edit::Substitution => "substitution",
-        }
-    }
-}
-
 /// What the lexicon knows about one word, as far as trust is concerned.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Standing {
@@ -62,31 +35,32 @@ pub struct Standing {
     pub docs: i64,
 }
 
-/// A habitual typo, and the word the user meant.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Near {
-    pub intended: String,
-    pub edit: Edit,
-    /// How many times as often the user writes `intended`.
-    pub ratio: f64,
-}
-
 /// Every word's standing, so a judgement about one can consult its
 /// neighbours.
 #[derive(Default)]
 pub struct Trust {
     words: HashMap<String, Standing>,
+    /// Typo to intended word, as confirmed by hand.
+    confirmed: HashMap<String, String>,
 }
 
 impl FromIterator<(String, Standing)> for Trust {
     fn from_iter<I: IntoIterator<Item = (String, Standing)>>(iter: I) -> Self {
         Self {
             words: iter.into_iter().collect(),
+            confirmed: HashMap::new(),
         }
     }
 }
 
 impl Trust {
+    /// Attach the pairs the user confirmed. They hold whatever the counts
+    /// say, as a deliberate source does.
+    pub fn with_confirmed(mut self, confirmed: HashMap<String, String>) -> Self {
+        self.confirmed = confirmed;
+        self
+    }
+
     pub fn standing(&self, word: &str) -> Option<&Standing> {
         self.words.get(word)
     }
@@ -113,34 +87,86 @@ impl Trust {
         standing.docs >= MIN_DOCS && self.typo_of(word, in_dictionary).is_none()
     }
 
-    /// The word `word` is a habitual typo of, if it is one.
+    /// The word `word` is a habitual typo of, if it is one: confirmed by
+    /// hand, or derived from the counts.
     ///
     /// Never for a deliberate source — `trekr` is the user's even though they
-    /// write `trek` — and never for a dictionary word, or `form` would be a
-    /// typo of `from`.
-    pub fn typo_of(&self, word: &str, in_dictionary: impl Fn(&str) -> bool) -> Option<Near> {
-        let standing = self.words.get(word)?;
-        if standing.provenance > Provenance::Observed {
+    /// write `trek`. A derived pair is never a dictionary word either, or
+    /// `form` would be a typo of `from`.
+    pub fn typo_of(&self, word: &str, in_dictionary: impl Fn(&str) -> bool) -> Option<TypoPair> {
+        let standing = self.words.get(word);
+        if standing.is_some_and(|s| s.provenance > Provenance::Observed) {
             return None;
         }
-        let own = standing.count.max(1) as f64;
-        let mut best: Option<Near> = None;
-        for (candidate, edit) in typo_shaped_neighbours(word) {
-            let Some(neighbour) = self.words.get(&candidate) else {
-                continue;
-            };
-            let ratio = neighbour.count as f64 / own;
-            if ratio >= DOMINANCE && best.as_ref().is_none_or(|b| ratio > b.ratio) {
-                best = Some(Near {
-                    intended: candidate,
-                    edit,
-                    ratio,
-                });
-            }
+        let (count, docs) = standing.map_or((0, 0), |s| (s.count, s.docs));
+        let count_of = |w: &str| self.words.get(w).map_or(0, |s| s.count);
+        let ratio = |intended: &str| count_of(intended) as f64 / count.max(1) as f64;
+        let pair = |intended: String, source, edit| TypoPair {
+            // Two significant figures is what a ratio of small counts holds.
+            ratio: significant(ratio(&intended), 2),
+            intended_count: count_of(&intended),
+            typo: word.to_string(),
+            intended,
+            source,
+            edit,
+            count,
+            docs,
+        };
+
+        if let Some(intended) = self.confirmed.get(word) {
+            let edit = typo_shaped_neighbours(word)
+                .into_iter()
+                .find(|(c, _)| c == intended)
+                .map(|(_, e)| e);
+            return Some(pair(intended.clone(), Provenance::User, edit));
         }
+        standing?;
+        let (intended, edit) = typo_shaped_neighbours(word)
+            .into_iter()
+            .map(|(c, e)| (ratio(&c), c, e))
+            .filter(|(r, _, _)| *r >= DOMINANCE)
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, c, e)| (c, e))?;
         // Last, because it may load a dictionary and is rarely reached.
-        best.filter(|_| !in_dictionary(word))
+        if in_dictionary(word) {
+            return None;
+        }
+        Some(pair(intended, Provenance::Observed, Some(edit)))
     }
+
+    /// Every typo pair, confirmed first, then by how often the typo recurs.
+    pub fn typos(&self, in_dictionary: impl Fn(&str) -> bool) -> Vec<TypoPair> {
+        let observed = self
+            .words
+            .iter()
+            .filter(|(w, s)| {
+                s.provenance == Provenance::Observed && !self.confirmed.contains_key(*w)
+            })
+            .map(|(w, _)| w);
+        let mut pairs: Vec<TypoPair> = self
+            .confirmed
+            .keys()
+            .chain(observed)
+            .filter_map(|w| self.typo_of(w, &in_dictionary))
+            .collect();
+        pairs.sort_by(|a, b| {
+            b.source
+                .cmp(&a.source)
+                .then(b.docs.cmp(&a.docs))
+                .then(b.count.cmp(&a.count))
+                .then(a.typo.cmp(&b.typo))
+        });
+        pairs
+    }
+}
+
+/// `value` to `digits` significant figures.
+fn significant(value: f64, digits: i32) -> f64 {
+    if value <= 0.0 {
+        return 0.0;
+    }
+    let scale = 10f64.powi(digits - 1 - value.log10().floor() as i32);
+    (value * scale).round() / scale
 }
 
 /// The edit-distance-1 neighbours of `word` whose difference has the shape a
@@ -240,7 +266,7 @@ mod tests {
         let t = trust(&[("the", DEP, 600, 400), ("teh", OBS, 6, 6)]);
         let near = t.typo_of("teh", nowhere).unwrap();
         assert_eq!(near.intended, "the");
-        assert_eq!(near.edit, Edit::Transposition);
+        assert_eq!(near.edit, Some(Edit::Transposition));
         assert_eq!(near.ratio, 100.0);
     }
 
@@ -297,5 +323,55 @@ mod tests {
         assert!(!t.trusts("zblorg", nowhere));
         let t = trust(&[("zblorg", OBS, 4, 2)]);
         assert!(t.trusts("zblorg", nowhere));
+    }
+
+    fn confirmed(t: Trust, pairs: &[(&str, &str)]) -> Trust {
+        t.with_confirmed(
+            pairs
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_confirmed_typo_holds_whatever_the_counts_say() {
+        // Its neighbour is rare, so the counts alone would trust it.
+        let t = confirmed(
+            trust(&[("widget", DEP, 3, 3), ("wigdet", OBS, 40, 40)]),
+            &[("wigdet", "widget")],
+        );
+        assert!(!t.trusts("wigdet", nowhere));
+        let pair = t.typo_of("wigdet", nowhere).unwrap();
+        assert_eq!(pair.source, Provenance::User);
+        assert_eq!(pair.edit, Some(Edit::Transposition));
+    }
+
+    #[test]
+    fn a_deliberate_source_outranks_a_confirmation() {
+        let t = confirmed(
+            trust(&[("wigdet", Provenance::User, 1, 1)]),
+            &[("wigdet", "widget")],
+        );
+        assert!(t.typo_of("wigdet", nowhere).is_none());
+        assert!(t.trusts("wigdet", nowhere));
+    }
+
+    #[test]
+    fn typos_lists_confirmed_pairs_first_and_skips_dictionary_words() {
+        let t = confirmed(
+            trust(&[
+                ("the", DEP, 900, 500),
+                ("teh", OBS, 9, 9),
+                ("from", DEP, 900, 500),
+                ("form", OBS, 9, 9),
+            ]),
+            &[("zblorg", "widget")],
+        );
+        let pairs = t.typos(|w| w == "form");
+        let typos: Vec<&str> = pairs.iter().map(|p| p.typo.as_str()).collect();
+        assert_eq!(typos, ["zblorg", "teh"]);
+        // Ratios carry the precision their counts have.
+        assert_eq!(pairs[1].ratio, 100.0);
     }
 }

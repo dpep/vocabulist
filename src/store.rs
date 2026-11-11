@@ -22,7 +22,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -155,6 +155,16 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE TABLE IF NOT EXISTS captured (
     source_key TEXT PRIMARY KEY,
     captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Typos the user confirmed by hand, and the word each one means. Only the
+-- confirmed ones: a pair derived from the counts is computed on read
+-- (`trust.rs`), because its evidence is all in `lexicon` and a stored copy
+-- would go stale.
+CREATE TABLE IF NOT EXISTS typos (
+    typo TEXT PRIMARY KEY,
+    intended TEXT NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Small key/value corner for facts about the store itself, such as when it
@@ -466,7 +476,29 @@ impl Store {
                 },
             ))
         })?;
-        rows.collect()
+        let trust: Trust = rows.collect::<Result<_>>()?;
+        let mut stmt = self.conn.prepare("SELECT typo, intended FROM typos")?;
+        let confirmed = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(trust.with_confirmed(confirmed.collect::<Result<_>>()?))
+    }
+
+    /// Record that `typo` is the user's slip for `intended`, replacing any
+    /// earlier confirmation.
+    pub fn confirm_typo(&self, typo: &str, intended: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO typos (typo, intended) VALUES (?1, ?2)
+             ON CONFLICT(typo) DO UPDATE SET intended = ?2, added_at = CURRENT_TIMESTAMP",
+            params![typo, intended],
+        )?;
+        Ok(())
+    }
+
+    /// Forget a confirmed typo. Returns whether there was one.
+    pub fn forget_typo(&self, typo: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM typos WHERE typo = ?1", params![typo])?
+            > 0)
     }
 
     /// The people seen in captured messages: key, distinct days seen, and

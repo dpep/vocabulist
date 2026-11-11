@@ -166,6 +166,51 @@ fn a_habitual_typo_is_never_learned() {
 }
 
 #[test]
+fn typos_are_learned_confirmed_and_retracted() {
+    let db = scratch_db("typos");
+    let body = "the zblorg and the widget, the rest of the day the plan was the \
+                same as the last, with teh usual result";
+    learn(&db, body, "first");
+
+    let out = vocab(&db, &["typos", "-J"]);
+    assert_eq!(out.code, 0);
+    let pair: serde_json::Value = serde_json::from_str(out.stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(pair["typo"], "teh");
+    assert_eq!(pair["intended"], "the");
+    assert_eq!(pair["source"], "observed");
+    assert_eq!(pair["edit"], "transposition");
+
+    // Confirming holds whatever the counts later say.
+    assert_eq!(vocab(&db, &["typos", "zblorg", "widget"]).code, 0);
+    let out = vocab(&db, &["typos", "-J"]);
+    let first: serde_json::Value =
+        serde_json::from_str(out.stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(first["typo"], "zblorg");
+    assert_eq!(first["source"], "user");
+
+    // Saying a word is real retracts calling it a typo.
+    assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
+    assert_eq!(vocab(&db, &["add", "teh"]).code, 0);
+    assert_eq!(vocab(&db, &["typos"]).code, 1, "nothing left is grep's 1");
+}
+
+#[test]
+fn a_typo_confirmation_that_could_never_apply_is_refused() {
+    let db = scratch_db("typo-refused");
+    assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
+    // A deliberate source outranks a confirmation.
+    assert_eq!(vocab(&db, &["typos", "zblorg", "widget"]).code, 2);
+    // A dictionary word is only wrong in context.
+    assert_eq!(vocab(&db, &["typos", "form", "from"]).code, 2);
+    assert_eq!(
+        vocab(&db, &["typos", "teh"]).code,
+        2,
+        "a pair needs both words"
+    );
+    assert_eq!(vocab(&db, &["typos", "--rm", "teh"]).code, 1);
+}
+
+#[test]
 fn assistant_authored_text_gives_vocabulary_but_not_voice() {
     let db = scratch_db("watermark");
     let body = "the frobnicator handles retries\n\nCo-Authored-By: Claude Opus 5 <x>";

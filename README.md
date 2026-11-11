@@ -61,6 +61,20 @@ skips anything that isn't plausibly prose — short tokens, anything with a
 digit, ALLCAPS, camelCase, URLs, paths, email addresses, inline code, fenced
 blocks, indented lines — before it forms an opinion.
 
+## Your typos, learned as typos
+
+When a word is held back as a slip, `vocab` knows which word you meant, and
+says so with the evidence:
+
+```sh
+$ vocab typos
+teh                  the                  observed  transposition     9 docs  x660
+shoudl               should               observed  transposition     5 docs  x130
+```
+
+`vocab typos teh the` confirms a pair, so it holds whatever the counts later
+say. If one is wrong — a spelling you really use — `vocab add` it.
+
 ## Contractions
 
 `dont` → `don't`, as its own high-confidence finding rather than a guess. Edit
@@ -254,6 +268,7 @@ vocab list rubo                # lexicon entries matching "rubo"
 vocab list --trusted -J        # words you've really used, ordinary English included
 vocab list --trusted --uncommon -J  # exactly what `sync` exports: your jargon
 vocab add contextdb iriq       # add by hand (top provenance, never pruned)
+vocab typos -J                 # your habitual typos and the word each one means
 vocab status                   # what the store knows, and where it exports
 vocab phrases -n 3             # the three-word phrases you actually repeat
 vocab self                     # the handles believed to be yours

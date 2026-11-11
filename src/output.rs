@@ -9,7 +9,7 @@ use std::io::Write;
 use serde_json::json;
 
 use crate::cli::Format;
-use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus};
+use crate::types::{Entry, Finding, SeedReport, StatusPayload, StoreStatus, TypoPair};
 
 /// The single structured-output path for findings. `-j` is a pretty array,
 /// `-J` is one object per line, so single-blob and streamed input emit an
@@ -693,6 +693,41 @@ pub fn render_identities(
                 .map(|(handle, source)| json!({ "handle": handle, "source": source }))
                 .collect();
             emit(out, &json!(rows), format)
+        }
+    }
+}
+
+pub fn render_typos(
+    out: &mut impl Write,
+    pairs: &[TypoPair],
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            if pairs.is_empty() {
+                return writeln!(out, "No typos.");
+            }
+            for p in pairs {
+                let edit = p.edit.map_or("", |e| e.as_str());
+                writeln!(
+                    out,
+                    "{:<20} {:<20} {:<9} {:<14} {:>4} docs  x{}",
+                    p.typo,
+                    p.intended,
+                    p.source.as_str(),
+                    edit,
+                    p.docs,
+                    p.ratio
+                )?;
+            }
+            Ok(())
+        }
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(pairs).unwrap()),
+        Format::Ndjson => {
+            for p in pairs {
+                writeln!(out, "{}", serde_json::to_string(p).unwrap())?;
+            }
+            Ok(())
         }
     }
 }
