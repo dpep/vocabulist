@@ -50,6 +50,8 @@
 - **A very long line no longer takes minutes.** Checking was quadratic in
   the length of a line, so a 96 KB single line (a pasted log, a minified
   file) ran for minutes; it now takes seconds.
+- **`vocab list | head` exits quietly** instead of printing `Broken pipe (os
+  error 32)` and exiting 2.
 
 ### Docs
 

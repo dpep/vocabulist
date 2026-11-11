@@ -536,6 +536,14 @@ pub fn run() -> ExitCode {
 
     match dispatch(&cli) {
         Ok(code) => code,
+        // `vocab list | head`: the reader had what it wanted and left. Not
+        // an error, and nothing to say about it.
+        Err(e)
+            if e.downcast_ref::<io::Error>()
+                .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe) =>
+        {
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("vocab: {e}");
             // Distinct from 1, which means "findings". A CI step has to be

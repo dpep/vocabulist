@@ -1339,3 +1339,22 @@ fn a_very_long_line_is_checked_in_linear_time() {
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
 }
+
+#[test]
+fn a_closed_pipe_is_not_an_error() {
+    // `vocab list | head`: the reader leaves before the writer is done.
+    let db = trust_fixture("closed_pipe");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .arg("--db")
+        .arg(&db)
+        .args(["list", "--limit", "1000"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("Broken pipe"), "{stderr}");
+    assert_ne!(out.status.code(), Some(2), "{stderr}");
+}
