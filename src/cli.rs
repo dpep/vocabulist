@@ -551,6 +551,9 @@ fn dispatch_inner(
     cli: &Cli,
     profile: &Rc<Profile>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    if let Some(Command::Hook { event }) = &cli.command {
+        return Ok(hook(cli, event));
+    }
     // Checking is a writer: it seeds the default lexicon on first use.
     let access = cli.command.as_ref().map_or(Access::Write, Command::access);
     let store = profile.time(
@@ -956,18 +959,40 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
-        Some(Command::Hook { event }) => {
-            // Fail-open throughout: an unparseable payload is a no-op, never
-            // an error in front of the user.
-            let body = read_stdin().unwrap_or_default();
-            let input = serde_json::from_str(&body).unwrap_or_default();
-            crate::hook::run(event, &store, &input);
-            Ok(ExitCode::SUCCESS)
-        }
+        Some(Command::Hook { .. }) => unreachable!("hooks return before the store opens"),
 
         None if cli.fix || cli.expand => fix_input(cli, &store, format, &mut out, profile),
         None => check_input(cli, &store, format, &mut out, profile),
     }
+}
+
+/// How long a hook waits on another process's write lock before giving up.
+///
+/// The prompt hooks run synchronously in front of the user, and a held lock
+/// can be a seed or a spool run lasting seconds, so waiting it out is never
+/// worth it: losing one capture costs a sighting, waiting costs a visible
+/// stall. Long enough for another hook's own capture, a few milliseconds of
+/// writing, so two hooks firing together don't drop each other.
+const HOOK_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// `vocab hook`: always exits 0, whatever happens.
+///
+/// Claude Code reads exit 2 from a prompt hook as "block this prompt" and
+/// erases what the user typed, so a store that will not open — missing
+/// permissions, a newer schema, a held lock — is skipped, not reported as an
+/// error. It goes to stderr, which Claude Code shows only in its transcript
+/// view on exit 0; stdout would be injected into the prompt.
+fn hook(cli: &Cli, event: &str) -> ExitCode {
+    // An unparseable payload is a no-op, never an error in front of the user.
+    let body = read_stdin().unwrap_or_default();
+    let input = serde_json::from_str(&body).unwrap_or_default();
+    match Store::open_waiting(cli.db_path(), HOOK_BUSY_TIMEOUT) {
+        Ok(store) => {
+            crate::hook::run(event, &store, &input);
+        }
+        Err(e) => log::warn!("hook {event} skipped: {e}"),
+    }
+    ExitCode::SUCCESS
 }
 
 /// One named target, or all of them.

@@ -8,6 +8,7 @@
 //! general-purpose firehose, which retains blobs so it can re-extract later.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, params};
 
@@ -24,6 +25,10 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
 pub const SCHEMA_VERSION: i64 = 8;
+
+/// How long an ordinary command waits on another process's write lock: long
+/// enough to sit out a seed or a spool run finishing.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Sentence lengths above this are counted in the top bucket. Bounds the
 /// histogram against a pathological line (a minified file, a wall of text)
@@ -305,12 +310,18 @@ pub struct Store {
 
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_waiting(path, BUSY_TIMEOUT)
+    }
+
+    /// [`Store::open`], giving up on a held write lock after `busy` rather
+    /// than the default — for callers that cannot afford to wait.
+    pub fn open_waiting(path: impl AsRef<Path>, busy: Duration) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(&path)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(busy)?;
         conn.execute_batch(SCHEMA)?;
         migrate(&conn)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -336,7 +347,7 @@ impl Store {
             .into());
         }
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         let store = Self { conn, path };
         let found = store.schema_version()?;
         if found > SCHEMA_VERSION {

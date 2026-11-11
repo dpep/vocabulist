@@ -1400,7 +1400,11 @@ Hooks in the myclaude plugin: `UserPromptSubmit` (prompt register),
 `vocab capture` for existing repos and sent mail. Concurrency is handled by SQLite's
 `BEGIN IMMEDIATE` plus a busy timeout rather than the leader election `ae`
 uses: the writes here are short and infrequent, so a lock is enough and a
-socket would be machinery without a purpose.
+socket would be machinery without a purpose. A hook waits 250 ms on that
+lock rather than the 5 s other commands do, and anything that stops it opening
+the store — the lock, a newer schema, an unreadable path — skips the event
+and exits 0: Claude Code reads a prompt hook's exit 2 as "block", which erases
+what the user typed, and a lost capture costs one sighting.
 
 **Phase 3 — precision** ✅
 The frequency-ranked word list landed and took the other three complaints with

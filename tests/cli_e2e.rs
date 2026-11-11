@@ -1063,3 +1063,41 @@ fn trusted_keeps_ordinary_words_and_uncommon_drops_them() {
     assert!(uncommon.contains(&"frobnix".to_string()));
     assert_eq!(uncommon.len(), 50);
 }
+
+const PROMPT: &str = r#"{"hook_event_name":"UserPromptSubmit","prompt":"we shipped the widget"}"#;
+
+#[test]
+fn a_hook_exits_zero_when_the_store_will_not_open() {
+    // A directory where the database should be: nothing can open it.
+    let db = scratch_db("hook_unopenable");
+    std::fs::create_dir_all(&db).unwrap();
+    let out = run(&db, &["hook", "user-prompt-submit"], Some(PROMPT));
+    assert_eq!(out.code, 0, "exit 2 would block the prompt: {}", out.stderr);
+    assert_eq!(
+        out.stdout, "",
+        "a hook's stdout is injected into the prompt"
+    );
+}
+
+#[test]
+fn a_hook_does_not_wait_on_a_held_writer_lock() {
+    let db = scratch_db("hook_locked");
+    vocab(&db, &["add", "zblorg"]);
+
+    let writer = rusqlite::Connection::open(&db).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+        .execute("UPDATE lexicon SET count = count + 1", [])
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let out = run(&db, &["hook", "user-prompt-submit"], Some(PROMPT));
+    let waited = started.elapsed();
+    writer.execute_batch("ROLLBACK").unwrap();
+
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(
+        waited < std::time::Duration::from_secs(1),
+        "the prompt waited {waited:?}"
+    );
+}
