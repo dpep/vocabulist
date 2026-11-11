@@ -1001,6 +1001,8 @@ pub struct Scanner<'a> {
     names: Names,
     /// Whether the line last fed was prose, and so checked.
     prose: bool,
+    /// Inside an HTML `<pre>` block opened on an earlier line.
+    in_pre: bool,
 }
 
 impl<'a> Scanner<'a> {
@@ -1012,6 +1014,7 @@ impl<'a> Scanner<'a> {
             line_no: 0,
             names: Names::new(),
             prose: false,
+            in_pre: false,
         }
     }
 
@@ -1047,8 +1050,16 @@ impl<'a> Scanner<'a> {
         // A README introduces a tool in a table row or an install command and
         // only then writes a sentence about it, so the lines being skipped
         // here are what make the prose below them checkable.
-        if self.fence.is_some() || !text::is_prose_line(line) {
+        if self.fence.is_some() || self.in_pre || !text::is_prose_line(line) {
             self.names.observe_code(line);
+        }
+
+        // HTML's fence. The opening line is checked with the block masked,
+        // and the closing one is skipped whole: what follows `</pre>` on it
+        // is rare enough not to be worth splitting the line for.
+        if self.in_pre {
+            self.in_pre = !line.to_ascii_lowercase().contains("</pre>");
+            return Vec::new();
         }
 
         // Fences: ``` or ~~~, closed by the same marker. Tracking which one
@@ -1064,6 +1075,7 @@ impl<'a> Scanner<'a> {
             return Vec::new();
         }
 
+        self.in_pre = text::opens_pre(line);
         self.prose = true;
         self.checker
             .check_line(line, self.line_no, &mut self.names, evidence)
@@ -1311,6 +1323,17 @@ mod tests {
         );
         // Your own lexicon is not held to English grammar.
         assert_eq!(suggested("we said yall so"), vec!["y'all"]);
+    }
+
+    #[test]
+    fn a_pre_inside_a_fence_opens_nothing() {
+        let c = checker(&[], &["the", "end", "then"]);
+        let mut scanner = Scanner::new(&c);
+        let mut found = Vec::new();
+        for line in ["```", "<pre>", "```", "then zzqx the end"] {
+            found.extend(scanner.feed(line, &mut no_evidence));
+        }
+        assert_eq!(found.len(), 1, "the prose after the fence is checked");
     }
 
     #[test]

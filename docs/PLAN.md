@@ -862,8 +862,9 @@ the argument.
   typo pair at tier `confirmed` or `inferred` (below). A `candidate` pair is
   suggested by the checker and never written.
 - **It rides the checker.** A finding becomes a fix only if
-  `Checker::correction` says so, so masking (code spans, URLs, fenced blocks,
-  indented lines), names the document introduces, and proper nouns all carry
+  `Checker::correction` says so, so masking (code spans and their HTML
+  spellings `<code>`, `<kbd>`, `<pre>`, `<samp>`, URLs, fenced blocks and
+  `<pre>` blocks, indented lines), names the document introduces, and proper nouns all carry
   over unchanged. One consequence: a document that writes `teh` in a code span
   or URL has named it, so the prose `teh` is accepted and left alone, exactly
   as the checker would.

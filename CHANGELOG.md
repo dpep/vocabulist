@@ -32,6 +32,9 @@
   `een`, `oer`, `neer`, `eer` and `Hed` are no longer rewritten to `e'en`,
   `o'er`, `ne'er`, `e'er` and `He'd`. Your own lexicon's forms (`y'all`) still
   count. `ive` now becomes `I've`, not `i've`.
+- **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code
+  spans**, so their contents are neither flagged nor rewritten, and a `<pre>`
+  block spanning lines is skipped like a fenced one.
 
 ## 0.6.0 — 2026-11-11
 

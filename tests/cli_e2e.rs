@@ -1276,3 +1276,23 @@ fn fix_and_expand_leave_code_shaped_words_alone() {
         out.stderr
     );
 }
+
+#[test]
+fn fix_leaves_html_code_elements_alone() {
+    let db = scratch_db("fix-html-code");
+    let input = "then you can run <code>git dont now</code> in the shell whenever you like\n\
+                 and then press <KBD>ctrl dont x</KBD> on the keyboard to make it stop\n\
+                 the output reads <samp>it dont work</samp> when the whole thing worked\n\
+                 the listing below has <pre>so dont go</pre> written right there in it\n\
+                 <pre class=\"x\">\n\
+                 dont peopel\n\
+                 </pre>\n\
+                 but dont\n";
+    let out = run(&db, &["--fix"], Some(input));
+    assert_eq!(
+        out.stdout,
+        input.replace("but dont", "but don't"),
+        "{}",
+        out.stderr
+    );
+}

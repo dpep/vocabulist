@@ -211,8 +211,12 @@ pub fn mask_non_prose(line: &str) -> String {
     // Every marker below is ASCII, so nothing is lost.
     let lower: String = line.chars().map(|c| c.to_ascii_lowercase()).collect();
 
-    // Inline code spans.
+    // Inline code spans, and their HTML spellings — before the tags go, or
+    // only the tags would.
     mask_delimited(&mut out, line, '`', '`');
+    for element in CODE_ELEMENTS {
+        mask_element(&mut out, &lower, element);
+    }
     // Markup tags. Captured text arrives wrapped in them more often than you
     // would think — tool payloads, hook envelopes, HTML in an email — and a
     // tag name is an identifier that happens to sit between angle brackets.
@@ -267,6 +271,57 @@ fn mask_iris(out: &mut [char], line: &str) {
             }
             from = byte + needle.len();
         }
+    }
+}
+
+/// HTML elements whose contents are code or machine output, never prose.
+pub const CODE_ELEMENTS: &[&str] = &["code", "kbd", "pre", "samp"];
+
+/// Where `<element>` (or `<element attr…>`) opens in `lower`, from `from`:
+/// the char index of the `<` and of the char after the open tag's `>`.
+fn find_open(chars: &[char], element: &str, from: usize) -> Option<(usize, usize)> {
+    let name: Vec<char> = element.chars().collect();
+    (from..chars.len()).find_map(|i| {
+        let after_name = i + 1 + name.len();
+        let opens = chars[i] == '<'
+            && chars.get(i + 1..after_name) == Some(&name[..])
+            && matches!(chars.get(after_name), Some('>' | ' '));
+        if !opens {
+            return None;
+        }
+        let close = (after_name..chars.len()).find(|&j| chars[j] == '>')?;
+        Some((i, close + 1))
+    })
+}
+
+/// Whether `line` opens `<pre>` and leaves it open, so the lines below are
+/// inside it until one closes it.
+pub fn opens_pre(line: &str) -> bool {
+    let lower: Vec<char> = line.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let close: Vec<char> = "</pre>".chars().collect();
+    let mut from = 0;
+    let mut open = false;
+    while let Some((_, body)) = find_open(&lower, "pre", from) {
+        open = !lower[body..].windows(close.len()).any(|w| w == &close[..]);
+        from = body;
+    }
+    open
+}
+
+/// Mask `<element>…</element>` whole, tags and contents. An element left
+/// open runs to the end of the line.
+fn mask_element(out: &mut [char], lower: &str, element: &str) {
+    let chars: Vec<char> = lower.chars().collect();
+    let close: Vec<char> = format!("</{element}>").chars().collect();
+    let mut from = 0;
+    while let Some((start, body)) = find_open(&chars, element, from) {
+        let end = (body..chars.len())
+            .find(|&j| chars[j..].starts_with(&close))
+            .map_or(chars.len(), |j| j + close.len());
+        for c in out.iter_mut().take(end).skip(start) {
+            *c = ' ';
+        }
+        from = end;
     }
 }
 
@@ -468,6 +523,23 @@ pub fn normalize(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_code_elements_are_masked_whole() {
+        let masked = mask_non_prose("see <code>a b</code> and <Kbd x=1>c</Kbd> or <pre>d");
+        assert_eq!(tokenize(&masked).len(), 3, "{masked:?}");
+        assert_eq!(masked.chars().count(), 51, "columns survive");
+        // Not an element: a tag whose name only starts the same way.
+        assert!(mask_non_prose("<codex>word</codex>").contains("word"));
+    }
+
+    #[test]
+    fn a_pre_left_open_is_noticed() {
+        assert!(opens_pre("<pre class=\"x\">"));
+        assert!(!opens_pre("<pre>x</pre>"));
+        assert!(opens_pre("<pre>x</pre> and <PRE>"));
+        assert!(!opens_pre("<prefix>"));
+    }
 
     #[test]
     fn tokenizes_with_columns() {
