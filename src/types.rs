@@ -205,7 +205,6 @@ pub struct Finding {
     pub confidence: f32,
 }
 
-/// One lexicon entry, as surfaced by `list` / `stats`.
 /// One correction `--fix` applied.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Fix {
@@ -216,7 +215,18 @@ pub struct Fix {
     pub from: String,
     /// As written back, in the case `from` was typed in.
     pub to: String,
-    pub kind: FindingKind,
+    pub kind: FixKind,
+}
+
+/// Why a word was rewritten. Its own type, not [`FindingKind`]: a real-word
+/// finding is never written back.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum FixKind {
+    /// A slip: a typo pair, or one the checker's suggestion all but settles.
+    Unknown,
+    /// An apostrophe restored.
+    Contraction,
 }
 
 /// What the hand did to the intended word to produce a typo.

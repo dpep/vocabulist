@@ -758,7 +758,7 @@ mod tests {
             col: 1,
             from: from.into(),
             to: to.into(),
-            kind: FindingKind::Unknown,
+            kind: crate::types::FixKind::Unknown,
         };
         let mut report = score(&[], &injections, 3, 30);
         let fixes = [

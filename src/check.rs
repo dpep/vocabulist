@@ -14,7 +14,7 @@ use crate::ngram;
 use crate::profile::Profile;
 use crate::text::{self, Token};
 use crate::trust::Trust;
-use crate::types::{Edit, Finding, FindingKind, Suggestion, Tier};
+use crate::types::{Edit, Finding, FindingKind, Fix, FixKind, Suggestion, Tier};
 
 /// Maximum edit distance we'll suggest across.
 const MAX_EDIT_DISTANCE: usize = 2;
@@ -647,6 +647,22 @@ impl Checker {
             }
             FindingKind::RealWord => None,
         }
+    }
+
+    /// The finding as the change `--fix` would make, if it would make one.
+    pub fn fix(&self, finding: &Finding) -> Option<Fix> {
+        let kind = match finding.kind {
+            FindingKind::Unknown => FixKind::Unknown,
+            FindingKind::Contraction => FixKind::Contraction,
+            FindingKind::RealWord => return None,
+        };
+        Some(Fix {
+            line: finding.line,
+            col: finding.col,
+            from: finding.word.clone(),
+            to: self.correction(finding)?,
+            kind,
+        })
     }
 
     fn unknown_finding(&self, token: &Token, word: &str, line_no: usize) -> Finding {

@@ -859,18 +859,8 @@ fn dispatch_inner(
                 .lines()
                 .map(|l| crate::text::prose_words(l).len())
                 .sum();
-            let fixes: Vec<crate::types::Fix> = findings
-                .iter()
-                .filter_map(|f| {
-                    Some(crate::types::Fix {
-                        line: f.line,
-                        col: f.col,
-                        from: f.word.clone(),
-                        to: checker.correction(f)?,
-                        kind: f.kind,
-                    })
-                })
-                .collect();
+            let fixes: Vec<crate::types::Fix> =
+                findings.iter().filter_map(|f| checker.fix(f)).collect();
             let mut report =
                 crate::eval::score(&findings, &injections, mutated.lines().count(), words);
             crate::eval::score_fixes(&mut report, &fixes, &injections);
@@ -1187,23 +1177,14 @@ fn fix_input(
     let mut log = io::stderr().lock();
     let mut rewritten = String::new();
     let mut applied = Vec::new();
-    for (index, raw) in lines.enumerate() {
+    for raw in lines {
         let raw = raw?;
         let body = raw.trim_end_matches(['\n', '\r']);
         let ending = &raw[body.len()..];
         let wanted = scanner
             .feed(body, &mut evidence)
-            .into_iter()
-            .filter_map(|finding| {
-                let to = checker.correction(&finding)?;
-                Some(crate::types::Fix {
-                    line: index + 1,
-                    col: finding.col,
-                    from: finding.word,
-                    to,
-                    kind: finding.kind,
-                })
-            })
+            .iter()
+            .filter_map(|finding| checker.fix(finding))
             .collect();
         let (fixed, landed) = crate::fix::apply(body, wanted);
         for fix in &landed {

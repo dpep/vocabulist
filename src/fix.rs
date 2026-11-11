@@ -58,7 +58,7 @@ fn match_case(from: &str, to: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::FindingKind;
+    use crate::types::FixKind;
 
     fn fix(col: usize, from: &str, to: &str) -> Fix {
         Fix {
@@ -66,7 +66,7 @@ mod tests {
             col,
             from: from.to_string(),
             to: to.to_string(),
-            kind: FindingKind::Unknown,
+            kind: FixKind::Unknown,
         }
     }
 
