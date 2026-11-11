@@ -652,17 +652,25 @@ fn dispatch_inner(
         }
 
         Some(Command::Add { words }) => {
-            let mut added = 0;
+            let (mut added, mut upgraded) = (0, 0);
             for word in words {
                 let normalized = text::normalize(word);
-                let (is_new, _) =
+                let (is_new, stronger) =
                     store.upsert_word(&normalized, word, crate::types::Provenance::User, 1)?;
                 // Saying a word is real retracts calling it a typo.
                 store.forget_typo(&normalized)?;
                 added += usize::from(is_new);
+                upgraded += usize::from(stronger);
             }
             if !cli.quiet {
-                output::status(&mut out, &format!("added {added}"), format)?;
+                // An upgrade is the point of adding a word already seen: it
+                // now silences the checker. "added 0" read as nothing done.
+                let message = if upgraded > 0 {
+                    format!("added {added}, upgraded {upgraded}")
+                } else {
+                    format!("added {added}")
+                };
+                output::status(&mut out, &message, format)?;
             }
             Ok(ExitCode::SUCCESS)
         }

@@ -54,6 +54,8 @@
   error 32)` and exiting 2.
 - **`vocab typos` refuses a pair that is not one word each** (`teh "the
   end"`, `t3h the`), which `--fix` could never apply sensibly.
+- **`vocab add` reports an upgrade:** adding a word already learned from
+  your text said `added 0`; it now says `added 0, upgraded 1`.
 
 ### Docs
 

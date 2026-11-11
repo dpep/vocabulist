@@ -1371,3 +1371,13 @@ fn a_closed_pipe_is_not_an_error() {
     assert!(!stderr.contains("Broken pipe"), "{stderr}");
     assert_ne!(out.status.code(), Some(2), "{stderr}");
 }
+
+#[test]
+fn adding_a_word_already_seen_says_it_was_upgraded() {
+    let db = scratch_db("add-upgrade");
+    learn(&db, "we shipped the zblorg today", "first");
+    let out = vocab(&db, &["add", "zblorg", "widgetry"]);
+    assert_eq!(out.stdout.trim(), "added 1, upgraded 1");
+    let out = vocab(&db, &["add", "zblorg"]);
+    assert_eq!(out.stdout.trim(), "added 0", "already yours");
+}
