@@ -40,6 +40,10 @@
   meaning is stored lowercase (`repro=REPRODUCE`). A shorthand you already
   confirmed for a dictionary word is kept; `vocab shorthand --rm` it if
   `--expand` writes it where you meant the word.
+- **A `--db` that was never seeded knows how common words are.** It had no
+  frequency table, so scores went flat and a never-seen slip like `teh` was
+  never fixed. The embedded core frequencies now stand in, in memory, without
+  writing the lexicon.
 
 ## 0.6.0 — 2026-11-11
 

@@ -914,13 +914,25 @@ impl Store {
         Ok(())
     }
 
-    /// The whole frequency table, summed across sources.
+    /// The whole frequency table, summed across sources — or, for a lexicon
+    /// never seeded, the embedded core list it would have been seeded with.
+    ///
+    /// In memory rather than written, because the caller is usually a check,
+    /// and reading never writes. Without it an unseeded `--db` scored every
+    /// word alike and the never-seen-slip fix could not fire.
     pub fn frequencies(&self) -> Result<std::collections::HashMap<String, i64>> {
         let mut stmt = self
             .conn
             .prepare("SELECT word, SUM(count) FROM frequency GROUP BY word")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
-        rows.collect()
+        let table: std::collections::HashMap<String, i64> = rows.collect::<Result<_>>()?;
+        if !table.is_empty() {
+            return Ok(table);
+        }
+        Ok(crate::frequency::core_counts()
+            .into_iter()
+            .map(|(word, count)| (word.to_string(), count))
+            .collect())
     }
 
     /// Seed the embedded core list. Idempotent by design — re-seeding takes

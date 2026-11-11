@@ -1316,3 +1316,14 @@ fn fix_leaves_html_code_elements_alone() {
         out.stderr
     );
 }
+
+#[test]
+fn an_unseeded_lexicon_still_knows_how_common_words_are() {
+    // Never seeded, so no frequency table: the embedded core list stands in.
+    let db = scratch_db("unseeded-frequency");
+    assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
+    let before = fingerprint(&db);
+    let out = run(&db, &["--fix"], Some("what is teh plan\n"));
+    assert_eq!(out.stdout, "what is the plan\n", "{}", out.stderr);
+    assert!(fingerprint(&db) == before, "reading never writes");
+}

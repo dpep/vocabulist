@@ -948,7 +948,10 @@ the user writes much — gets one more chance: the checker's own suggestions.
 word, holds at least half the edit model's belief (more than every other
 reading together), and `held_back` has nothing against it. `waht`, `doign`,
 `peopel` are fixed on a fresh install; `whta` (not a swap) and `centre` (a
-variant) are not.
+variant) are not. A lexicon never seeded (a scratch `--db`) has no frequency
+table, so `Store::frequencies` falls back to the embedded core list in
+memory: without it every word scored alike and `teh` was never fixed. Only
+the core list, so `waht`, which the mined counts settle, stays unfixed there.
 
 The threshold is measured. Read cold (a lexicon with nothing in it), all 7,775
 observed words on the store copy produced 61 such transpositions. One was a
