@@ -20,7 +20,7 @@
 # Two maintainer-only targets rebuild the bundled data. They are the ONLY
 # things here that touch the network, and users never run them:
 #
-#   make data       - regenerate data/wordlist.txt and data/cues.txt
+#   make data       - regenerate data/wordlist.txt, data/propernames.txt and data/cues.txt
 #   make data-cues  - just the cue table (~20 min, streams ~39 GB)
 #
 # Everything in data/ is generated, committed, and embedded at compile time, so
@@ -56,7 +56,7 @@ help:
 	@echo "  make clean      cargo clean"
 	@echo ""
 	@echo "maintainer only (network, slow, output is committed):"
-	@echo "  make data       regenerate data/wordlist.txt and data/cues.txt"
+	@echo "  make data       regenerate data/wordlist.txt, data/propernames.txt and data/cues.txt"
 	@echo "  make data-words SCOWL word list only"
 	@echo "  make data-cues  re-derive cues from committed counts (seconds)"
 	@echo "  make data-cue-counts  refetch counts from Google Books (~39 GB)"

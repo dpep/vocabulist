@@ -58,6 +58,15 @@
   your text said `added 0`; it now says `added 0, upgraded 1`.
 - **`--fix` keeps curly apostrophes curly:** on a line typed with `’`,
   `dont` becomes `don’t` and `Teh’s` becomes `The’s`, not a straight `'`.
+- **Proper names are known as proper names.** SCOWL's word lists hold no
+  capitalized words, so `vocab list --uncommon` (and `sync`) passed `latin`
+  and `america` as your jargon, and the checker flagged `Latino` and
+  `Americans`. A bundled list of SCOWL's proper names (places, peoples,
+  given names; levels 10-60, same licence) now drops those from
+  `--uncommon` and accepts them when typed capitalized. Lowercase, a name is
+  still checked, so a slip cannot hide behind one. On a real lexicon this
+  drops about 1% of the export, including `linux` and `apache`, which a
+  dictionary knows capitalized.
 
 ### Docs
 

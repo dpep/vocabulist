@@ -455,8 +455,13 @@ composable steps, each defined once:
   because a word the user really writes helps a consumer like transcription
   even when every dictionary has it. It names a set, so it lists all of it
   unless `--limit` is given.
-- `--uncommon` (`sync::retain_uncommon`) drops what the dictionary knows. It
-  is a filter, not a set, so on a plain `list` it keeps the browse's default
+- `--uncommon` (`sync::retain_uncommon`) drops what the dictionary knows,
+  as a word or as a proper name (`latin`, `america`): SCOWL's word lists hold
+  no capitalized words, so without the bundled proper names a place or a
+  people passed as the user's jargon and a transcription consumer "corrected"
+  `Latino` to `Latin`. On a real store this drops 40 of 3,425 words, among
+  them `linux`, `apache` and `prometheus`, which a dictionary does know
+  capitalized. It is a filter, not a set, so on a plain `list` it keeps the browse's default
   limit of 50. Without a dictionary it refuses (exit 2) rather than passing
   everything through: "uncommon" is a claim the dictionary backs, and a
   warning on stderr is invisible to a `-J` consumer. The dictionary is
@@ -1377,6 +1382,7 @@ flagging either.
 | File | Built by | Source | License |
 |---|---|---|---|
 | `wordlist.txt` (982 KB) | `script/build-wordlist.sh` | SCOWL levels 10–60, `english-*` + `american-*` | public-domain sources under an MIT-like grant |
+| `propernames.txt` (140 KB) | `script/build-wordlist.sh` | SCOWL levels 10–60, `english-upper` + `american-upper` | the same |
 | `cues.txt` | `script/build-cues.sh` | Google Books Ngrams, `eng-all` 2-grams | CC BY 3.0 |
 
 **The split is the point.** Deriving the cue table streams about 39 GB and

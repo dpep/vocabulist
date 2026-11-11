@@ -107,6 +107,8 @@ pub struct Checker {
     /// display form). A full name is one entry.
     people: std::collections::HashMap<String, (i64, String)>,
     dictionary: OnceCell<Option<crate::dict::Dictionary>>,
+    /// Proper names a dictionary knows, accepted only as typed capitalized.
+    proper_names: OnceCell<crate::dict::Dictionary>,
     /// Contractions derived from the dictionary and your lexicon, beyond the
     /// static table. Lazy, because building it needs the dictionary and the
     /// static table already covers the common cases.
@@ -127,6 +129,8 @@ impl Checker {
             from_naming_source: HashSet::new(),
             people: std::collections::HashMap::new(),
             dictionary: cell,
+            // A fixture dictionary comes without names unless a test adds them.
+            proper_names: OnceCell::from(Vec::new()),
             derived_contractions: OnceCell::new(),
             profile: Rc::new(Profile::disabled()),
         }
@@ -141,6 +145,7 @@ impl Checker {
             from_naming_source: HashSet::new(),
             people: std::collections::HashMap::new(),
             dictionary: OnceCell::new(),
+            proper_names: OnceCell::new(),
             derived_contractions: OnceCell::new(),
             profile,
         }
@@ -433,6 +438,24 @@ impl Checker {
         self.in_dictionary(word)
     }
 
+    /// Attach proper names, for a checker built over a fixture dictionary.
+    #[cfg(test)]
+    fn with_proper_names(self, names: crate::dict::Dictionary) -> Self {
+        Self {
+            proper_names: OnceCell::from(names),
+            ..self
+        }
+    }
+
+    /// Is `word` a proper name a dictionary knows: `latino`, `americans`?
+    fn is_proper_name(&self, word: &str) -> bool {
+        let names = self.proper_names.get_or_init(|| {
+            self.profile
+                .time("proper_names_load", crate::dict::proper_names)
+        });
+        crate::dict::contains(names, word)
+    }
+
     fn in_dictionary(&self, word: &str) -> bool {
         self.dictionary()
             .is_some_and(|d| crate::dict::contains(d, word))
@@ -560,6 +583,14 @@ impl Checker {
             }
 
             if !self.knows(word) {
+                // A name, typed as one: `Latino` opening a sentence. Only
+                // capitalized, so a lowercase slip cannot hide behind a name.
+                if token.text.starts_with(|c: char| c.is_ascii_uppercase())
+                    && self.is_proper_name(word)
+                {
+                    self.profile.count("proper_names_accepted", 1);
+                    continue;
+                }
                 // Last gate, and an accepting one: the document itself may
                 // have named this in a URL or a code span, which no word list
                 // could have.
@@ -1350,6 +1381,21 @@ mod tests {
         assert!(c.check_line_alone(composed, 1, &mut no_evidence).is_empty());
         let f = c.check_line_alone(decomposed, 1, &mut no_evidence);
         assert!(f.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn a_proper_name_is_accepted_only_capitalized() {
+        let c = checker(&[], &["voters", "agree", "the"])
+            .with_proper_names(crate::dict::from_words(["zblorgia", "zblorgians"]));
+        assert!(
+            c.check_line_alone("Zblorgia voters agree", 1, &mut no_evidence)
+                .is_empty()
+        );
+        assert_eq!(
+            c.check_line_alone("the zblorgians agree", 1, &mut no_evidence)
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -1381,3 +1381,20 @@ fn adding_a_word_already_seen_says_it_was_upgraded() {
     let out = vocab(&db, &["add", "zblorg"]);
     assert_eq!(out.stdout.trim(), "added 0", "already yours");
 }
+
+#[test]
+fn uncommon_drops_words_a_dictionary_knows_as_names() {
+    let db = scratch_db("uncommon-names");
+    assert_eq!(vocab(&db, &["add", "latin", "america", "zblorg"]).code, 0);
+    let listed = listed_words(&vocab(&db, &["list", "--trusted", "--uncommon", "-J"]).stdout);
+    assert_eq!(listed, vec!["zblorg".to_string()]);
+}
+
+#[test]
+fn a_capitalized_proper_name_is_not_a_misspelling() {
+    let db = scratch_db("proper-names");
+    let out = vocab(&db, &["-J", "Latino voters. Americans agree."]);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    // Only as a name: lowercase, it is not vouched for.
+    assert_eq!(vocab(&db, &["-J", "the zblorgian voters"]).code, 1);
+}

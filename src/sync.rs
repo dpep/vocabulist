@@ -382,7 +382,8 @@ pub fn retain_trusted(entries: &mut Vec<Entry>, trust: &Trust, dictionary: Optio
     entries.retain(|entry| trust.trusts(&entry.word, in_dictionary));
 }
 
-/// Drop the words an ordinary dictionary already knows.
+/// Drop the words an ordinary dictionary already knows — as a word, or as a
+/// proper name (`latin`, `america`), which a lowercase word list cannot say.
 ///
 /// Refuses without a dictionary rather than keeping everything: "uncommon" is
 /// a claim the dictionary backs, and a warning on stderr is invisible to a
@@ -392,7 +393,11 @@ pub fn retain_uncommon(
     dictionary: Option<&Dictionary>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dictionary = dictionary.ok_or("no dictionary loaded, so nothing can be called uncommon")?;
-    entries.retain(|entry| !crate::dict::contains(dictionary, &entry.word));
+    let names = crate::dict::proper_names();
+    entries.retain(|entry| {
+        !crate::dict::contains(dictionary, &entry.word)
+            && !crate::dict::contains(&names, &entry.word)
+    });
     Ok(())
 }
 

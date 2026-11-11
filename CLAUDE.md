@@ -192,11 +192,12 @@ cargo test`.
 
 ## Generated data
 
-`data/` holds two committed, generated files, each with a script beside it:
+`data/` holds committed, generated files, each with a script beside it:
 
 | File | Built by | Source |
 |---|---|---|
 | `data/wordlist.txt` | `script/build-wordlist.sh` | SCOWL levels 10-60 |
+| `data/propernames.txt` | `script/build-wordlist.sh` | SCOWL levels 10-60, `*-upper` |
 | `data/cues.txt` | `script/build-cues.sh` | Google Books Ngrams (CC BY 3.0) |
 
 They are committed so a build needs no network and no 39 GB download. Never
