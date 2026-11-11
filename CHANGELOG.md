@@ -18,7 +18,8 @@
 - **`vocab --fix`** writes text back with corrections applied: missing
   apostrophes (`dont`), typos you confirmed with `vocab typos`, and typos
   inferred from your counts — a swap of two letters in a word you write far
-  more often (`teh`, `shoudl`). A one-letter difference is only suggested,
+  more often (`teh`, `shoudl`), or, for a slip never seen, in an ordinary
+  word the checker's suggestion all but settles (`waht`). A one-letter difference is only suggested,
   since it reaches real words (`repros` beside `repos`); so is a three-letter
   swap of anything but a very common word (`cmp` beside `mcp`) and a British
   spelling. `vocab add` a word to keep `--fix` off it. It reads the text argument, `--file`, or stdin (line by line, as it

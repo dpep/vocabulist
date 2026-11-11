@@ -101,8 +101,9 @@ pub struct Cli {
     /// findings.
     ///
     /// A missing apostrophe (`dont`), a typo you confirmed with `vocab typos`,
-    /// and one inferred from your counts: a swap of two letters in a word you
-    /// write far more often. Candidates are suggested, never written; `vocab
+    /// and one inferred: a swap of two letters in a word you write far more
+    /// often, or, for a slip never seen, in a common word the checker's
+    /// suggestion all but settles. Candidates are suggested, never written; `vocab
     /// add` a word to keep `--fix` off it. Code spans, URLs and fenced
     /// blocks are left alone, and the typed case is kept (`Teh` -> `The`).
     /// The text goes to stdout, line by line as it is read; what changed goes

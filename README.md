@@ -90,6 +90,10 @@ checker suggests but never writes: `repros` looks exactly like a slip of
 the word meant to be a very common one (`teh`, not `cmp` for `mcp`), and a
 British spelling is never a slip.
 
+A slip `vocab` has never seen is fixed the same way when the checker's own
+suggestion settles it: a swap of two letters in an ordinary word (`waht`,
+`doign`), more likely than every other reading together.
+
 `vocab typos teh the` confirms a pair, so it holds whatever the counts later
 say. If one is wrong — a spelling you really use — `vocab add` it, and `--fix`
 leaves it alone from then on.

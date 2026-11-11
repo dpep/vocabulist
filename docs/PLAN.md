@@ -925,21 +925,49 @@ excludes every word they catch:
 - **Recurrence while the neighbour is not much more frequent** is already the
   trust rule: such a word is trusted, never flagged, never fixed.
 
-Measured on the store copy with `vocab --fix` over the labelled sample, one
-word per line, and over held-out prose with `vocab eval` (two corpora, five
-seeds, 63k words, 693 injected errors):
+### A slip never seen **[done]**
 
-| | `--fix` before | tiers |
-|---|---|---|
-| labelled real words rewritten | 0 of 529 | 0 of 529 |
-| labelled typos fixed | 1 of 30 | 9 of 30 |
-| injected errors fixed | 0 | 7 |
-| fixed to the wrong word | 0 | 0 |
-| words changed in clean prose | 0 | 0 |
+A word with no pair at all — not in the lexicon, or seen once beside nothing
+the user writes much — gets one more chance: the checker's own suggestions.
+`--fix` writes the first suggestion when it is a transposition of the typed
+word, holds at least half the edit model's belief (more than every other
+reading together), and `held_back` has nothing against it. `waht`, `doign`,
+`peopel` are fixed on a fresh install; `whta` (not a swap) and `centre` (a
+variant) are not.
 
-The typos it now fixes are `teh`, `hte`, `taht`, `wiht`, `owrk`, `shoudl`,
-`mabye` and `tackel`. Injected errors mostly never collide with a learned slip,
-which is what the next step is for.
+The threshold is measured. Read cold (a lexicon with nothing in it), all 7,775
+observed words on the store copy produced 61 such transpositions. One was a
+real word, `gary` → `gray` at 0.34; the rest were slips, `wiht` at 0.36 and
+`taht` at 0.38 the lowest. On injected prose no unseen fix went to the wrong
+word at any threshold. Half is the bar because it is the first one with a
+meaning — this reading beats all the others combined — and it clears `gary`;
+it gives up `wiht` and `taht` cold, which the inferred tier fixes as soon as
+the user's counts exist.
+
+### Measured
+
+`vocab --fix` over the labelled sample on the store copy, one word per line;
+`vocab eval` over held-out prose (two corpora, five seeds, 63k words, 693
+injected errors, 164 of them transpositions), on the store copy and on an
+empty lexicon:
+
+| | before | tiers | tiers + unseen |
+|---|---|---|---|
+| labelled real words rewritten (of 529) | 0 | 0 | 0 |
+| labelled typos fixed (of 30) | 1 | 9 | 9 |
+| injected errors fixed, store copy | 0 | 7 | 94 |
+| injected errors fixed, empty lexicon | 0 | 0 | 86 |
+| fixed to the wrong word | 0 | 0 | 0 |
+| words changed in clean prose | 0 | 0 | 0 |
+
+"Clean prose" is `tests/corpus/prose.md` and the held-out corpus, against both
+lexicons; `tests/cli_e2e.rs` asserts the first. The fixes are a fraction of
+injected errors because only transpositions qualify, and half of what `eval`
+injects is not a transposition: 94 is 57% of the 164 injected swaps.
+
+`--fix` over all 7,775 observed words on the store copy rewrites 79, by hand
+all slips but three: `suggets` → `suggest` (probably `suggests`), `fabel` →
+`fable`, and `een` → `e'en`, which is the contraction table, not this rule.
 
 **`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
 probability: a provenance constant plus a corroboration curve, never checked

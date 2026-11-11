@@ -14,7 +14,7 @@ use crate::ngram;
 use crate::profile::Profile;
 use crate::text::{self, Token};
 use crate::trust::Trust;
-use crate::types::{Finding, FindingKind, Suggestion, Tier};
+use crate::types::{Edit, Finding, FindingKind, Suggestion, Tier};
 
 /// Maximum edit distance we'll suggest across.
 const MAX_EDIT_DISTANCE: usize = 2;
@@ -79,6 +79,12 @@ const SUBSEQUENCE_BONUS: f64 = 25.0;
 /// Below this share of the belief, a suggestion is noise rather than an
 /// option. The top candidate always survives regardless.
 const MIN_SUGGESTION_SCORE: f32 = 0.02;
+
+/// The share of the edit model's belief a transposition needs before `--fix`
+/// writes it over a slip the lexicon has never paired: more than every other
+/// reading together. Below it on a real store sat `gary` → `gray`, the one
+/// real word among 61 rewrites of 7,775 observed words read cold.
+const UNSEEN_SHARE: f32 = 0.5;
 
 /// The resolved word sets a check runs against. The lexicon is the authority;
 /// the system dictionary is the floor beneath it.
@@ -617,8 +623,9 @@ impl Checker {
 
     /// The replacement `--fix` may write for this finding, if any.
     ///
-    /// A contraction, whose mapping is exact, or a typo pair confirmed or
-    /// inferred (`trust::held_back`, PLAN §12l).
+    /// A contraction, whose mapping is exact; a typo pair confirmed or
+    /// inferred (`trust::held_back`); or, for a slip the lexicon has no pair
+    /// for, a transposition the edit model all but settles (PLAN §12l).
     pub fn correction(&self, finding: &Finding) -> Option<String> {
         match finding.kind {
             FindingKind::Contraction => finding.suggestions.first().map(|s| s.word.clone()),
@@ -626,7 +633,7 @@ impl Checker {
                 let word = text::normalize(&finding.word);
                 let intended = match self.trust.typo_of(&word, |w| self.in_dictionary(w)) {
                     Some(pair) => (pair.tier >= Tier::Inferred).then_some(pair.intended),
-                    None => None,
+                    None => unseen_slip(&word, &finding.suggestions),
                 }?;
                 // `normalize` dropped a possessive, and the fix replaces the
                 // whole token.
@@ -825,6 +832,28 @@ impl Checker {
         }
         out
     }
+}
+
+/// The word a slip the lexicon has no pair for was meant to be, when the
+/// edit model all but settles it: its first suggestion is a transposition
+/// holding at least `UNSEEN_SHARE` of the belief, with nothing held against
+/// it.
+fn unseen_slip(word: &str, suggestions: &[Suggestion]) -> Option<String> {
+    let top = suggestions.first()?;
+    (top.score >= UNSEEN_SHARE
+        && is_transposition(word, &top.word)
+        && crate::trust::held_back(word, &top.word, Some(Edit::Transposition)).is_none())
+    .then(|| top.word.clone())
+}
+
+/// Do `a` and `b` differ only by one swap of adjacent letters?
+fn is_transposition(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+    matches!(diff.as_slice(), [i, j] if *j == i + 1 && a[*i] == b[*j] && a[*j] == b[*i])
 }
 
 /// Put `intended` first with `belief` of the share, the rest keeping theirs
@@ -1482,6 +1511,33 @@ mod tests {
     }
 
     #[test]
+    fn an_unseen_transposition_of_a_common_word_is_fixed() {
+        // Nothing in the lexicon: the edit model alone settles it.
+        let c = Checker::new(
+            HashSet::new(),
+            Some(common(&["what", "doing", "you", "are", "the", "widget"])),
+        );
+        assert_eq!(
+            fixes(&c, "waht are you doign to the widget's"),
+            fixed(&[("waht", "what"), ("doign", "doing")])
+        );
+        assert_eq!(
+            fixes(&c, "the wigdet's"),
+            fixed(&[("wigdet's", "widget's")]),
+            "a possessive survives the fix"
+        );
+    }
+
+    #[test]
+    fn an_unseen_slip_that_is_not_a_transposition_is_only_suggested() {
+        let c = Checker::new(HashSet::new(), Some(common(&["what", "widget"])));
+        assert_eq!(
+            fixes(&c, "whta wiget"),
+            fixed(&[("whta", "what"), ("wiget", "")])
+        );
+    }
+
+    #[test]
     fn an_abbreviation_shaped_token_is_left_alone() {
         // Three letters is too little evidence unless the word meant is one
         // of the commonest; `mcp` is the user's, but nobody's common word.
@@ -1506,6 +1562,12 @@ mod tests {
         )
         .with_trust(trust);
         assert_eq!(fixes(&c, "the wigdet"), fixed(&[]));
+    }
+
+    #[test]
+    fn a_british_spelling_is_never_rewritten() {
+        let c = Checker::new(HashSet::new(), Some(common(&["center", "the"])));
+        assert_eq!(fixes(&c, "the centre"), fixed(&[("centre", "")]));
     }
 
     #[test]

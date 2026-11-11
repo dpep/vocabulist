@@ -251,6 +251,17 @@ fn typos_shows_each_tier_and_what_held_a_candidate_back() {
 }
 
 #[test]
+fn adding_a_word_stops_fix_touching_it() {
+    let db = scratch_db("fix-add");
+    // Unseen, and a transposition of a common word: fixed until claimed.
+    let out = run(&db, &["--fix"], Some("peopel say so\n"));
+    assert_eq!(out.stdout, "people say so\n");
+    assert_eq!(vocab(&db, &["add", "peopel"]).code, 0);
+    let out = run(&db, &["--fix"], Some("peopel say so\n"));
+    assert_eq!((out.code, out.stdout.as_str()), (0, "peopel say so\n"));
+}
+
+#[test]
 fn fix_changes_nothing_in_clean_prose() {
     let db = scratch_db("fix-prose");
     let corpus = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/prose.md");
