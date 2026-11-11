@@ -68,8 +68,8 @@ says so with the evidence:
 
 ```sh
 $ vocab typos
-teh                  the                  observed  transposition     9 docs  x660
-shoudl               should               observed  transposition     5 docs  x130
+teh                  the                  observed  transposition     9 docs  x660    0.99
+shoudl               should               observed  transposition     5 docs  x130    0.96
 ```
 
 `vocab typos teh the` confirms a pair, so it holds whatever the counts later

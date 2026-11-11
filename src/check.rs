@@ -624,10 +624,15 @@ impl Checker {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_uppercase());
-        let suggestions = self.suggest_for(word, looks_like_a_name);
+        let mut suggestions = self.suggest_for(word, looks_like_a_name);
         // A word with a near neighbour is more likely a typo than a coinage;
         // one with no neighbour at all is probably jargon we haven't met.
-        let confidence = if suggestions.is_empty() { 0.35 } else { 0.70 };
+        let mut confidence: f32 = if suggestions.is_empty() { 0.35 } else { 0.70 };
+        // A slip this user is known to make names the word meant outright.
+        if let Some(pair) = self.trust.typo_of(word, |w| self.in_dictionary(w)) {
+            suggestions = lead_with(suggestions, &pair.intended, pair.score);
+            confidence = confidence.max(pair.score);
+        }
         Finding {
             kind: FindingKind::Unknown,
             word: token.text.clone(),
@@ -793,6 +798,37 @@ impl Checker {
         }
         out
     }
+}
+
+/// Put `intended` first with `belief` of the share, the rest keeping theirs
+/// of what is left.
+///
+/// A mixture: with probability `belief` the known slip explains the token,
+/// otherwise the edit model does — so `intended` also keeps whatever the edit
+/// model gave it, and the scores still read as one distribution.
+fn lead_with(mut suggestions: Vec<Suggestion>, intended: &str, belief: f32) -> Vec<Suggestion> {
+    let prior = suggestions
+        .iter()
+        .position(|s| s.word == intended)
+        .map_or(0.0, |i| suggestions.remove(i).score);
+    suggestions.insert(
+        0,
+        Suggestion {
+            word: intended.to_string(),
+            score: belief + (1.0 - belief) * prior,
+        },
+    );
+    for s in suggestions[1..].iter_mut() {
+        s.score *= 1.0 - belief;
+    }
+    suggestions.truncate(MAX_SUGGESTIONS);
+    let mut index = 0;
+    suggestions.retain_mut(|s| {
+        s.score = crate::types::round(s.score as f64, 3) as f32;
+        index += 1;
+        index == 1 || s.score >= MIN_SUGGESTION_SCORE
+    });
+    suggestions
 }
 
 /// Does a sentence end between this token and the next?
@@ -1371,6 +1407,36 @@ mod tests {
     fn two_independent_sightings_earn_it() {
         let c = observed(&[("zblorg", 2)], &["the", "ship"]);
         assert!(c.knows("zblorg"));
+    }
+
+    #[test]
+    fn a_known_slip_leads_with_the_word_meant_as_sure_as_its_evidence() {
+        let dictionary = || Some(crate::dict::from_words(["the", "ten", "tea", "widget"]));
+        let top = |the: i64, confirmed: bool| {
+            let trust = standings(&[
+                ("the", Provenance::Dependency, the),
+                ("teh", Provenance::Observed, 4),
+            ]);
+            let trust = if confirmed {
+                trust.with_confirmed([("teh".into(), "the".into())].into())
+            } else {
+                trust
+            };
+            let c = Checker::new(HashSet::new(), dictionary()).with_trust(trust);
+            let f = c.check_line_alone("so teh widget", 1, &mut no_evidence);
+            let total: f32 = f[0].suggestions.iter().map(|s| s.score).sum();
+            assert!((total - 1.0).abs() < 0.01, "still one distribution");
+            assert_eq!(f[0].suggestions[0].word, "the");
+            (f[0].suggestions[0].score, f[0].confidence)
+        };
+        let (barely, _) = top(20, false);
+        let (overwhelming, confidence) = top(4000, false);
+        assert!(
+            overwhelming > barely,
+            "a dominant neighbour is firmer ground"
+        );
+        assert!(confidence >= overwhelming);
+        assert_eq!(top(20, true).0, 1.0, "confirmed by hand is certain");
     }
 
     #[test]

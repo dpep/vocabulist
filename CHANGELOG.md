@@ -29,6 +29,11 @@
   longer teaches the checker your typos, and a word seen on two documents is
   accepted without waiting for a second day. Nothing to do: it applies to the
   lexicon you already have.
+- **A slip you're known to make suggests the word you meant first**, scored
+  from the evidence: certain when you confirmed the pair, otherwise by how
+  much more often you write the real word. `teh` now suggests `the 1.00`
+  rather than `the 0.60, ten 0.21, te 0.18`. `vocab typos` reports the same
+  `score`.
 - **Reading the lexicon no longer writes it.** `list`, `status`, `phrases`,
   `eval`, `sync`, `analyze --lexicon`, and the read-only forms of `self`,
   `templates` and `prune --dry-run` open the database read-only. They never

@@ -248,6 +248,8 @@ pub struct TypoPair {
     pub intended_count: i64,
     /// `intended_count` over `count`: how far the real word dominates.
     pub ratio: f64,
+    /// How sure the pair is: 1 when confirmed, else derived from the ratio.
+    pub score: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

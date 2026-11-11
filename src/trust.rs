@@ -101,16 +101,20 @@ impl Trust {
         let (count, docs) = standing.map_or((0, 0), |s| (s.count, s.docs));
         let count_of = |w: &str| self.words.get(w).map_or(0, |s| s.count);
         let ratio = |intended: &str| count_of(intended) as f64 / count.max(1) as f64;
-        let pair = |intended: String, source, edit| TypoPair {
+        let pair = |intended: String, source, edit| {
             // Two significant figures is what a ratio of small counts holds.
-            ratio: significant(ratio(&intended), 2),
-            intended_count: count_of(&intended),
-            typo: word.to_string(),
-            intended,
-            source,
-            edit,
-            count,
-            docs,
+            let ratio = significant(ratio(&intended), 2);
+            TypoPair {
+                score: belief(source, ratio),
+                intended_count: count_of(&intended),
+                typo: word.to_string(),
+                intended,
+                source,
+                edit,
+                count,
+                docs,
+                ratio,
+            }
         };
 
         if let Some(intended) = self.confirmed.get(word) {
@@ -158,6 +162,23 @@ impl Trust {
         });
         pairs
     }
+}
+
+/// How sure a typo pair is.
+///
+/// Confirmed by hand is certain. A derived pair is `ratio / (ratio +
+/// DOMINANCE)`: a coin flip at the veto's own bar, 0.91 at ten times it.
+/// Recurrence enters only through the ratio, whose denominator is the typo's
+/// own count. It is not a separate bonus, because among the labelled pairs it
+/// did not separate slips from words: `behaviour` and `repros` recur in six
+/// documents each.
+fn belief(source: Provenance, ratio: f64) -> f32 {
+    let p = if source == Provenance::User {
+        1.0
+    } else {
+        ratio / (ratio + DOMINANCE)
+    };
+    crate::types::round(p, 2) as f32
 }
 
 /// `value` to `digits` significant figures.

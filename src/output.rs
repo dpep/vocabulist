@@ -711,13 +711,14 @@ pub fn render_typos(
                 let edit = p.edit.map_or("", |e| e.as_str());
                 writeln!(
                     out,
-                    "{:<20} {:<20} {:<9} {:<14} {:>4} docs  x{}",
+                    "{:<20} {:<20} {:<9} {:<14} {:>4} docs  x{:<6} {:.2}",
                     p.typo,
                     p.intended,
                     p.source.as_str(),
                     edit,
                     p.docs,
-                    p.ratio
+                    p.ratio,
+                    p.score
                 )?;
             }
             Ok(())

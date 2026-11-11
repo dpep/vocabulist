@@ -819,6 +819,28 @@ words.
   beside `apart`, which is the real-word checker's job (§8), not a blanket
   rule.
 
+### The checker names the word meant **[done]**
+
+A flagged word that is a known slip leads with the intended word. The pair's
+`score` (also in `vocab typos`) is derived, not chosen:
+
+- **Confirmed by hand:** 1.
+- **Derived:** `ratio / (ratio + 5)` — a coin flip at the veto's own bar,
+  0.91 at ten times it, 0.99 for `teh`/the. Recurrence enters only through
+  the ratio, whose denominator is the typo's own count. It is not a separate
+  bonus: among the labelled pairs it did not separate slips from words, since
+  `behaviour` and `repros` recur in six documents each.
+
+The suggestion list is a mixture. With probability `score` the slip explains
+the token, otherwise the edit model does, so the intended word also keeps
+what the edit model gave it, and the scores still sum to one. The finding's
+confidence becomes the larger of the unknown-word default and the pair's
+score. No field changed (`Finding`, `Suggestion`).
+
+`teh` went from `the 0.60, ten 0.21, te 0.18` to `the 1.00`. On held-out
+prose top-1 correction rose 0.826 → 0.831 with detection unchanged: a few
+injected slips happen to be ones this user makes.
+
 **`--confidence` waits on this.** `validity` (store.rs) is a ranking, not a
 probability: a provenance constant plus a corroboration curve, never checked
 against outcomes. A `--confidence 80` filter would claim "80% of these are
