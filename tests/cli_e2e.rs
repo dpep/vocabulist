@@ -296,6 +296,80 @@ fn fix_edits_a_file_only_when_asked() {
 }
 
 #[test]
+fn a_file_and_text_together_are_a_usage_error() {
+    let db = scratch_db("file-and-text");
+    assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
+    let path = db.with_file_name("notes.md");
+    std::fs::write(&path, "we shoudl ship\nand more\n").unwrap();
+    let file = path.to_str().unwrap();
+
+    // Which one wins is a guess either way; one of the guesses overwrote the
+    // file with the text argument.
+    for args in [
+        &["--fix", "--in-place", "-f", file, "shoudl"][..],
+        &["-f", file, "shoudl"],
+    ] {
+        assert_eq!(vocab(&db, args).code, 2, "{args:?}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "we shoudl ship\nand more\n",
+            "{args:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_keeps_permissions_and_writes_through_a_symlink() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let db = scratch_db("fix-in-place-link");
+    assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
+    let target = db.with_file_name("real.md");
+    let link = db.with_file_name("link.md");
+    std::fs::write(&target, "we shoudl ship\n").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let out = vocab(&db, &["--fix", "--in-place", "-f", link.to_str().unwrap()]);
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(
+        std::fs::symlink_metadata(&link).unwrap().is_symlink(),
+        "the link survives"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "we should ship\n"
+    );
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_reports_nothing_when_the_write_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let db = scratch_db("fix-in-place-fails");
+    assert_eq!(vocab(&db, &["typos", "shoudl", "should"]).code, 0);
+    let path = db.with_file_name("notes.md");
+    std::fs::write(&path, "we shoudl ship\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    let out = vocab(
+        &db,
+        &["--fix", "--in-place", "-J", "-f", path.to_str().unwrap()],
+    );
+    assert_eq!(out.code, 2, "{}", out.stderr);
+    assert!(
+        !out.stderr.contains("\"to\""),
+        "a fix that never landed was reported: {}",
+        out.stderr
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "we shoudl ship\n");
+}
+
+#[test]
 fn a_typo_confirmation_that_could_never_apply_is_refused() {
     let db = scratch_db("typo-refused");
     assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);

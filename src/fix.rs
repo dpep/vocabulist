@@ -4,6 +4,9 @@
 //! module only puts the replacement where the finding was, in the case it was
 //! typed in.
 
+use std::io::{self, Write};
+use std::path::Path;
+
 use crate::types::Fix;
 
 /// Apply `fixes` to `line`, returning the new line and the fixes that landed.
@@ -34,6 +37,39 @@ pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
     }
     landed.reverse();
     (chars.into_iter().collect(), landed)
+}
+
+/// Replace the file at `path` with `contents`, all at once.
+///
+/// Written beside the file and renamed over it, so a failure part way leaves
+/// the old text whole rather than half of the new. A symlink is followed, so
+/// the link survives and its target changes, and the file keeps its
+/// permissions. A read-only file is refused: a rename would replace it anyway.
+pub fn replace_file(path: &Path, contents: &str) -> io::Result<()> {
+    let target = std::fs::canonicalize(path)?;
+    let permissions = std::fs::metadata(&target)?.permissions();
+    if permissions.readonly() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is read-only", path.display()),
+        ));
+    }
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let temp = target.with_file_name(format!(".{name}.vocab-{}", std::process::id()));
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        std::fs::set_permissions(&temp, permissions)?;
+        std::fs::rename(&temp, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
 }
 
 /// `to`, in the case `from` was typed in: `Teh` → `The`, `TEH` → `THE`.

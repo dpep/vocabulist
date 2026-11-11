@@ -9,6 +9,12 @@
   2, which Claude Code reads as "block this prompt" and so erased what you
   had typed. A hook now skips the event instead, and gives up on a held lock
   after 250 ms rather than holding your prompt for five seconds.
+- **`--file` with text to check is a usage error (exit 2).** `vocab --fix
+  --in-place -f notes.txt "teh"` checked the text and wrote the result over
+  `notes.txt`; without `--fix` the file was silently ignored.
+- **`--in-place` replaces the file atomically**, through a symlink to its
+  target and keeping its permissions, refuses a read-only file, and reports
+  fixes only once they are written.
 
 ## 0.6.0 — 2026-11-11
 

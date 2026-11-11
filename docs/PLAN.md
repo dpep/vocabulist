@@ -848,7 +848,12 @@ injected slips happen to be ones this user makes.
 ### `--fix`: corrections that are never guesses **[done; widened below]**
 
 `vocab --fix` reads the positional text, `--file`, or stdin and writes it back
-with corrections applied. It edits a file only with `--in-place`.
+with corrections applied. It edits a file only with `--in-place`, and then
+atomically — written beside the file and renamed over it, through a symlink to
+its target, keeping its permissions, refusing a read-only file — reporting the
+fixes only once the file is written. `--file` with positional text is a usage
+error (exit 2): reading one and writing the other once overwrote a file with
+the argument.
 
 - **What qualifies:** a missing apostrophe (`dont`, an exact mapping) and a
   typo pair at tier `confirmed` or `inferred` (below). A `candidate` pair is

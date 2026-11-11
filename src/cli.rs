@@ -97,6 +97,7 @@ pub struct Cli {
     pub ndjson: bool,
 
     /// Read input from this file, checked line by line (like piped stdin).
+    /// Not with text as well: which one to read would be a guess.
     #[arg(short, long, global = true)]
     pub file: Option<PathBuf>,
 
@@ -472,6 +473,15 @@ impl Cli {
         self.db.clone().unwrap_or_else(default_db_path)
     }
 
+    /// Whether text was given as an argument, to check or to analyze.
+    fn has_text(&self) -> bool {
+        match &self.command {
+            None => self.text.is_some(),
+            Some(Command::Analyze { text, .. }) => text.is_some(),
+            Some(_) => false,
+        }
+    }
+
     /// Default is human; `-J/--ndjson` wins over `-j/--json`.
     pub fn format(&self) -> Format {
         if self.ndjson {
@@ -486,6 +496,16 @@ impl Cli {
 
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
+    // Not `conflicts_with`: `--file` is global, and clap rejects a conflict
+    // naming an argument most subcommands lack.
+    if cli.file.is_some() && cli.has_text() {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--file cannot be used with text to check: give one or the other",
+            )
+            .exit();
+    }
     env_logger::Builder::from_default_env()
         .filter_level(if cli.verbose {
             log::LevelFilter::Debug
@@ -1352,8 +1372,11 @@ fn fix_input(
         let mut line_report: Vec<Rewrite> = landed.into_iter().map(Rewrite::Fix).collect();
         line_report.extend(left_alone);
         line_report.sort_by_key(Rewrite::col);
-        for rewrite in &line_report {
-            output::stream_rewrite(&mut log, rewrite, format)?;
+        // In place, nothing has landed until the file is written.
+        if !cli.in_place {
+            for rewrite in &line_report {
+                output::stream_rewrite(&mut log, rewrite, format)?;
+            }
         }
         report.extend(line_report);
         if cli.in_place {
@@ -1365,10 +1388,13 @@ fn fix_input(
             out.flush()?;
         }
     }
-    if let (true, Some(path)) = (cli.in_place, &cli.file)
-        && changed
-    {
-        std::fs::write(path, rewritten)?;
+    if let (true, Some(path)) = (cli.in_place, &cli.file) {
+        if changed {
+            crate::fix::replace_file(path, &rewritten)?;
+        }
+        for rewrite in &report {
+            output::stream_rewrite(&mut log, rewrite, format)?;
+        }
     }
     output::render_rewrites(&mut log, &report, format)?;
     // A change is a finding, as in checking: 1 says the text was not clean.
