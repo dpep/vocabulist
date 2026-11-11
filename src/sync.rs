@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::dict::Dictionary;
 use crate::store::{Store, default_db_path};
 use crate::types::{Entry, Provenance};
 
@@ -368,11 +369,8 @@ fn read_lines(path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The entries worth exporting, strongest first: the lexicon minus anything
-/// an ordinary dictionary already knows.
-///
-/// Exporting words the target's own dictionary already has would be pure
-/// bloat — the value is entirely in the jargon it *doesn't* have.
+/// Whether a word has earned trust outside this tool: a deliberate source, or
+/// two distinct documents.
 ///
 /// The bar for an observed word is **two distinct documents**, not two
 /// occurrences. Repetition inside a single message is worth nothing here: a
@@ -380,22 +378,38 @@ fn read_lines(path: &Path) -> Vec<String> {
 /// it to every editor on the machine is the most expensive false positive
 /// this tool can produce — it outlives the session and shows up somewhere you
 /// won't connect back to us.
-pub fn exportable_entries(store: &Store, filter: Option<&str>) -> rusqlite::Result<Vec<Entry>> {
-    let dictionary = crate::dict::load();
-    let mut entries = store.list(filter, usize::MAX)?;
-    entries.retain(|entry| {
-        let earned = entry.provenance > Provenance::Observed || entry.sources >= 2;
-        let ordinary = dictionary
-            .as_ref()
-            .is_some_and(|d| crate::dict::contains(d, &entry.word));
-        earned && !ordinary
-    });
+pub fn is_trusted(entry: &Entry) -> bool {
+    entry.provenance > Provenance::Observed || entry.sources >= 2
+}
+
+/// Drop the words an ordinary dictionary already knows.
+///
+/// Refuses without a dictionary rather than keeping everything: "uncommon" is
+/// a claim the dictionary backs, and a warning on stderr is invisible to a
+/// `-J` consumer, which would then be handed `the` as jargon.
+pub fn retain_uncommon(
+    entries: &mut Vec<Entry>,
+    dictionary: Option<&Dictionary>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dictionary = dictionary.ok_or("no dictionary loaded, so nothing can be called uncommon")?;
+    entries.retain(|entry| !crate::dict::contains(dictionary, &entry.word));
+    Ok(())
+}
+
+/// The entries `sync` exports, strongest first: trusted and uncommon.
+///
+/// Exporting words the target's own dictionary already has would be pure
+/// bloat — the value is entirely in the jargon it *doesn't* have.
+fn exportable_entries(store: &Store) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
+    let mut entries = store.list(None, usize::MAX)?;
+    entries.retain(is_trusted);
+    retain_uncommon(&mut entries, crate::dict::load().as_ref())?;
     Ok(entries)
 }
 
 /// The exportable words, alphabetically.
-pub fn exportable(store: &Store) -> rusqlite::Result<Vec<String>> {
-    let mut words: Vec<String> = exportable_entries(store, None)?
+pub fn exportable(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut words: Vec<String> = exportable_entries(store)?
         .into_iter()
         .map(|e| e.word)
         .collect();
@@ -405,8 +419,8 @@ pub fn exportable(store: &Store) -> rusqlite::Result<Vec<String>> {
 
 /// Write the lexicon into one target, recording what we wrote.
 /// The `limit` most-established exportable words, strongest first.
-fn strongest(store: &Store, limit: usize) -> rusqlite::Result<Vec<String>> {
-    let mut ranked = exportable_entries(store, None)?;
+fn strongest(store: &Store, limit: usize) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut ranked = exportable_entries(store)?;
     ranked.sort_by(|a, b| {
         b.validity
             .partial_cmp(&a.validity)
@@ -708,6 +722,20 @@ mod tests {
 
         let written = std::fs::read_to_string(&target.path).unwrap();
         assert_eq!(written.trim(), "polyid", "the cap must keep the strongest");
+    }
+
+    #[test]
+    fn uncommon_refuses_without_a_dictionary() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .upsert_word("widget", "widget", Provenance::User, 1)
+            .unwrap();
+        let mut entries = store.list(None, usize::MAX).unwrap();
+        assert!(retain_uncommon(&mut entries, None).is_err());
+
+        let dictionary = crate::dict::from_words(["widget"]);
+        retain_uncommon(&mut entries, Some(&dictionary)).unwrap();
+        assert!(entries.is_empty());
     }
 
     #[test]

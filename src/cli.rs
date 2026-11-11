@@ -564,7 +564,9 @@ fn dispatch_inner(
             let filter = filter.as_deref();
             // `--exportable` is a set, so it's whole unless asked otherwise.
             let entries = if *exportable {
-                let mut entries = sync::exportable_entries(&store, filter)?;
+                let mut entries = store.list(filter, usize::MAX)?;
+                entries.retain(sync::is_trusted);
+                sync::retain_uncommon(&mut entries, crate::dict::load().as_ref())?;
                 entries.truncate(limit.unwrap_or(usize::MAX));
                 entries
             } else {
