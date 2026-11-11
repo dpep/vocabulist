@@ -388,6 +388,7 @@ fn a_typo_confirmation_that_could_never_apply_is_refused() {
 #[test]
 fn a_shorthand_is_never_flagged_and_lists_what_it_means() {
     let db = scratch_db("shorthand");
+    assert_eq!(vocab(&db, &["add", "widget"]).code, 0);
     assert_eq!(run(&db, &["-j"], Some("we can zrepro it\n")).code, 1);
     assert_eq!(vocab(&db, &["shorthand"]).code, 1, "none yet is grep's 1");
 
@@ -1199,4 +1200,61 @@ fn a_newer_schema_is_never_stamped_down() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, newer);
+}
+
+#[test]
+fn checking_and_fixing_leave_the_database_untouched() {
+    let db = scratch_db("check_untouched");
+    vocab(&db, &["add", "zblorg"]);
+    vocab(&db, &["typos", "shoudl", "should"]);
+    let before = fingerprint(&db);
+
+    for (args, stdin) in [
+        (&["zblorg shoudl"][..], None),
+        (&["-J"], Some("zblorg shoudl\n")),
+        (&["--fix"], Some("we shoudl ship\n")),
+        (&["--fix", "--expand"], Some("we shoudl ship\n")),
+    ] {
+        let out = run(&db, args, stdin);
+        assert_ne!(out.code, 2, "{args:?}: {}", out.stderr);
+        assert!(fingerprint(&db) == before, "{args:?} wrote the database");
+    }
+}
+
+#[test]
+fn checking_a_missing_database_does_not_create_it() {
+    let db = scratch_db("check_missing");
+    assert_eq!(vocab(&db, &["zzzqxwv"]).code, 1);
+    assert!(!db.exists(), "a check must not create the database");
+}
+
+#[test]
+fn checking_does_not_wait_on_a_writer() {
+    let db = scratch_db("check_while_writing");
+    vocab(&db, &["add", "zblorg"]);
+
+    let writer = rusqlite::Connection::open(&db).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+        .execute("UPDATE lexicon SET count = count + 1", [])
+        .unwrap();
+
+    let timed = |args: &[&str], stdin| {
+        let started = std::time::Instant::now();
+        let out = run(&db, args, stdin);
+        (out, started.elapsed())
+    };
+    let (checked, check_waited) = timed(&["zblorg"], None);
+    let (fixed, fix_waited) = timed(&["--fix"], Some("zblorg dont\n"));
+    writer.execute_batch("ROLLBACK").unwrap();
+
+    assert_eq!(checked.code, 0, "{}", checked.stderr);
+    assert_eq!(fixed.stdout, "zblorg don't\n", "{}", fixed.stderr);
+    // Well under the busy timeout a writer would sit through.
+    for waited in [check_waited, fix_waited] {
+        assert!(
+            waited < std::time::Duration::from_secs(2),
+            "waited {waited:?}"
+        );
+    }
 }

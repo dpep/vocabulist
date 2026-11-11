@@ -417,6 +417,9 @@ enum Access {
     /// Never touches the lexicon, so must work without one.
     None,
     Read,
+    /// Checking: a read, except the first run on the default lexicon, which
+    /// seeds it.
+    Check,
     Write,
 }
 
@@ -567,6 +570,49 @@ fn ensure_seeded(store: &Store, quiet: bool) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+/// The lexicon, opened as `access` needs it.
+fn open_store(cli: &Cli, access: Access) -> Result<Store, Box<dyn std::error::Error>> {
+    let path = cli.db_path();
+    // Auto-seed the *default* store only. An explicit `--db` is a deliberate,
+    // scoped store — a scratch file, a test, a per-project lexicon — and
+    // quietly spending six seconds scanning the whole machine into it would be
+    // both surprising and wrong.
+    let seeds = cli.db.is_none();
+    match access {
+        // An empty stand-in, so no arm needs an Option it never reads.
+        Access::None => Store::open(":memory:"),
+        Access::Read => Store::open_read_only(path),
+        // Read-only unless this is the run that seeds: a check that writes
+        // can wait seconds on a capture hook's lock.
+        Access::Check if !seeds => {
+            if path.exists() {
+                Store::open_read_only(path)
+            } else {
+                Store::open(":memory:")
+            }
+        }
+        Access::Check => {
+            if path.exists() {
+                let store = Store::open_read_only(&path)?;
+                if store.seconds_since_seed()?.is_some() {
+                    return Ok(store);
+                }
+            }
+            let store = Store::open(&path)?;
+            ensure_seeded(&store, cli.quiet)?;
+            Ok(store)
+        }
+        Access::Write => {
+            let store = Store::open(&path)?;
+            // `seed` does its own.
+            if seeds && !matches!(cli.command, Some(Command::Seed { .. })) {
+                ensure_seeded(&store, cli.quiet)?;
+            }
+            Ok(store)
+        }
+    }
+}
+
 fn dispatch_inner(
     cli: &Cli,
     profile: &Rc<Profile>,
@@ -574,36 +620,10 @@ fn dispatch_inner(
     if let Some(Command::Hook { event }) = &cli.command {
         return Ok(hook(cli, event));
     }
-    // Checking is a writer: it seeds the default lexicon on first use.
-    let access = cli.command.as_ref().map_or(Access::Write, Command::access);
-    let store = profile.time(
-        "store_open",
-        || -> Result<Store, Box<dyn std::error::Error>> {
-            match access {
-                // An empty stand-in, so no arm needs an Option it never reads.
-                Access::None => Ok(Store::open(":memory:")?),
-                Access::Read => Store::open_read_only(cli.db_path()),
-                Access::Write => Ok(Store::open(cli.db_path())?),
-            }
-        },
-    )?;
+    let access = cli.command.as_ref().map_or(Access::Check, Command::access);
+    let store = profile.time("store_open", || open_store(cli, access))?;
     let format = cli.format();
     let mut out = io::stdout().lock();
-
-    // Auto-seed the *default* store only. An explicit `--db` is a deliberate,
-    // scoped store — a scratch file, a test, a per-project lexicon — and
-    // quietly spending six seconds scanning the whole machine into it would be
-    // both surprising and wrong. Excludes `seed`, which does its own, and
-    // `hook`, which must stay fast; the Stop hook seeds asynchronously.
-    if cli.db.is_none()
-        && access == Access::Write
-        && !matches!(
-            cli.command,
-            Some(Command::Seed { .. }) | Some(Command::Hook { .. })
-        )
-    {
-        ensure_seeded(&store, cli.quiet)?;
-    }
 
     match &cli.command {
         Some(Command::Seed { scan_root }) => {

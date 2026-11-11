@@ -440,9 +440,10 @@ own, because a newer schema belongs to a newer binary and migrating an older
 one is a write. Under WAL a reader never waits on a capture hook's write
 lock. A writer refuses a newer schema too — stamping its own version would
 hand the lexicon back to the newer binary looking older than it is — and
-writes nothing on open to a lexicon already at its schema. Only checking stays a writer among the commands that don't obviously
-write, because it seeds the default lexicon on first use. That's the one
-onboarding path a new user can't be expected to know about.
+writes nothing on open to a lexicon already at its schema. Checking, `--fix` and `--expand` read too, with one exception: the first run
+on the default lexicon opens it for writing to seed it, the one onboarding
+path a new user can't be expected to know about. Against a `--db` that does
+not exist they check with an empty lexicon rather than create one.
 
 A reader that wants the user's vocabulary reads it from `vocab list` rather
 than copying the rule, which would drift the first time the bar moved. Two

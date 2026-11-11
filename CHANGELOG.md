@@ -19,6 +19,10 @@
   stamping it back to its own schema version, which a newer binary would
   then misread. A hook skips the event. Opening a lexicon already at the
   current schema no longer writes to it.
+- **Checking, `--fix` and `--expand` open the lexicon read-only.** They
+  opened it for writing on every run, so each check could wait on a capture
+  hook's lock. Only the first run on the default lexicon, which seeds it,
+  writes. A check against a `--db` that does not exist no longer creates it.
 
 ## 0.6.0 — 2026-11-11
 
