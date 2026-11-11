@@ -52,7 +52,8 @@ pub fn tokenize(line: &str) -> Vec<Token> {
         .collect();
 
     for (i, ch) in line.char_indices() {
-        let wordish = ch.is_alphanumeric() || ch == '_' || ch == '\'' || ch == '-';
+        let wordish =
+            ch.is_alphanumeric() || ch == '_' || ch == '\'' || ch == '-' || is_combining_mark(ch);
         match (wordish, start) {
             (true, None) => start = Some(i),
             (false, Some(s)) => {
@@ -66,6 +67,24 @@ pub fn tokenize(line: &str) -> Vec<Token> {
         push_token(&mut out, line, s, line.len(), &char_of);
     }
     out
+}
+
+/// A combining accent: `e` + U+0301 is `é` decomposed (NFD), as macOS
+/// filenames and PDF copies carry it.
+///
+/// Kept in the token rather than splitting it, so `cafe\u{301}` is one
+/// non-ASCII word, judged exactly as the composed `café` is, with the typed
+/// bytes and the columns untouched — what normalizing to NFC would buy,
+/// without a dependency or a column map.
+fn is_combining_mark(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0300}'..='\u{036F}'
+            | '\u{1AB0}'..='\u{1AFF}'
+            | '\u{1DC0}'..='\u{1DFF}'
+            | '\u{20D0}'..='\u{20FF}'
+            | '\u{FE20}'..='\u{FE2F}'
+    )
 }
 
 fn push_token(

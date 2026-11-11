@@ -44,6 +44,9 @@
   frequency table, so scores went flat and a never-seen slip like `teh` was
   never fixed. The embedded core frequencies now stand in, in memory, without
   writing the lexicon.
+- **Decomposed accents no longer split words.** `cafe` plus a combining
+  acute (NFD, as macOS filenames and PDF copies carry it) was read as `cafe`
+  and flagged; it is now judged exactly as the composed `café` is.
 
 ## 0.6.0 — 2026-11-11
 

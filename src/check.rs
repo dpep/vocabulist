@@ -1337,6 +1337,18 @@ mod tests {
     }
 
     #[test]
+    fn decomposed_accents_read_as_the_composed_word() {
+        // What a macOS filename or a copy from a PDF can carry: `e` and a
+        // combining acute, rather than `é`. Composed, these are never checked.
+        let c = checker(&[], &["the", "was", "at"]);
+        let composed = "the na\u{ef}ve r\u{e9}sum\u{e9} was at the caf\u{e9}";
+        let decomposed = "the nai\u{308}ve re\u{301}sume\u{301} was at the cafe\u{301}";
+        assert!(c.check_line_alone(composed, 1, &mut no_evidence).is_empty());
+        let f = c.check_line_alone(decomposed, 1, &mut no_evidence);
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    #[test]
     fn a_curly_apostrophe_reads_as_the_same_word() {
         // What macOS, Slack, and Gmail actually emit.
         let c = checker(&[], &["we", "don't", "ship", "that"]);
