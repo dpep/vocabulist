@@ -1191,6 +1191,14 @@ fn shorthand(
         if short.eq_ignore_ascii_case(means) {
             return Err(format!("{short} cannot be a shorthand for itself").into());
         }
+        // `--expand` rewrites one word, as `--fix` does for `vocab typos`.
+        if !text::is_lexical(short) {
+            return Err(format!(
+                "`{short}` is not a word: a shorthand is one word, of letters, \
+                 apostrophes and hyphens"
+            )
+            .into());
+        }
         refuse_a_word(&trust, dictionary.as_ref(), short, "a shorthand")?;
     }
     store.transaction(|| -> Result<(), rusqlite::Error> {

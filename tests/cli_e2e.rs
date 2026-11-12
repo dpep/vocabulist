@@ -515,6 +515,9 @@ fn a_shorthand_that_could_never_apply_is_refused() {
     assert_eq!(vocab(&db, &["shorthand", "the=then"]).code, 2);
     // A word from a deliberate source is a word, not an abbreviation.
     assert_eq!(vocab(&db, &["shorthand", "zblorg=zebra"]).code, 2);
+    // `--expand` rewrites one word at a time, so a phrase is never typed as one.
+    assert_eq!(vocab(&db, &["shorthand", "z arg=argument"]).code, 2);
+    assert_eq!(vocab(&db, &["shorthand", "z4rg=argument"]).code, 2);
     // Nothing is stored when one of several is refused.
     assert_eq!(vocab(&db, &["shorthand", "zrepro=x", "the=then"]).code, 2);
     assert_eq!(vocab(&db, &["shorthand"]).code, 1);

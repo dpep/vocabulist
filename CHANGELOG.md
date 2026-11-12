@@ -74,8 +74,9 @@ lexicon you already have.
 **Commands**
 
 - **`vocab shorthand` refuses what `vocab typos` refuses:** a dictionary word
-  (`the=then`) and a word from a deliberate source (`trekr=trek`). The meaning
-  is stored lowercase (`repro=REPRODUCE`). A shorthand you already confirmed
+  (`the=then`), a word from a deliberate source (`trekr=trek`), and a
+  shorthand that isn't one word (`"z arg"=argument`), which `--expand` could
+  never match. The meaning is stored lowercase (`repro=REPRODUCE`). A shorthand you already confirmed
   for a dictionary word is kept; `vocab shorthand --rm` it if `--expand`
   writes it where you meant the word.
 - **`vocab typos` refuses a pair that isn't one word each** (`teh "the end"`,
