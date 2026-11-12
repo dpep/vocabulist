@@ -1,8 +1,7 @@
 //! How common a word is in ordinary English.
 //!
-//! The backstop dictionary is a flat membership set — 236k words, all equally
-//! weighted — which is why `smal` offered `small`, `smalm`, and `smalt` as
-//! peers. Frequency does two jobs, both proven out by measurement:
+//! A dictionary is a membership set, which is why `smal` once offered
+//! `small`, `smalm`, and `smalt` as peers. Frequency does two jobs, both proven out by measurement:
 //!
 //! - **Ranking.** It breaks the ties edit distance leaves behind, so the
 //!   common word wins over the obscure one.

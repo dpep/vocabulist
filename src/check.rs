@@ -95,9 +95,6 @@ pub struct Checker {
     lexicon: HashSet<String>,
     /// General-English frequency, for breaking ties the dictionary can't.
     frequency: std::collections::HashMap<String, i64>,
-    /// Loaded on first miss, not up front. Reading ~236k words costs tens of
-    /// milliseconds, and text whose words are all in the lexicon never needs
-    /// it — which is the common case once the lexicon is seeded.
     /// Every word's standing, for the trust rule observed words must pass.
     trust: Trust,
     /// Lexicon words that came from a source containing nothing but names —
@@ -106,6 +103,8 @@ pub struct Checker {
     /// People seen in captured messages: normalized key to (days seen,
     /// display form). A full name is one entry.
     people: std::collections::HashMap<String, (i64, String)>,
+    /// Loaded on first miss, not up front: text whose words are all in the
+    /// lexicon never needs it, which is the common case once it is seeded.
     dictionary: OnceCell<Option<crate::dict::Dictionary>>,
     /// Proper names a dictionary knows, accepted only as typed capitalized.
     proper_names: OnceCell<crate::dict::Dictionary>,
@@ -388,9 +387,9 @@ impl Checker {
     /// Is this word known to either set?
     ///
     /// A hyphenated compound counts as known when all of its parts are.
-    /// English forms these freely and no word list can enumerate them — the
-    /// system dictionary carries two hyphenated entries in 236k — so without
-    /// this, `well-known`, `long-term`, and `local-first` all read as typos.
+    /// English forms these freely and no word list can enumerate them, so
+    /// without this, `well-known`, `long-term`, and `local-first` all read as
+    /// typos.
     /// That's the exact false-positive class this tool exists to remove.
     pub fn knows(&self, word: &str) -> bool {
         if self.knows_atom(word) {
