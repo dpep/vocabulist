@@ -526,8 +526,16 @@ fn a_shorthand_that_could_never_apply_is_refused() {
     let out = run(&db, &["--expand"], Some("Zrepro it\n"));
     assert_eq!(
         out.stdout, "Reproduce it\n",
-        "the meaning is stored lowercase"
+        "an all-caps meaning is stored lowercase"
     );
+
+    // Any other meaning keeps the case it was typed in.
+    assert_eq!(
+        vocab(&db, &["shorthand", "zgh=GitHub", "zafaik=as far as I know"]).code,
+        0
+    );
+    let out = run(&db, &["--expand"], Some("on zgh, zafaik\n"));
+    assert_eq!(out.stdout, "on GitHub, as far as I know\n");
 }
 
 #[test]

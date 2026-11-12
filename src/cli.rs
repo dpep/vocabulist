@@ -1180,7 +1180,7 @@ fn shorthand(
     }
     let confirmed: Vec<(String, String)> = confirmed
         .into_iter()
-        .map(|(s, m)| (text::normalize(s.trim()), m.trim().to_lowercase()))
+        .map(|(s, m)| (text::normalize(s.trim()), meaning_as_stored(m.trim())))
         .collect();
     let trust = store.trust()?;
     let dictionary = crate::dict::load();
@@ -1217,6 +1217,17 @@ fn shorthand(
         output::status(out, &format!("confirmed {}", said.join(", ")), format)?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// A shorthand's meaning as typed, except all caps: `GitHub` and "as far as
+/// I know" keep their case, and `REPRODUCE` is shouting, not spelling.
+fn meaning_as_stored(meaning: &str) -> String {
+    let letters: Vec<char> = meaning.chars().filter(|c| c.is_alphabetic()).collect();
+    if letters.len() > 1 && letters.iter().all(|c| c.is_uppercase()) {
+        meaning.to_lowercase()
+    } else {
+        meaning.to_string()
+    }
 }
 
 /// The checker over this lexicon: deliberate words as the lexicon proper,
