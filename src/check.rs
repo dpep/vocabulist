@@ -1372,8 +1372,8 @@ mod tests {
         let c = checker(
             &["y'all"],
             &[
-                "e'en", "o'er", "ne'er", "e'er", "he'd", "might've", "who'll", "i've", "we",
-                "said", "so",
+                "e'en", "o'er", "ne'er", "e'er", "he'd", "she'd", "shed", "might've", "who'll",
+                "i've", "it'd", "that'd", "who'd", "how'd", "ma'am", "we", "said", "so",
             ],
         );
         let suggested = |line: &str| -> Vec<String> {
@@ -1390,6 +1390,16 @@ mod tests {
             );
         }
         assert_eq!(suggested("we said mightve so"), vec!["might've"]);
+        for (bare, fixed) in [
+            ("itd", "it'd"),
+            ("thatd", "that'd"),
+            ("whod", "who'd"),
+            ("howd", "how'd"),
+            ("maam", "ma'am"),
+        ] {
+            assert_eq!(suggested(&format!("we said {bare} so")), vec![fixed]);
+        }
+        assert!(suggested("we said shed so").is_empty(), "a word");
         assert_eq!(suggested("we said wholl so"), vec!["who'll"]);
         assert_eq!(
             suggested("we said ive so"),

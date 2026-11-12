@@ -73,14 +73,22 @@ pub fn expand(word: &str) -> Option<&'static str> {
 /// `'m` — rather than an archaic or poetic elision?
 ///
 /// The bundled word list is SCOWL, which carries `e'en`, `o'er` and `ne'er`;
-/// derived from without this, `een` became `e'en`. `'d` is left out too: its
-/// bare forms are words (`shed`, `wed`) or near ones (`hed`, for `had` or
-/// `head` as often as `he'd`), and the two worth having, `you'd` and
-/// `they'd`, are in the table. Your own lexicon is not held to this.
+/// derived from without this, `een` became `e'en`. `'d` counts only on the
+/// stems below: elsewhere its bare forms are words (`shed`, `wed`) or near
+/// ones (`hed`, for `had` or `head` as often as `he'd`). A stem here whose
+/// bare form is a word (`i'd`, `id`) is still refused by [`derive`]. Your
+/// own lexicon is not held to this.
 pub fn is_standard(word: &str) -> bool {
+    const D_STEMS: &[&str] = &[
+        "it", "that", "who", "how", "what", "where", "why", "when", "there",
+    ];
     ["n't", "'ve", "'ll", "'re", "'m"]
         .iter()
         .any(|suffix| word.ends_with(suffix))
+        || word
+            .strip_suffix("'d")
+            .is_some_and(|stem| D_STEMS.contains(&stem))
+        || word == "ma'am"
 }
 
 /// Derive apostrophe-less mappings from any collection of known words.

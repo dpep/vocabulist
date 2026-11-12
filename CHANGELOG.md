@@ -61,7 +61,8 @@ lexicon you already have.
   never flagged or rewritten, and a `<pre>` that starts a line and stays open
   is skipped to its `</pre>` like a fenced block.
 - **No more archaic contractions.** Apostrophe forms from the bundled word list
-  are limited to `n't`, `'ve`, `'ll`, `'re` and `'m`, so `een`, `oer`, `neer`,
+  are limited to `n't`, `'ve`, `'ll`, `'re`, `'m`, `'d` on `it`, `that` and
+  the wh-words (`itd`, `whod`, `howd`), and `ma'am`, so `een`, `oer`, `neer`,
   `eer` and `Hed` no longer become `e'en`, `o'er`, `ne'er`, `e'er` and `He'd`.
   Forms from your own lexicon (`y'all`) still count. `ive` now becomes `I've`,
   not `i've`.
