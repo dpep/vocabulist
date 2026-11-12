@@ -209,8 +209,9 @@ pub enum Command {
         /// rule.
         #[arg(long)]
         trusted: bool,
-        /// Drop words an ordinary dictionary already knows, leaving jargon,
-        /// names, and coinages.
+        /// Drop words an ordinary dictionary already knows, as a word or as a
+        /// proper name, leaving jargon and coinages. A word from a deliberate
+        /// source (added, owned, installed) stays even when it is also a name.
         #[arg(long)]
         uncommon: bool,
     },

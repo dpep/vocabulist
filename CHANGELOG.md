@@ -65,9 +65,9 @@ lexicon you already have.
   names; levels 10-60, same licence) now drops them from `--uncommon` and accepts them capitalized.
   Lowercase, a name is still checked, so a slip can't hide behind one, and
   opening a sentence a name one edit from a far commoner word (`Kant`/`want`,
-  `Thai`/`that`) is still flagged. Your
-  export shrinks by about 1%, including `linux` and `apache`, which a
-  dictionary knows capitalized.
+  `Thai`/`that`) is still flagged. Only a name merely observed in your text
+  leaves the export; one you added, own or installed (`vocab add Thor`, a
+  repo called `faraday`) stays. Your export shrinks by about 0.5%.
 - **A typo you make habitually is flagged even when seeding found it in
   someone's README.** Prose mined from the machine vouched for any word seen
   twice, ahead of the habitual-typo veto, so `teh` could pass unflagged and

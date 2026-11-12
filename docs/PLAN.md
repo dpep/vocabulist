@@ -459,9 +459,11 @@ composable steps, each defined once:
   as a word or as a proper name (`latin`, `america`): SCOWL's word lists hold
   no capitalized words, so without the bundled proper names a place or a
   people passed as the user's jargon and a transcription consumer "corrected"
-  `Latino` to `Latin`. On a real store this drops 40 of 3,425 words, among
-  them `linux`, `apache` and `prometheus`, which a dictionary does know
-  capitalized. It is a filter, not a set, so on a plain `list` it keeps the browse's default
+  `Latino` to `Latin`. A name is dropped only when it was merely observed:
+  a deliberate source (`vocab add Thor`, a repo called `faraday`, an
+  installed `prometheus`) is the user's word whatever else it names. On a
+  real store that drops 20 of 3,425 words where dropping every name took 40,
+  half of them the user's own. It is a filter, not a set, so on a plain `list` it keeps the browse's default
   limit of 50. Without a dictionary it refuses (exit 2) rather than passing
   everything through: "uncommon" is a claim the dictionary backs, and a
   warning on stderr is invisible to a `-J` consumer. The dictionary is

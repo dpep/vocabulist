@@ -1492,9 +1492,13 @@ fn adding_a_word_already_seen_says_it_was_upgraded() {
 #[test]
 fn uncommon_drops_words_a_dictionary_knows_as_names() {
     let db = scratch_db("uncommon-names");
-    assert_eq!(vocab(&db, &["add", "latin", "america", "zblorg"]).code, 0);
+    for source in ["first", "second"] {
+        learn(&db, "we said latin and america and zblorg", source);
+    }
+    // Deliberate, a name is the user's word all the same.
+    assert_eq!(vocab(&db, &["add", "thor"]).code, 0);
     let listed = listed_words(&vocab(&db, &["list", "--trusted", "--uncommon", "-J"]).stdout);
-    assert_eq!(listed, vec!["zblorg".to_string()]);
+    assert_eq!(listed, vec!["thor".to_string(), "zblorg".to_string()]);
 }
 
 #[test]

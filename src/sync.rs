@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::dict::Dictionary;
 use crate::store::{Store, default_db_path};
 use crate::trust::Trust;
-use crate::types::Entry;
+use crate::types::{Entry, Provenance};
 
 /// Whether the consuming application is actually pointed at our file.
 ///
@@ -385,6 +385,11 @@ pub fn retain_trusted(entries: &mut Vec<Entry>, trust: &Trust, dictionary: Optio
 /// Drop the words an ordinary dictionary already knows — as a word, or as a
 /// proper name (`latin`, `america`), which a lowercase word list cannot say.
 ///
+/// A name is dropped only when it was merely observed. A deliberate source
+/// (`vocab add Thor`, a repo called `faraday`, an installed `prometheus`) is
+/// the user's word whatever else it names, and a consumer like transcription
+/// needs it lowercase as much as any jargon.
+///
 /// Refuses without a dictionary rather than keeping everything: "uncommon" is
 /// a claim the dictionary backs, and a warning on stderr is invisible to a
 /// `-J` consumer, which would then be handed `the` as jargon.
@@ -396,7 +401,8 @@ pub fn retain_uncommon(
     let names = crate::dict::proper_names();
     entries.retain(|entry| {
         !crate::dict::contains(dictionary, &entry.word)
-            && !crate::dict::contains(&names, &entry.word)
+            && !(entry.provenance == Provenance::Observed
+                && crate::dict::contains(&names, &entry.word))
     });
     Ok(())
 }
@@ -558,7 +564,6 @@ fn write_all(path: &Path, words: &[String]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Provenance;
 
     /// The path the ${userHome} fixture resolves to on whatever machine the
     /// suite is running on.
@@ -779,6 +784,25 @@ mod tests {
         let dictionary = crate::dict::from_words(["widget"]);
         retain_uncommon(&mut entries, Some(&dictionary)).unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn uncommon_drops_a_name_only_when_it_was_merely_observed() {
+        let store = Store::open(":memory:").unwrap();
+        // `latin` and `stella` are bundled proper names.
+        for (word, provenance) in [
+            ("latin", Provenance::Observed),
+            ("stella", Provenance::Owned),
+            ("thor", Provenance::User),
+        ] {
+            store.upsert_word(word, word, provenance, 1).unwrap();
+        }
+        let mut entries = store.list(None, usize::MAX).unwrap();
+        let dictionary = crate::dict::from_words(["widget"]);
+        retain_uncommon(&mut entries, Some(&dictionary)).unwrap();
+        let mut kept: Vec<&str> = entries.iter().map(|e| e.word.as_str()).collect();
+        kept.sort();
+        assert_eq!(kept, ["stella", "thor"], "a deliberate word is the user's");
     }
 
     #[test]
