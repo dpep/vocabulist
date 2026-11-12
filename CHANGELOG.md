@@ -109,6 +109,10 @@ lexicon you already have.
   `t3h the`), which `--fix` could never apply sensibly.
 - **`vocab add` reports an upgrade:** adding a word already learned from your
   text said `added 0`; it now says `added 0, upgraded 1`.
+- **`vocab sync` and `vocab unsync` no longer wipe your macOS dictionary.**
+  A `~/Library/Spelling/LocalDictionary` that wasn't valid UTF-8 read as
+  empty, and the merge then replaced every word you had taught macOS with
+  vocabulist's. Such a file is now refused, by path, and left untouched.
 - **`vocab sync` takes back words it wrote to the macOS dictionary** that no
   longer export, instead of keeping every word ever synced. After upgrading,
   one `vocab sync` drops the names the export no longer carries (`latin`,

@@ -358,16 +358,28 @@ fn manifest_path(target: &str) -> PathBuf {
     data_dir().join("synced").join(format!("{target}.txt"))
 }
 
+/// Best-effort read for reporting only: anything unreadable counts as empty.
 fn read_lines(path: &Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .map(|text| {
-            text.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    read_lines_strict(path).unwrap_or_default()
+}
+
+/// Read a file we are about to rewrite. Only a missing file is empty; any
+/// other failure (not UTF-8, unreadable) is refused, because the merge would
+/// otherwise write our words over everything the user had in it.
+fn read_lines_strict(path: &Path) -> Result<Vec<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!(
+            "refusing to rewrite {}: {e}; it was left untouched",
+            path.display()
+        )),
+    }
 }
 
 /// Keep the words that have earned trust (`crate::trust`): what `list
@@ -486,7 +498,7 @@ pub fn install(
 
     // Shared file: merge, never clobber. Anything already present — whether
     // the user learned it or a previous run wrote it — stays exactly once.
-    let existing = read_lines(&target.path);
+    let existing = read_lines_strict(&target.path)?;
     let present: BTreeSet<&str> = existing.iter().map(String::as_str).collect();
     let fresh: Vec<String> = words
         .iter()
@@ -498,7 +510,7 @@ pub fn install(
     // A word we wrote that no longer exports is taken back, as `unsync`
     // would: the manifest says it was ours, and macOS never forgets one.
     let exported: BTreeSet<&str> = words.iter().map(String::as_str).collect();
-    let mut ours: BTreeSet<String> = read_lines(&target.manifest).into_iter().collect();
+    let mut ours: BTreeSet<String> = read_lines_strict(&target.manifest)?.into_iter().collect();
     let stale: BTreeSet<String> = ours
         .iter()
         .filter(|w| !exported.contains(w.as_str()))
@@ -527,7 +539,7 @@ pub fn install(
 /// Remove exactly the words this tool wrote, leaving the user's own alone.
 pub fn uninstall(target: &Target, dry_run: bool) -> Result<SyncReport, Box<dyn std::error::Error>> {
     let manifest = &target.manifest;
-    let ours: BTreeSet<String> = read_lines(manifest).into_iter().collect();
+    let ours: BTreeSet<String> = read_lines_strict(manifest)?.into_iter().collect();
     let mut report = SyncReport {
         target: target.name.to_string(),
         path: target.path.display().to_string(),
@@ -548,7 +560,7 @@ pub fn uninstall(target: &Target, dry_run: bool) -> Result<SyncReport, Box<dyn s
         return Ok(report);
     }
 
-    let existing = read_lines(&target.path);
+    let existing = read_lines_strict(&target.path)?;
     let kept: Vec<String> = existing
         .iter()
         .filter(|w| !ours.contains(w.as_str()))
@@ -716,6 +728,27 @@ mod tests {
         assert_eq!((report.added, report.removed), (0, 1));
         assert_eq!(read_lines(&target.path), vec!["handwritten", "zblorg"]);
         assert_eq!(read_lines(&target.manifest), vec!["zblorg"]);
+    }
+
+    #[test]
+    fn an_unreadable_shared_file_is_refused_not_overwritten() {
+        // A LocalDictionary that isn't UTF-8 once read as empty, and the merge
+        // then wrote only our words over everything the user had learned.
+        let dir = scratch("non-utf8");
+        let target = shared_target(&dir);
+        let original = b"usersword\ncaf\xe9\nmyname\n";
+        std::fs::write(&target.path, original).unwrap();
+        write_all(&target.manifest, &["zblorg".into()]).unwrap();
+        let store = Store::open(":memory:").unwrap();
+        store
+            .upsert_word("zblorg", "zblorg", Provenance::Owned, 1)
+            .unwrap();
+
+        let err = install(&store, &target, false).unwrap_err().to_string();
+        assert!(err.contains("LocalDictionary"), "names the file: {err}");
+        let err = uninstall(&target, false).unwrap_err().to_string();
+        assert!(err.contains("LocalDictionary"), "names the file: {err}");
+        assert_eq!(std::fs::read(&target.path).unwrap(), original);
     }
 
     #[test]
