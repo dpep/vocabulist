@@ -44,9 +44,9 @@ Examples:
   vocab list rubo                  lexicon entries matching \"rubo\"
   vocab typos                      your habitual typos, and what each means
   vocab shorthand repro reproduce  say `repro` is yours, and what it means
-  vocab --fix -f notes.md          write it back with confirmed typos fixed
+  vocab --fix -f notes.md          write it back with typos and apostrophes fixed
   vocab --fix --expand -f mail.txt  ...and your shorthands spelled out
-  vocab sync                       export into cSpell and the macOS dictionary
+  vocab sync                       export into cSpell, macOS and Wispr Flow
   vocab phrases                    the phrases you actually use
   vocab analyze --lexicon          vocabulary and readability of your corpus
   vocab self                       the handles believed to be yours
@@ -108,8 +108,11 @@ pub struct Cli {
     /// and one inferred: a swap of two letters in a word you write far more
     /// often, or, for a slip never seen, in a common word the checker's
     /// suggestion all but settles. Candidates are suggested, never written; `vocab
-    /// add` a word to keep `--fix` off it. Code spans, URLs and fenced
-    /// blocks are left alone, and the typed case is kept (`Teh` -> `The`).
+    /// add` a word to keep `--fix` off it. Code is left alone: code spans,
+    /// fenced blocks, HTML `<code>`, `<kbd>`, `<pre>` and `<samp>`, URLs, and
+    /// a word joined to code (`teh.rs`, `$teh`, `teh()`). An ALLCAPS word
+    /// reads as an acronym and is never checked. The typed case is kept
+    /// (`Teh` -> `The`).
     /// The text goes to stdout, line by line as it is read; what changed goes
     /// to stderr, in the -j/-J format when one is given. Exits 1 when anything
     /// changed.
@@ -130,6 +133,10 @@ pub struct Cli {
 
     /// With --fix or --expand, rewrite --file in place rather than printing
     /// it.
+    ///
+    /// The file is replaced atomically, so a failed write leaves it whole. A
+    /// symlink is followed and permissions are kept; a read-only file is
+    /// refused.
     #[arg(long, requires_all = ["rewrite", "file"])]
     pub in_place: bool,
 
@@ -382,7 +389,8 @@ pub enum Command {
     },
     /// Manage the handles that identify you — a GitHub login, a Slack user
     /// ID. Reading a channel surfaces everyone; these say which messages are
-    /// yours, and capture from reads stays off until at least one is set.
+    /// yours, and capture from reads stays off until there is one. Seeding
+    /// detects them from git config and `gh`; add any it missed.
     #[command(name = "self")]
     Identity {
         /// Handles to add. Omit to list what's configured.
