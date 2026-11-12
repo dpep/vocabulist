@@ -431,6 +431,15 @@ back a word it wrote that no longer exports (a name dropped by
 export instead of keeping every word ever written; a word the user had
 there first was never in the manifest and is never touched.
 
+The targets and their manifests belong to the user, not to a lexicon, so
+`sync` and `unsync` refuse a `--db`/`VOCAB_DB` that isn't the default
+lexicon unless given `--any-db`: a scratch lexicon would otherwise take back
+every word the real one wrote. A manifest keyed per lexicon was the
+alternative, and was rejected because it still lets a scratch lexicon write
+into the user's real system dictionary. A file that can't be read (not
+UTF-8) is refused by path rather than read as empty, which would have
+merged our words over everything in it.
+
 Every export is a **lossy projection** — a flat membership set, filtered to
 what an ordinary dictionary doesn't already know. The rich store stays rich;
 the dumbest consumer must not shape the schema.

@@ -1525,3 +1525,66 @@ fn a_capitalized_proper_name_is_not_a_misspelling() {
     // Only as a name: lowercase, it is not vouched for.
     assert_eq!(vocab(&db, &["-J", "the zblorgian voters"]).code, 1);
 }
+
+/// `vocab` with HOME pointed at a scratch dir, so the sync targets (and the
+/// default lexicon) resolve there and never at the real ones.
+fn vocab_home(home: &std::path::Path, args: &[&str]) -> Output {
+    let out = Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .args(args)
+        .env("HOME", home)
+        .env_remove("VOCAB_DB")
+        .env_remove("XDG_DATA_HOME")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run vocab");
+    Output {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code().unwrap_or(-1),
+    }
+}
+
+#[test]
+fn sync_from_another_lexicon_is_refused() {
+    // The targets and their manifests belong to the user, not to a lexicon,
+    // so syncing a scratch one took back every word the real one had written.
+    let home = scratch_db("sync-other-db").parent().unwrap().to_path_buf();
+    let spelling = home.join("Library/Spelling");
+    std::fs::create_dir_all(&spelling).unwrap();
+    let dictionary = spelling.join("LocalDictionary");
+    std::fs::write(&dictionary, "handwritten\n").unwrap();
+    let real = home.join(".local/share/vocabulist/lexicon.db");
+    let scratch = home.join("scratch.db");
+    for db in [&real, &scratch] {
+        let db = db.to_str().unwrap();
+        assert_eq!(vocab_home(&home, &["--db", db, "add", "zblorgish"]).code, 0);
+    }
+    let scratch = scratch.to_str().unwrap();
+
+    for command in ["sync", "unsync"] {
+        let out = vocab_home(&home, &["--db", scratch, command, "-t", "macos"]);
+        assert_eq!(out.code, 2, "{command}: {}", out.stderr);
+        assert!(out.stderr.contains("--any-db"), "{}", out.stderr);
+        assert_eq!(
+            std::fs::read_to_string(&dictionary).unwrap(),
+            "handwritten\n"
+        );
+    }
+
+    // The default lexicon, named or not, syncs as before; so does another
+    // one when asked to.
+    let out = vocab_home(
+        &home,
+        &["--db", real.to_str().unwrap(), "sync", "-t", "macos"],
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let out = vocab_home(&home, &["unsync", "-t", "macos"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let out = vocab_home(&home, &["--db", scratch, "sync", "-t", "macos", "--any-db"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(
+        std::fs::read_to_string(&dictionary)
+            .unwrap()
+            .contains("zblorgish")
+    );
+}

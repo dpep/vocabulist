@@ -326,6 +326,11 @@ pub enum Command {
         /// List the targets and where each one writes.
         #[arg(long)]
         list: bool,
+        /// Sync even though `--db`/`VOCAB_DB` isn't the default lexicon. The
+        /// targets and the record of what was written to them are per user,
+        /// not per lexicon, so this replaces what the default one exported.
+        #[arg(long)]
+        any_db: bool,
     },
     /// Measure vocabulary and linguistic complexity — for a text, or for
     /// everything captured so far.
@@ -416,6 +421,11 @@ pub enum Command {
         /// Report what would change without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Sync even though `--db`/`VOCAB_DB` isn't the default lexicon. The
+        /// targets and the record of what was written to them are per user,
+        /// not per lexicon, so this replaces what the default one exported.
+        #[arg(long)]
+        any_db: bool,
     },
 }
 
@@ -667,6 +677,7 @@ fn dispatch_inner(
     if let Some(Command::Hook { event }) = &cli.command {
         return Ok(hook(cli, event));
     }
+    refuse_sync_from_another_lexicon(cli)?;
     let access = cli.command.as_ref().map_or(Access::Check, Command::access);
     let store = profile.time("store_open", || open_store(cli, access))?;
     let format = cli.format();
@@ -862,6 +873,7 @@ fn dispatch_inner(
             target,
             dry_run,
             list,
+            ..
         }) => {
             if *list {
                 if !cli.quiet {
@@ -880,7 +892,9 @@ fn dispatch_inner(
             Ok(ExitCode::SUCCESS)
         }
 
-        Some(Command::Unsync { target, dry_run }) => {
+        Some(Command::Unsync {
+            target, dry_run, ..
+        }) => {
             let chosen = resolve_targets(target.as_deref())?;
             let mut reports = Vec::new();
             for t in &chosen {
@@ -1028,6 +1042,37 @@ fn hook(cli: &Cli, event: &str) -> ExitCode {
         Err(e) => log::warn!("hook {event} skipped: {e}"),
     }
     ExitCode::SUCCESS
+}
+
+/// Sync targets live under HOME and so does the manifest of what was written
+/// to them, so syncing a scratch lexicon would take back every word the real
+/// one exported. Refused rather than keyed per lexicon: a second manifest over
+/// the same shared file would still let a scratch lexicon write into, and take
+/// back from, the user's real system dictionary.
+fn refuse_sync_from_another_lexicon(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let (command, any_db) = match &cli.command {
+        Some(Command::Sync {
+            list: false,
+            any_db,
+            ..
+        }) => ("sync", *any_db),
+        Some(Command::Unsync { any_db, .. }) => ("unsync", *any_db),
+        _ => return Ok(()),
+    };
+    let Some(db) = &cli.db else { return Ok(()) };
+    let default = default_db_path();
+    let same = db == &default
+        || matches!((db.canonicalize(), default.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    if same || any_db {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to {command} from {}: the sync targets belong to the default lexicon \
+         ({}), and this would replace what it exported; pass --any-db to do it anyway",
+        db.display(),
+        default.display()
+    )
+    .into())
 }
 
 /// One named target, or all of them.
