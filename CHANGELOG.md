@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-11-11
 
 Nothing to do on upgrade: no schema change, and every fix applies to the
 lexicon you already have.
