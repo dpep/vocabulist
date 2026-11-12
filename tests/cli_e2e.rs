@@ -1440,6 +1440,18 @@ fn a_closed_pipe_is_not_an_error() {
 }
 
 #[test]
+fn a_file_a_command_would_not_read_is_a_usage_error() {
+    let db = scratch_db("file-ignored");
+    let path = db.with_file_name("words.txt");
+    std::fs::write(&path, "zblorg\n").unwrap();
+    let file = path.to_str().unwrap();
+    for args in [&["add", "-f", file, "zquux"][..], &["capture", "-f", file]] {
+        assert_eq!(vocab(&db, args).code, 2, "{args:?}");
+    }
+    assert!(!db.exists(), "refused before touching the lexicon");
+}
+
+#[test]
 fn a_closed_stderr_does_not_cut_fix_short() {
     use std::io::Write;
     let db = scratch_db("closed_stderr");

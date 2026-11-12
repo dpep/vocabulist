@@ -52,7 +52,9 @@ lexicon you already have.
   best-effort: the text is written whole and a change still exits 1.
 - **`--file` plus text to check is a usage error (exit 2).** `vocab --fix
   --in-place -f notes.txt "teh"` checked the text and wrote the result over
-  `notes.txt`; without `--fix` the file was silently ignored.
+  `notes.txt`; without `--fix` the file was silently ignored. So is `--file`
+  on a command that doesn't read it (`vocab add -f words.txt`, `vocab
+  capture -f`), which ignored it silently.
 - **Code-shaped words are left alone outside backticks too:** `teh.rs`,
   `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. Checking no
   longer flags them either, so a word `--fix` won't touch is never reported.

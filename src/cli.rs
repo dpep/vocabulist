@@ -509,6 +509,13 @@ impl Cli {
         }
     }
 
+    /// Whether this command reads `--file`. It is global, so clap takes it
+    /// anywhere, and a command that ignored it (`vocab add -f words.txt`)
+    /// did so silently.
+    fn reads_file(&self) -> bool {
+        matches!(self.command, None | Some(Command::Analyze { .. }))
+    }
+
     /// Default is human; `-J/--ndjson` wins over `-j/--json`.
     pub fn format(&self) -> Format {
         if self.ndjson {
@@ -530,6 +537,14 @@ pub fn run() -> ExitCode {
             .error(
                 clap::error::ErrorKind::ArgumentConflict,
                 "--file cannot be used with text to check: give one or the other",
+            )
+            .exit();
+    }
+    if cli.file.is_some() && !cli.reads_file() {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--file is read only when checking, fixing or analyzing text",
             )
             .exit();
     }
