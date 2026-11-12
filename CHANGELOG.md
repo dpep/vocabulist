@@ -29,6 +29,10 @@ lexicon you already have.
   `list` and `status` failed with "attempt to write a readonly database",
   because SQLite's WAL needs a `-shm` file beside the lexicon. They now fall
   back to reading it as an unchanging file.
+- **A prompt typed while a long one is being learned is no longer lost.**
+  Learning a captured paste of tens of KB held the lexicon longer than a
+  capture waits, so the next prompt was dropped silently. A hook now keeps at
+  most 16 KB of one capture, cut at a word, and logs a dropped capture.
 - **A prompt the hook failed to stage can be captured again.** It was marked
   captured before it was staged, so a failed write lost that text for good.
 - **A `--db` that was never seeded knows how common words are.** Without a

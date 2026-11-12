@@ -36,6 +36,14 @@ pub struct HookInput {
 /// predictable — leftovers wait for the next Stop rather than stalling one.
 const STOP_PROCESS_LIMIT: usize = 200;
 
+/// The most of one capture that is spooled.
+///
+/// Each spool row is processed in one transaction, and while it runs every
+/// other hook's capture waits on the lock — for 250 ms, then gives up and
+/// loses that prompt. A row much past this outlasts the wait. What it cuts
+/// is a paste (a log, a file, a long thread), not prose anyone typed.
+const MAX_CAPTURE_BYTES: usize = 16 * 1024;
+
 /// Outbound text worth learning from, if this tool call carries any.
 ///
 /// Only *sends* qualify, never reads: a Gmail search result is other people's
@@ -277,19 +285,22 @@ fn capture_own_messages(store: &Store, input: &HookInput) {
         // The claim itself is what keeps re-reads idempotent — word_sources
         // would dedup, but registers and n-grams would not, so a second read
         // would make the same sentence look like a habit.
-        let _ = store.transaction(|| -> rusqlite::Result<()> {
+        let claimed = store.transaction(|| -> rusqlite::Result<()> {
             if !store.claim_source(&message.key)? {
                 return Ok(());
             }
             store.spool_with_author(
                 message.register,
                 Some(&message.key),
-                &message.body,
+                bounded(&message.body),
                 authored_by,
                 Some(&message.author),
             )?;
             Ok(())
         });
+        if let Err(e) = claimed {
+            log::warn!("dropped a {} message: {e}", message.register.as_str());
+        }
     }
 }
 
@@ -347,12 +358,31 @@ fn spool(store: &Store, register: Register, source: &str, body: &str) {
         "user"
     };
     let source = (!source.is_empty()).then_some(source);
-    let _ = store.transaction(|| -> rusqlite::Result<()> {
+    let claimed = store.transaction(|| -> rusqlite::Result<()> {
         if store.claim_source(&content_key(register, body))? {
-            store.spool(register, source, body, authored_by)?;
+            store.spool(register, source, bounded(body), authored_by)?;
         }
         Ok(())
     });
+    if let Err(e) = claimed {
+        log::warn!("dropped a {} capture: {e}", register.as_str());
+    }
+}
+
+/// `body` cut to `MAX_CAPTURE_BYTES`, at the last whitespace before it so
+/// no word is split.
+fn bounded(body: &str) -> &str {
+    if body.len() <= MAX_CAPTURE_BYTES {
+        return body;
+    }
+    let mut end = MAX_CAPTURE_BYTES;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &body[..end];
+    head.rfind(char::is_whitespace)
+        .map_or(head, |i| &head[..i])
+        .trim_end()
 }
 
 #[cfg(test)]
@@ -374,6 +404,21 @@ mod tests {
         };
         run("user-prompt-submit", &s, &input);
         assert_eq!(s.pending_spool(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_huge_capture_is_cut_at_a_word() {
+        let s = store();
+        let input = HookInput {
+            prompt: "widget ".repeat(20_000),
+            session_id: "abc".into(),
+            ..Default::default()
+        };
+        run("user-prompt-submit", &s, &input);
+        let spooled = s.pending_spool(10).unwrap();
+        let body = &spooled[0].body;
+        assert!(body.len() <= MAX_CAPTURE_BYTES, "{}", body.len());
+        assert!(body.ends_with("widget"), "cut between words");
     }
 
     #[test]
