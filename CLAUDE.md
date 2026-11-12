@@ -62,12 +62,14 @@ decisions — reach for it before inventing a method that has a name.
 - **stdout is for data, stderr is for logs.** All logging goes through
   `env_logger` to stderr so a consumer piping `vocab` gets clean output.
 - **Reading never writes.** Every command declares what it needs from the
-  lexicon (`Command::access()` in `src/cli.rs`: none, read, or write), and a
-  read opens it `SQLITE_OPEN_READ_ONLY`: no create, no migrate, no version
-  stamp, and a schema it doesn't expect is refused (exit 2), never converted.
+  lexicon (`Command::access()` in `src/cli.rs`: none, read, check, or write),
+  and a read opens it `SQLITE_OPEN_READ_ONLY`: no create, no version stamp. A
+  *newer* schema is refused (exit 2) by every open, writing ones included, and
+  never stamped down. An *older* schema is migrated forward once, by a single
+  writing open inside `BEGIN IMMEDIATE` that rereads the version, then reopened
+  read-only, so a CLI or `--db` user isn't stranded until a hook writes.
   Other tools read this lexicon (soundly's transcript correction), and a
-  reader that migrates or re-stamps it under a different binary version
-  corrupts it. A new command picks its access in that exhaustive match; pick
+  reader that re-stamps it under an older binary corrupts it. A new command picks its access in that exhaustive match; pick
   write only if it really writes.
 - **Consumers read the rule, never copy it.** A set another tool wants (the
   trusted words, the export set) is defined once — trust in `trust.rs`, which
