@@ -372,25 +372,64 @@ fn find_open(chars: &[char], element: &str, from: usize) -> Option<(usize, usize
 /// Whether `line` opens a `<pre>` block and leaves it open, so the lines
 /// below are inside it until one closes it.
 ///
-/// Only at the start of the line, as a fence is: a `<pre>` further along is
-/// one being written about — in backticks, a comment, a sentence — and taking
-/// it for an opener silenced the rest of the document.
+/// Only at the start of the line, as a fence is — after a list marker or the
+/// wrapping tags a highlighter emits (`<div class="highlight"><pre>`). A
+/// `<pre>` further along is one being written about, and taking it for an
+/// opener silenced the rest of the document; so is one followed by a space
+/// and more words (`<pre> is the element…`), where code starts at the `>`.
 pub fn opens_pre(line: &str) -> bool {
-    let lower: Vec<char> = line
-        .trim_start()
-        .chars()
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    if find_open(&lower, "pre", 0).is_none_or(|(start, _)| start != 0) {
+    let lower: Vec<char> = line.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let lead = block_lead(&lower);
+    let lower = &lower[lead..];
+    let Some((0, body)) = find_open(lower, "pre", 0) else {
+        return false;
+    };
+    let rest = &lower[body..];
+    if rest.first().is_some_and(|c| c.is_whitespace()) && rest.iter().any(|c| !c.is_whitespace()) {
         return false;
     }
     let close: Vec<char> = "</pre>".chars().collect();
-    let mut last = None;
-    while let Some((_, body)) = find_open(&lower, "pre", last.unwrap_or(0)) {
-        last = Some(body);
+    let mut last = body;
+    while let Some((_, next)) = find_open(lower, "pre", last) {
+        last = next;
     }
     // Only the last opening decides; checking each one's tail was quadratic.
-    last.is_some_and(|body| !lower[body..].windows(close.len()).any(|w| w == &close[..]))
+    !lower[last..].windows(close.len()).any(|w| w == &close[..])
+}
+
+/// How much of `line` comes before a block-level tag could: indentation, a
+/// list marker (`-`, `*`, `+`, `12.`), and any tags other than `<pre`.
+fn block_lead(line: &[char]) -> usize {
+    let skip_space = |i: usize| {
+        (i..line.len())
+            .find(|&j| !line[j].is_whitespace())
+            .unwrap_or(line.len())
+    };
+    let mut i = skip_space(0);
+    let digits = (i..line.len())
+        .find(|&j| !line[j].is_ascii_digit())
+        .unwrap_or(line.len());
+    let marker_end = match line.get(i) {
+        Some('-' | '*' | '+') => Some(i + 1),
+        _ if digits > i && matches!(line.get(digits), Some('.' | ')')) => Some(digits + 1),
+        _ => None,
+    };
+    if let Some(end) = marker_end
+        && line.get(end).is_some_and(|c| c.is_whitespace())
+    {
+        i = skip_space(end);
+    }
+    while line.get(i) == Some(&'<')
+        && line.get(i + 1).is_some_and(char::is_ascii_alphabetic)
+        && !(line[i + 1..].starts_with(&['p', 'r', 'e'])
+            && matches!(line.get(i + 4), Some('>' | ' ')))
+    {
+        let Some(close) = (i..line.len()).find(|&j| line[j] == '>') else {
+            break;
+        };
+        i = close + 1;
+    }
+    i
 }
 
 /// Mask `<element>…</element>` whole, tags and contents. An element left
@@ -648,10 +687,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pre_opens_after_wrapping_tags_or_a_list_marker_but_not_in_a_sentence() {
+        let cases = [
+            // What syntax highlighters emit.
+            ("<div class=\"highlight\"><pre>", true),
+            ("<div><pre><code>fn main() {", true),
+            ("- <pre>", true),
+            ("  12. <pre class=\"x\">", true),
+            ("<pre>let x = 1;", true),
+            // A sentence about the element, not a block.
+            ("<pre> is the element for preformatted text", false),
+            ("- <pre> keeps whitespace", false),
+            ("<div>see the <pre> tag", false),
+            ("-<pre>", false),
+        ];
+        for (line, opens) in cases {
+            assert_eq!(opens_pre(line), opens, "{line:?}");
+        }
+    }
+
+    #[test]
     fn masking_a_long_line_is_linear() {
         // Prose by `is_prose_line`'s count, and each unit re-scans the rest of
         // the line under a quadratic mask.
-        for unit in ["<ab", "ab@", "<pre ", "<pre>x"] {
+        for unit in ["<ab", "ab@", "<pre ", "<pre>x", "<a>"] {
             let line = unit.repeat(100_000 / unit.len());
             let started = std::time::Instant::now();
             mask_non_prose(&line);

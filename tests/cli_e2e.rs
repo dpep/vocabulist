@@ -1388,6 +1388,28 @@ fn fix_leaves_html_code_elements_alone() {
 }
 
 #[test]
+fn fix_leaves_highlighted_and_listed_pre_blocks_alone() {
+    let db = scratch_db("fix-pre-wrapped");
+    let input = "<div class=\"highlight\"><pre>\n\
+                 dont peopel\n\
+                 </pre></div>\n\
+                 - <pre>\n\
+                 dont peopel\n\
+                 </pre>\n\
+                 <pre> is the element for this and you dont close it inline\n\
+                 but dont\n";
+    let out = run(&db, &["--fix"], Some(input));
+    assert_eq!(
+        out.stdout,
+        input
+            .replace("you dont close", "you don't close")
+            .replace("but dont", "but don't"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
 fn an_unseeded_lexicon_still_knows_how_common_words_are() {
     // Never seeded, so no frequency table: the embedded core list stands in.
     let db = scratch_db("unseeded-frequency");
