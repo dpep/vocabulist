@@ -129,6 +129,10 @@ fn replace_atomically(
 fn match_case(from: &str, to: &str) -> String {
     let letters: Vec<char> = from.chars().filter(|c| c.is_alphabetic()).collect();
     let upper = |c: &char| c.is_uppercase();
+    // A meaning stored with capitals (`iPhone`, `macOS`) is spelled that way.
+    if to.chars().any(|c| c.is_uppercase()) {
+        return to.to_string();
+    }
     match letters.as_slice() {
         [first, rest @ ..] if upper(first) && rest.iter().all(upper) && !rest.is_empty() => {
             to.to_uppercase()
@@ -322,5 +326,11 @@ mod tests {
         assert_eq!(match_case("TEH", "the"), "THE");
         assert_eq!(match_case("teh", "the"), "the");
         assert_eq!(match_case("Dont", "don't"), "Don't");
+    }
+
+    #[test]
+    fn a_cased_meaning_keeps_its_case_at_a_sentence_start() {
+        assert_eq!(match_case("Zip", "iPhone"), "iPhone");
+        assert_eq!(match_case("Zmo", "macOS"), "macOS");
     }
 }
