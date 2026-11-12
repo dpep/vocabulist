@@ -1211,6 +1211,28 @@ fn a_hook_does_not_wait_on_a_held_writer_lock() {
 }
 
 #[test]
+fn a_prompt_the_hook_failed_to_spool_is_not_marked_captured() {
+    let db = scratch_db("hook_spool_fails");
+    vocab(&db, &["add", "zblorg"]);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("DROP TABLE spool").unwrap();
+
+    assert_eq!(
+        run(&db, &["hook", "user-prompt-submit"], Some(PROMPT)).code,
+        0
+    );
+    // An older version makes the next writing open recreate the table.
+    conn.pragma_update(None, "user_version", 0).unwrap();
+    drop(conn);
+    vocab(&db, &["add", "widget"]);
+
+    run(&db, &["hook", "user-prompt-submit"], Some(PROMPT));
+    let status: serde_json::Value =
+        serde_json::from_str(&vocab(&db, &["status", "-j"]).stdout).unwrap();
+    assert_eq!(status["spooled"], 1, "the failed capture claimed the text");
+}
+
+#[test]
 fn a_newer_schema_is_never_stamped_down() {
     let db = scratch_db("newer_schema");
     vocab(&db, &["add", "zblorg"]);

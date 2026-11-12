@@ -21,6 +21,8 @@ lexicon you already have.
   no longer waits on a capture hook's lock. Only the first run on the default
   lexicon writes, to seed it. A check no longer creates a `--db` that
   doesn't exist.
+- **A prompt the hook failed to stage can be captured again.** It was marked
+  captured before it was staged, so a failed write lost that text for good.
 - **A `--db` that was never seeded knows how common words are.** Without a
   frequency table, scores went flat and a never-seen slip like `teh` was never
   fixed. The embedded core frequencies now stand in, in memory.

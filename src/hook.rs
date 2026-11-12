@@ -339,19 +339,20 @@ fn spool(store: &Store, register: Register, source: &str, body: &str) {
     // reaches the top of `vocab phrases` by repetition alone. A claim that
     // errors drops the capture: losing a prompt costs a little recall, and
     // failing the other way quietly restores the behavior this prevents.
-    if !store
-        .claim_source(&content_key(register, body))
-        .unwrap_or(false)
-    {
-        return;
-    }
+    // Claimed and spooled together, as `capture_own_messages` does, so a
+    // failed spool does not leave the text claimed and lost for good.
     let authored_by = if watermark::is_assistant_authored(body) {
         "assistant"
     } else {
         "user"
     };
     let source = (!source.is_empty()).then_some(source);
-    let _ = store.spool(register, source, body, authored_by);
+    let _ = store.transaction(|| -> rusqlite::Result<()> {
+        if store.claim_source(&content_key(register, body))? {
+            store.spool(register, source, body, authored_by)?;
+        }
+        Ok(())
+    });
 }
 
 #[cfg(test)]
