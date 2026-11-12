@@ -885,7 +885,11 @@ injected slips happen to be ones this user makes.
 with corrections applied. It edits a file only with `--in-place`, and then
 atomically — written beside the file and renamed over it, through a symlink to
 its target, keeping its permissions, refusing a read-only file — reporting the
-fixes only once the file is written. `--file` with positional text is a usage
+fixes only once the file is written. Two cases give up atomicity and write in
+place: a file with other hard links, which a rename would split from them,
+and one in a directory that can't take the temporary file. A rename also
+drops extended attributes; that is not handled. A temporary file a crashed
+run left (named for its pid, so no live process owns it) is removed first. `--file` with positional text is a usage
 error (exit 2): reading one and writing the other once overwrote a file with
 the argument.
 

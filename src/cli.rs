@@ -136,7 +136,8 @@ pub struct Cli {
     ///
     /// The file is replaced atomically, so a failed write leaves it whole. A
     /// symlink is followed and permissions are kept; a read-only file is
-    /// refused.
+    /// refused. A file with other hard links, or in a directory that can't
+    /// be written, is written in place instead.
     #[arg(long, requires_all = ["rewrite", "file"])]
     pub in_place: bool,
 

@@ -43,7 +43,9 @@ lexicon you already have.
 
 - **`--in-place` replaces the file atomically**, follows a symlink to its
   target, keeps the file's permissions, refuses a read-only file, and reports
-  fixes only once they're written.
+  fixes only once they're written. A file with other hard links, or in a
+  directory you can't write, is written in place instead, and an error names
+  the file.
 - **A closed stderr no longer cuts `--fix` short.** When whatever read the
   report quit (`vocab --fix 2>&1 >out | head -1`), the text
   stopped at the first fix and the run exited 0. The report is now

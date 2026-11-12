@@ -50,23 +50,61 @@ pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
     (chars.into_iter().collect(), landed)
 }
 
-/// Replace the file at `path` with `contents`, all at once.
+/// Replace the file at `path` with `contents`, all at once where it can be.
 ///
 /// Written beside the file and renamed over it, so a failure part way leaves
 /// the old text whole rather than half of the new. A symlink is followed, so
 /// the link survives and its target changes, and the file keeps its
 /// permissions. A read-only file is refused: a rename would replace it anyway.
+///
+/// Two cases are written in place instead, giving up atomicity: a file with
+/// other hard links, which a rename would split from them, and one in a
+/// directory that can't take the temporary file. Errors name the file.
 pub fn replace_file(path: &Path, contents: &str) -> io::Result<()> {
-    let target = std::fs::canonicalize(path)?;
-    let permissions = std::fs::metadata(&target)?.permissions();
+    use std::os::unix::fs::MetadataExt;
+    let at = |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", path.display()));
+    let target = std::fs::canonicalize(path).map_err(at)?;
+    let metadata = std::fs::metadata(&target).map_err(at)?;
+    let permissions = metadata.permissions();
     if permissions.readonly() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} is read-only", path.display()),
         ));
     }
+    if metadata.nlink() > 1 {
+        return write_in_place(&target, contents).map_err(at);
+    }
+    match replace_atomically(&target, permissions, contents) {
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            write_in_place(&target, contents).map_err(at)
+        }
+        other => other.map_err(at),
+    }
+}
+
+fn write_in_place(target: &Path, contents: &str) -> io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(target)?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()
+}
+
+fn replace_atomically(
+    target: &Path,
+    permissions: std::fs::Permissions,
+    contents: &str,
+) -> io::Result<()> {
     let name = target.file_name().unwrap_or_default().to_string_lossy();
     let temp = target.with_file_name(format!(".{name}.vocab-{}", std::process::id()));
+    // Named for this process, so one already there is a crashed run's that
+    // happened to have this pid: no live process can own it.
+    match std::fs::remove_file(&temp) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
     let written = (|| {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -77,7 +115,7 @@ pub fn replace_file(path: &Path, contents: &str) -> io::Result<()> {
         file.set_permissions(permissions)?;
         file.write_all(contents.as_bytes())?;
         file.sync_all()?;
-        std::fs::rename(&temp, &target)
+        std::fs::rename(&temp, target)
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&temp);
@@ -222,6 +260,61 @@ mod tests {
         assert_eq!(out, "it\u{2019}s fine, don\u{2019}t");
         let (out, _) = apply("it's fine, dont", vec![fix(12, "dont", "don't")]);
         assert_eq!(out, "it's fine, don't");
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("vocabulist-fix-{name}"));
+        if dir.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_file_in_a_read_only_directory_is_written_in_place() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("ro-dir");
+        let path = dir.join("notes.md");
+        std::fs::write(&path, "teh").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let written = replace_file(&path, "the");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        written.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "the");
+    }
+
+    #[test]
+    fn a_hard_link_is_not_split() {
+        let dir = scratch("hard-link");
+        let path = dir.join("notes.md");
+        let other = dir.join("other.md");
+        std::fs::write(&path, "teh").unwrap();
+        std::fs::hard_link(&path, &other).unwrap();
+        replace_file(&path, "the").unwrap();
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), "the");
+    }
+
+    #[test]
+    fn a_stale_temp_file_is_no_obstacle() {
+        let dir = scratch("stale-temp");
+        let path = dir.join("notes.md");
+        std::fs::write(&path, "teh").unwrap();
+        let stale = dir.join(format!(".notes.md.vocab-{}", std::process::id()));
+        std::fs::write(&stale, "left by a crash").unwrap();
+        replace_file(&path, "the").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "the");
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    fn an_error_names_the_file() {
+        let dir = scratch("names-file");
+        let path = dir.join("missing.md");
+        let err = replace_file(&path, "the").unwrap_err();
+        assert!(err.to_string().contains("missing.md"), "{err}");
     }
 
     #[test]
