@@ -463,7 +463,14 @@ pub fn install(
     };
 
     if target.owned {
-        report.added = words.len();
+        // Rewritten whole, but reported as the change from what was there.
+        let before: BTreeSet<String> = read_lines(&target.path).into_iter().collect();
+        let after: BTreeSet<&str> = words.iter().map(String::as_str).collect();
+        report.added = after.iter().filter(|w| !before.contains(**w)).count();
+        report.removed = before
+            .iter()
+            .filter(|w| !after.contains(w.as_str()))
+            .count();
         if !dry_run {
             write_all(&target.path, &words)?;
             write_all(&target.manifest, &words)?;
@@ -729,6 +736,35 @@ mod tests {
 
         let written = std::fs::read_to_string(&target.path).unwrap();
         assert_eq!(written.trim(), "polyid", "the cap must keep the strongest");
+    }
+
+    #[test]
+    fn an_owned_target_reports_what_changed_not_what_it_holds() {
+        let store = Store::open(":memory:").unwrap();
+        for word in ["polyid", "zblorg"] {
+            store.upsert_word(word, word, Provenance::Owned, 1).unwrap();
+        }
+        let dir = scratch("owned-diff");
+        let target = Target {
+            name: "owned",
+            path: dir.join("out.txt"),
+            manifest: dir.join("manifest.txt"),
+            owned: true,
+            limit: None,
+            note: "",
+        };
+        let first = install(&store, &target, false).unwrap();
+        assert_eq!((first.added, first.removed, first.total), (2, 0, 2));
+
+        let again = install(&store, &target, false).unwrap();
+        assert_eq!((again.added, again.removed), (0, 0), "nothing changed");
+
+        store.remove("zblorg").unwrap();
+        store
+            .upsert_word("quuxly", "quuxly", Provenance::Owned, 1)
+            .unwrap();
+        let changed = install(&store, &target, true).unwrap();
+        assert_eq!((changed.added, changed.removed, changed.total), (1, 1, 2));
     }
 
     #[test]

@@ -80,6 +80,9 @@ lexicon you already have.
   `t3h the`), which `--fix` could never apply sensibly.
 - **`vocab add` reports an upgrade:** adding a word already learned from your
   text said `added 0`; it now says `added 0, upgraded 1`.
+- **`vocab sync` reports what changed in the files it owns** (cSpell, Wispr
+  Flow): a run with nothing new said `+2756 -0` every time; it now says
+  `+0 -0`, and counts the words that left.
 - **`vocab list | head` exits quietly** instead of printing `Broken pipe (os
   error 32)` and exiting 2.
 
