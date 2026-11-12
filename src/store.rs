@@ -377,14 +377,31 @@ impl Store {
         )
     }
 
-    /// Open an existing lexicon for reading only: never creates, migrates,
-    /// or stamps it.
+    /// Open an existing lexicon for reading only: never creates or stamps
+    /// it, and writes only to bring an older schema up to this one.
     ///
-    /// The schema must match exactly. A newer one is a newer vocabulist's to
-    /// read, and an older one hasn't been migrated yet — and migrating or
-    /// stamping either would be a write. Under WAL a reader never waits on
-    /// the capture hooks' write lock.
+    /// A newer schema is a newer vocabulist's to read, and is refused. An
+    /// older one gets one writing open to migrate it, exactly what the next
+    /// writing command would do, and is then reopened read-only: refusing
+    /// left every check, `list` and `status` failing after an upgrade until
+    /// something happened to write. Under WAL a reader never waits on the
+    /// capture hooks' write lock.
     pub fn open_read_only(
+        path: impl AsRef<Path>,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let store = Self::open_read_only_as_is(path)?;
+        if store.schema_version()? == SCHEMA_VERSION {
+            return Ok(store);
+        }
+        let Self { conn, path } = store;
+        drop(conn);
+        drop(Self::open(&path)?);
+        Self::open_read_only_as_is(path)
+    }
+
+    /// The read-only open itself: refuses a newer schema, and leaves an
+    /// older one for the caller.
+    fn open_read_only_as_is(
         path: impl AsRef<Path>,
     ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let path = path.as_ref().to_path_buf();
@@ -401,14 +418,6 @@ impl Store {
         let found = store.schema_version()?;
         if found > SCHEMA_VERSION {
             return Err(store.newer_schema(found).into());
-        }
-        if found < SCHEMA_VERSION {
-            return Err(format!(
-                "lexicon at {} is schema v{found}, older than this vocab (v{SCHEMA_VERSION}) \
-                 — any writing command, such as `vocab process`, upgrades it",
-                store.path.display()
-            )
-            .into());
         }
         Ok(store)
     }
@@ -1418,20 +1427,21 @@ mod tests {
     }
 
     #[test]
-    fn a_read_only_open_refuses_an_older_schema_without_migrating_it() {
+    fn a_read_only_open_upgrades_an_older_schema_then_reads() {
         let path = scratch("ro-older");
-        Store::open(&path).unwrap();
+        Store::open(&path)
+            .unwrap()
+            .upsert_word("zblorg", "zblorg", Provenance::User, 1)
+            .unwrap();
         Connection::open(&path)
             .unwrap()
             .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
             .unwrap();
 
-        assert!(Store::open_read_only(&path).is_err());
-        let version: i64 = Connection::open(&path)
-            .unwrap()
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION - 1);
+        let store = Store::open_read_only(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert!(store.contains("zblorg").unwrap());
+        assert!(store.remove("zblorg").is_err(), "and is still read-only");
     }
 
     #[test]

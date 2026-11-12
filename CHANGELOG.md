@@ -21,6 +21,10 @@ lexicon you already have.
   no longer waits on a capture hook's lock. Only the first run on the default
   lexicon writes, to seed it. A check no longer creates a `--db` that
   doesn't exist.
+- **A read-only command upgrades an older lexicon itself.** After upgrading
+  vocab, checking, `list` and `status` exited 2 on a lexicon from an older
+  schema until a writing command migrated it; they now migrate it once and
+  carry on. Two commands opening an old lexicon at once migrate it once.
 - **A prompt the hook failed to stage can be captured again.** It was marked
   captured before it was staged, so a failed write lost that text for good.
 - **A `--db` that was never seeded knows how common words are.** Without a

@@ -438,10 +438,14 @@ the dumbest consumer must not shape the schema.
 **Reading never writes.** Other tools read the lexicon too, through the CLI,
 and they must not change it. So every command declares what it needs from
 the store (`cli::Access`): nothing, a read, or a write. Readers go through
-`Store::open_read_only`, which never creates, migrates, or stamps the
-database. It refuses a missing file and any schema version other than its
-own, because a newer schema belongs to a newer binary and migrating an older
-one is a write. Under WAL a reader never waits on a capture hook's write
+`Store::open_read_only`, which never creates or stamps the database. It
+refuses a missing file and a newer schema, which belongs to a newer binary.
+An older schema is the one write a reader makes: one writing open migrates
+it, exactly as the next writing command would, and the reader reopens
+read-only. Refusing it left every check, `list` and `status` failing (exit 2)
+after an upgrade until something happened to write. The migration is one
+`BEGIN IMMEDIATE` transaction that rereads the version under the lock, so
+two openers racing on an old lexicon migrate it once. Under WAL a reader never waits on a capture hook's write
 lock. A writer refuses a newer schema too — stamping its own version would
 hand the lexicon back to the newer binary looking older than it is — and
 writes nothing on open to a lexicon already at its schema. Checking, `--fix` and `--expand` read too, with one exception: the first run
