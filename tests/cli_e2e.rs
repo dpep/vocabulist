@@ -1042,11 +1042,16 @@ fn reading_commands_leave_the_database_untouched() {
         &["analyze", "--lexicon"],
         &["templates"],
         &["prune", "--dry-run"],
+        &["typos"],
+        &["shorthand"],
     ] {
         let out = vocab(&db, args);
         assert_ne!(out.code, 2, "{args:?} failed");
         assert!(fingerprint(&db) == before, "{args:?} wrote the database");
     }
+    let out = run(&db, &["eval"], Some("we ship the widget today\n"));
+    assert_ne!(out.code, 2, "eval failed: {}", out.stderr);
+    assert!(fingerprint(&db) == before, "eval wrote the database");
 }
 
 #[test]
