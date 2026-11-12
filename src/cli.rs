@@ -881,41 +881,7 @@ fn dispatch_inner(
             register,
         }) => {
             let report = if *lexicon {
-                let register = *register;
-                let scope =
-                    register.map_or("lexicon".to_string(), |r| format!("lexicon:{}", r.as_str()));
-                // Names are excluded: `contextdb` and `polyid` are things
-                // you work on, not vocabulary you command, and counting them
-                // inflates every diversity measure here.
-                let names: std::collections::HashSet<String> = store
-                    .list(None, usize::MAX)?
-                    .into_iter()
-                    .filter(|e| e.kind == crate::types::Kind::Name)
-                    .map(|e| e.word)
-                    .collect();
-                let counts: std::collections::HashMap<String, u64> = store
-                    .word_counts(register)?
-                    .into_iter()
-                    .filter(|(word, _)| !names.contains(word))
-                    .collect();
-                let mut report = crate::complexity::from_counts(&scope, &counts);
-
-                // Sentence stats recorded during process, when the prose was
-                // still around. Absent only if nothing has been processed.
-                let totals = store.prose_totals(register)?;
-                let sentences = totals.get("sentences").copied().unwrap_or(0);
-                if sentences > 0 {
-                    let histogram = store.sentence_lengths(register)?;
-                    let mut readability = crate::complexity::readability_from_totals(
-                        sentences as u64,
-                        totals.get("words").copied().unwrap_or(0) as u64,
-                        totals.get("syllables").copied().unwrap_or(0) as u64,
-                    );
-                    readability.sentence_length_stddev =
-                        crate::complexity::sentence_length_stddev(&histogram);
-                    report.readability = Some(readability);
-                }
-                report
+                crate::complexity::from_lexicon(&store, *register)?
             } else {
                 let body = match text {
                     Some(t) => t.clone(),
@@ -956,33 +922,7 @@ fn dispatch_inner(
             seed,
             kind,
         }) => {
-            let text = match corpus {
-                Some(path) => std::fs::read_to_string(path)?,
-                None => read_stdin()?,
-            };
-            if text.trim().is_empty() {
-                return Err("nothing to evaluate (pass --corpus or pipe stdin)".into());
-            }
-
-            let (mutated, injections) = crate::eval::inject_kind(&text, *rate, *seed, *kind);
-            let checker = build_checker(&store, profile)?;
-            let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
-
-            let mut scanner = crate::check::Scanner::new(&checker);
-            let mut findings = Vec::new();
-            for line in mutated.lines() {
-                findings.extend(scanner.feed(line, &mut evidence));
-            }
-
-            let words = mutated
-                .lines()
-                .map(|l| crate::text::prose_words(l).len())
-                .sum();
-            let fixes: Vec<crate::types::Fix> =
-                findings.iter().filter_map(|f| checker.fix(f)).collect();
-            let mut report =
-                crate::eval::score(&findings, &injections, mutated.lines().count(), words);
-            crate::eval::score_fixes(&mut report, &fixes, &injections);
+            let report = evaluate(&store, profile, corpus.as_deref(), *rate, *seed, *kind)?;
             if !cli.quiet {
                 output::render_eval(&mut out, &report, format)?;
             }
@@ -1311,6 +1251,44 @@ fn build_checker(
                 .collect(),
         )
         .with_frequency(frequency))
+}
+
+/// `vocab eval`: corrupt the corpus in known places, check it, and score
+/// what was caught.
+fn evaluate(
+    store: &Store,
+    profile: &Rc<Profile>,
+    corpus: Option<&std::path::Path>,
+    rate: usize,
+    seed: u64,
+    kind: Option<crate::eval::ErrorKind>,
+) -> Result<crate::eval::EvalReport, Box<dyn std::error::Error>> {
+    let text = match corpus {
+        Some(path) => std::fs::read_to_string(path)?,
+        None => read_stdin()?,
+    };
+    if text.trim().is_empty() {
+        return Err("nothing to evaluate (pass --corpus or pipe stdin)".into());
+    }
+
+    let (mutated, injections) = crate::eval::inject_kind(&text, rate, seed, kind);
+    let checker = build_checker(store, profile)?;
+    let mut evidence = |gram: &str| store.ngram_count(gram).unwrap_or(0);
+
+    let mut scanner = crate::check::Scanner::new(&checker);
+    let mut findings = Vec::new();
+    for line in mutated.lines() {
+        findings.extend(scanner.feed(line, &mut evidence));
+    }
+
+    let words = mutated
+        .lines()
+        .map(|l| crate::text::prose_words(l).len())
+        .sum();
+    let fixes: Vec<crate::types::Fix> = findings.iter().filter_map(|f| checker.fix(f)).collect();
+    let mut report = crate::eval::score(&findings, &injections, mutated.lines().count(), words);
+    crate::eval::score_fixes(&mut report, &fixes, &injections);
+    Ok(report)
 }
 
 /// Check a positional string as one blob, or stream stdin/`--file` line by

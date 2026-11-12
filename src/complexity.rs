@@ -94,6 +94,46 @@ pub fn from_counts(scope: &str, counts: &HashMap<String, u64>) -> Report {
     }
 }
 
+/// The accumulated corpus, or one register of it, with readability from the
+/// sentence stats recorded while the prose was still around.
+///
+/// Names are excluded: `contextdb` and `polyid` are things you work on, not
+/// vocabulary you command, and counting them inflates every diversity
+/// measure here.
+pub fn from_lexicon(
+    store: &crate::store::Store,
+    register: Option<crate::types::Register>,
+) -> rusqlite::Result<Report> {
+    let scope = register.map_or("lexicon".to_string(), |r| format!("lexicon:{}", r.as_str()));
+    let names: std::collections::HashSet<String> = store
+        .list(None, usize::MAX)?
+        .into_iter()
+        .filter(|e| e.kind == crate::types::Kind::Name)
+        .map(|e| e.word)
+        .collect();
+    let counts: HashMap<String, u64> = store
+        .word_counts(register)?
+        .into_iter()
+        .filter(|(word, _)| !names.contains(word))
+        .collect();
+    let mut report = from_counts(&scope, &counts);
+
+    // Absent only if nothing has been processed.
+    let totals = store.prose_totals(register)?;
+    let sentences = totals.get("sentences").copied().unwrap_or(0);
+    if sentences > 0 {
+        let histogram = store.sentence_lengths(register)?;
+        let mut readability = readability_from_totals(
+            sentences as u64,
+            totals.get("words").copied().unwrap_or(0) as u64,
+            totals.get("syllables").copied().unwrap_or(0) as u64,
+        );
+        readability.sentence_length_stddev = sentence_length_stddev(&histogram);
+        report.readability = Some(readability);
+    }
+    Ok(report)
+}
+
 /// Metrics from prose — the text mode, which adds the sentence level.
 pub fn from_text(scope: &str, text: &str) -> Report {
     let mut counts: HashMap<String, u64> = HashMap::new();
