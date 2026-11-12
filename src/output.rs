@@ -762,6 +762,55 @@ pub fn render_identities(
     }
 }
 
+pub fn render_names(
+    out: &mut impl Write,
+    reports: &[crate::types::NameReport],
+    format: Format,
+) -> std::io::Result<()> {
+    if format != Format::Human {
+        return emit(out, &json!(reports), format);
+    }
+    for r in reports {
+        let mut parts = Vec::new();
+        if !r.known {
+            parts.push("not a name we know".to_string());
+        }
+        if let Some(g) = r.given {
+            parts.push(format!("given {g}/M"));
+        }
+        if let Some(s) = r.surname {
+            parts.push(format!("surname {s}/M"));
+        }
+        if r.word {
+            parts.push("also a word".to_string());
+        }
+        if !r.full_names.is_empty() {
+            parts.push(format!("short for {}", r.full_names.join(", ")));
+        }
+        if !r.nicknames.is_empty() {
+            parts.push(format!("nicknames {}", r.nicknames.join(", ")));
+        }
+        let matched = |m: &[crate::types::NameMatch]| {
+            m.iter()
+                .map(|m| format!("{} ({})", m.name, m.how.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if !r.people.is_empty() {
+            parts.push(format!("you write {}", matched(&r.people)));
+        }
+        if let Some(m) = &r.matches {
+            parts.push(if m.is_empty() {
+                "matches no one".to_string()
+            } else {
+                format!("matches {}", matched(m))
+            });
+        }
+        writeln!(out, "{:<16} {}", r.name, parts.join(" · "))?;
+    }
+    Ok(())
+}
+
 pub fn render_typos(
     out: &mut impl Write,
     pairs: &[TypoPair],

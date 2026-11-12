@@ -55,7 +55,7 @@ const MIN_NAME_LENGTH: usize = 4;
 
 /// Separate days a person must have been seen on before their spelling can
 /// convict another. A name typed once is as likely the typo as the target.
-const NAME_CORROBORATION: i64 = 2;
+pub(crate) const NAME_CORROBORATION: i64 = 2;
 
 /// Level 35 is roughly the top 50k words: common enough that a split into
 /// two of them is not a coincidence.
@@ -485,7 +485,7 @@ impl Checker {
         // SCOWL ranks almost every name 50; this keeps its few hundred
         // commonest out of the gate.
         const COMMON_NAME_LEVEL: u8 = 40;
-        const COMMON_PERSON_SHARE: f32 = 100.0;
+        const COMMON_PERSON_SHARE: f64 = 100.0;
         const MIN_LEN: usize = 4;
         let names = self.proper_names.get().expect("is_proper_name loaded it");
         let Some(name_level) = crate::dict::level(names, name) else {

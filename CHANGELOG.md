@@ -3,6 +3,14 @@
 ## Unreleased
 
 <!-- lane: names -->
+### Added
+
+- **`vocab names`** says whether a name is one people bear, how common it
+  is as a given name and a surname, its nicknames (`Bob`, `Robert`), and
+  who it could be: with `--with "Robert Jones, Sally"`, which participant;
+  otherwise, people you write to. For tools that name people, such as
+  soundly. Needs no lexicon.
+
 ### Fixed
 
 - **A real name is no longer called a misspelling of someone you know.**

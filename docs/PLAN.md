@@ -847,6 +847,39 @@ more) that are not dictionary words, 5,288 are names people bear — `Joan`,
 knew the common name; SCOWL alone knew 582 of them. The cost is the
 catches that land on a real name: 1.6% of those 335,666 corruptions.
 
+### `vocab names`: the rule, for tools that name people **[done]**
+
+soundly names speakers and corrects transcripts. It needs what the checker
+now knows, and by "consumers read the rule" it asks rather than copying it
+(it carries its own `names.tsv` for sex, which `vocab names` does not
+answer; nothing else there should grow). `vocab names NAME… [--with A,B]`
+reports per name, in `NameReport`:
+
+- `known` and `why` (`given`, `surname`, `nickname`, `proper-name`,
+  `person`) — membership, binary.
+- `given` and `surname`, per million people — how common, graded. There is
+  no single `confidence`: whether a capital is a name or a word has no
+  shared scale to derive one from, and a constant would be the flat score
+  §4 forbids. `word` says the word reading exists (`Will`, `Grace`).
+- `full_names` and `nicknames`, from the table, which is not strictly
+  directional (`Bob` lists `Robert` both ways); read them together as
+  relatives.
+- `people`: people the lexicon has seen on two days or more that this could
+  name, and `matches`: the same against `--with` participants. Each says
+  `how`: `same`, `nickname` (also two nicknames of one full name, `Bill` and
+  `Will`), or `spelling` — one edit, four letters or more. A `spelling`
+  match on a `known` name is a different real name (`Kara`, `Sara`), so it
+  is a candidate, not a correction.
+
+It needs no lexicon (a missing one knows nobody) and exits 1 when no name
+is known.
+
+**Nicknames are not shorthands.** A shorthand is the user's own
+abbreviation, confirmed by them, that `--expand` writes out: `Bob` written
+out as `Robert` in the user's email would be wrong, and `Bob` is not the
+user's coinage but a name everybody shares. So the table sits beside
+`shorthand.rs`, read-only and bundled, and is never a rewrite.
+
 ## 12k. A missing space, and a spurious one **[done]**
 
 `alot` and `infact` were already *caught* — they are in no dictionary — but the

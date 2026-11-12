@@ -62,7 +62,7 @@ decisions — reach for it before inventing a method that has a name.
 - **stdout is for data, stderr is for logs.** All logging goes through
   `env_logger` to stderr so a consumer piping `vocab` gets clean output.
 - **Reading never writes.** Every command declares what it needs from the
-  lexicon (`Command::access()` in `src/cli.rs`: none, read, check, or write),
+  lexicon (`Command::access()` in `src/cli.rs`: none, read, read-if-any (a missing lexicon knows nobody), check, or write),
   and a read opens it `SQLITE_OPEN_READ_ONLY`: no create, no version stamp. A
   *newer* schema is refused (exit 2) by every open, writing ones included, and
   never stamped down. An *older* schema is migrated forward once, by a single

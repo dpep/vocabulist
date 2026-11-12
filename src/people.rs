@@ -8,19 +8,21 @@
 
 use std::sync::OnceLock;
 
+use crate::types::{NameEvidence, NameMatch, NameReport, Relation};
+
 const NAMES: &str = include_str!("../data/names.txt");
 const NICKNAMES: &str = include_str!("../data/nicknames.txt");
 
 /// The share of US people bearing a name, per million.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Share {
-    pub given: Option<f32>,
-    pub surname: Option<f32>,
+    pub given: Option<f64>,
+    pub surname: Option<f64>,
 }
 
 impl Share {
     /// The commoner reading: `Owen` counts as the given name it mostly is.
-    pub fn people(&self) -> f32 {
+    pub fn people(&self) -> f64 {
         self.given.unwrap_or(0.0).max(self.surname.unwrap_or(0.0))
     }
 }
@@ -33,7 +35,7 @@ fn names() -> &'static Table {
 }
 
 fn parse_names(text: &'static str) -> Table {
-    let field = |f: Option<&str>| f.and_then(|v| v.parse::<f32>().ok());
+    let field = |f: Option<&str>| f.and_then(|v| v.parse::<f64>().ok());
     text.lines()
         .filter(|l| !l.starts_with('#') && !l.is_empty())
         .filter_map(|l| {
@@ -109,9 +111,168 @@ pub fn same_name(a: &str, b: &str) -> bool {
     fa.contains(&b) || fb.contains(&a) || fa.iter().any(|f| fb.contains(f))
 }
 
+/// How `asked` relates to `candidate` (both lowercase), by the weakest of
+/// its parts: every part of `asked` must relate to some part of
+/// `candidate`, so `bob` names `robert jones` but `bob smith` does not.
+pub fn relation(asked: &str, candidate: &str) -> Option<Relation> {
+    let parts: Vec<&str> = candidate.split_whitespace().collect();
+    asked
+        .split_whitespace()
+        .map(|a| parts.iter().filter_map(|c| relate_part(a, c)).min())
+        .try_fold(Relation::Same, |worst, r| r.map(|r| worst.max(r)))
+}
+
+fn relate_part(a: &str, b: &str) -> Option<Relation> {
+    if a == b {
+        Some(Relation::Same)
+    } else if same_name(a, b) {
+        Some(Relation::Nickname)
+    } else if a.chars().count() >= 4
+        && b.chars().count() >= 4
+        && crate::check::bounded_distance(a, b, 1).is_some()
+    {
+        Some(Relation::Spelling)
+    } else {
+        None
+    }
+}
+
+/// What is known about `asked` as a name.
+///
+/// `people` is the lexicon's (key, days seen, display); only those seen on
+/// two days or more count, the bar a misspelled colleague needs. `with` is a
+/// list of participants to match against, as typed.
+pub fn describe(
+    asked: &str,
+    people: &[(String, i64, String)],
+    with: Option<&[String]>,
+    is_word: impl Fn(&str) -> bool,
+    is_proper_name: impl Fn(&str) -> bool,
+) -> NameReport {
+    let key = crate::text::normalize(asked.trim());
+    let share = share(&key).unwrap_or_default();
+    let full_names = full_names(&key);
+    let nicknames = nicknames(&key);
+    let corroborated = people
+        .iter()
+        .filter(|(_, days, _)| *days >= crate::check::NAME_CORROBORATION);
+
+    let mut why = Vec::new();
+    if share.given.is_some() {
+        why.push(NameEvidence::Given);
+    }
+    if share.surname.is_some() {
+        why.push(NameEvidence::Surname);
+    }
+    if !full_names.is_empty() || !nicknames.is_empty() {
+        why.push(NameEvidence::Nickname);
+    }
+    if is_proper_name(&key) {
+        why.push(NameEvidence::ProperName);
+    }
+    if corroborated
+        .clone()
+        .any(|(k, _, _)| relation(&key, k) == Some(Relation::Same))
+    {
+        why.push(NameEvidence::Person);
+    }
+
+    let matching = |candidates: &mut dyn Iterator<Item = &str>| {
+        let mut out: Vec<NameMatch> = candidates
+            .filter_map(|c| {
+                relation(&key, &crate::text::normalize(c)).map(|how| NameMatch {
+                    name: c.to_string(),
+                    how,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.how.cmp(&b.how).then_with(|| a.name.cmp(&b.name)));
+        out
+    };
+
+    NameReport {
+        name: asked.to_string(),
+        known: !why.is_empty(),
+        why,
+        given: share.given,
+        surname: share.surname,
+        word: is_word(&key),
+        full_names: full_names.iter().map(|n| title(n)).collect(),
+        nicknames: nicknames.iter().map(|n| title(n)).collect(),
+        people: matching(&mut corroborated.map(|(_, _, display)| display.as_str())),
+        matches: with.map(|with| matching(&mut with.iter().map(|w| w.trim()))),
+    }
+}
+
+/// `robert` → `Robert`: the tables are lowercase, names are not.
+fn title(name: &str) -> String {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn describe_plain(asked: &str, people: &[(&str, i64)], with: Option<&[&str]>) -> NameReport {
+        let people: Vec<(String, i64, String)> = people
+            .iter()
+            .map(|(k, d)| {
+                (
+                    k.to_string(),
+                    *d,
+                    k.split(' ').map(title).collect::<Vec<_>>().join(" "),
+                )
+            })
+            .collect();
+        let with: Option<Vec<String>> = with.map(|w| w.iter().map(|s| s.to_string()).collect());
+        describe(asked, &people, with.as_deref(), |w| w == "will", |_| false)
+    }
+
+    #[test]
+    fn a_nickname_matches_the_participant_it_is_short_for() {
+        let r = describe_plain("Bob", &[], Some(&["Robert Jones", "Sally"]));
+        assert_eq!(
+            r.matches.unwrap(),
+            vec![NameMatch {
+                name: "Robert Jones".into(),
+                how: Relation::Nickname
+            }]
+        );
+        assert!(r.full_names.contains(&"Robert".to_string()));
+        assert!(r.why.contains(&NameEvidence::Given));
+    }
+
+    #[test]
+    fn a_full_name_relates_by_its_weakest_part() {
+        assert_eq!(
+            relation("bob jones", "robert jones"),
+            Some(Relation::Nickname)
+        );
+        assert_eq!(relation("bob smith", "robert jones"), None);
+        assert_eq!(relation("jonh", "john"), Some(Relation::Spelling));
+        // Short names one edit apart are different people.
+        assert_eq!(relation("ann", "dan"), None);
+    }
+
+    #[test]
+    fn only_people_seen_on_two_days_are_offered() {
+        let r = describe_plain("Jonh", &[("john smith", 3), ("jon doe", 1)], None);
+        assert_eq!(r.people.len(), 1, "{r:?}");
+        assert_eq!(r.people[0].name, "John Smith");
+        assert_eq!(r.people[0].how, Relation::Spelling);
+        assert!(!r.known, "a slip is not a name: {r:?}");
+    }
+
+    #[test]
+    fn a_name_that_is_also_a_word_says_so() {
+        let r = describe_plain("Will", &[], None);
+        assert!(r.known && r.word);
+        assert!(r.full_names.contains(&"William".to_string()));
+    }
 
     #[test]
     fn the_tables_are_sorted_for_binary_search() {

@@ -133,6 +133,17 @@ recognizer's, not yours, and soundly corrects transcripts toward trusted
 words. Speech stays out of phrases, sentence stats and exemplars too.
 §6a of [docs/PLAN.md](docs/PLAN.md) has the reasoning.
 
+To name speakers, soundly asks about names rather than keeping its own list:
+
+```sh
+$ vocab names Bob --with "Robert Jones, Sally"
+Bob              given 280/M · also a word · short for Bert, Bobby, Robert · nicknames Rob, Robert · matches Robert Jones (nickname)
+```
+
+Each name gets how many people bear it (US Census, per million), its
+nicknames, and who it could be: a participant, or someone you write to.
+`-J` gives one object per name.
+
 ### Only your own text shapes your voice
 
 Text someone else wrote can show that a word is real, but it never counts as

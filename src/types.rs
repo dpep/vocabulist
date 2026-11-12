@@ -500,3 +500,78 @@ pub struct StatusPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
+
+/// What `vocab names` says about one name: whether people bear it, on what
+/// evidence, and which names could be the same person's.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NameReport {
+    /// The name as asked.
+    pub name: String,
+    /// A name people bear: any evidence in `why`. Binary, as membership is
+    /// everywhere; the shares are how common.
+    pub known: bool,
+    pub why: Vec<NameEvidence>,
+    /// Share of US people with this given name, per million.
+    pub given: Option<f64>,
+    /// Share of US people with this surname, per million.
+    pub surname: Option<f64>,
+    /// Also an ordinary word (`Will`, `Grace`), so lowercase or opening a
+    /// sentence it may be the word.
+    pub word: bool,
+    /// What it is a nickname of: `Bob` → `Robert`.
+    pub full_names: Vec<String>,
+    /// Its nicknames: `Robert` → `Bob`, `Bobby`.
+    pub nicknames: Vec<String>,
+    /// People the user writes to (seen on two days or more) this could name.
+    pub people: Vec<NameMatch>,
+    /// With `--with`: the participants this could name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches: Option<Vec<NameMatch>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NameEvidence {
+    /// In the Census given names.
+    Given,
+    /// In the Census surnames.
+    Surname,
+    /// In the nickname table, as a nickname or a full name.
+    Nickname,
+    /// In SCOWL's proper names, which also hold places and peoples.
+    ProperName,
+    /// A person the user's lexicon has seen on two days or more.
+    Person,
+}
+
+/// A name that could be the same person's, and how it relates.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NameMatch {
+    /// As the lexicon or `--with` spells it.
+    pub name: String,
+    pub how: Relation,
+}
+
+/// How two names relate, closest first. A full name relates by its weakest
+/// part.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum Relation {
+    /// The same name, ignoring case.
+    Same,
+    /// A nickname of it, or both nicknames of one full name (`Bill`, `Will`).
+    Nickname,
+    /// One edit apart, four letters or more: `Jonh`, or `Kara` for `Sara`.
+    /// Not evidence of a slip: with `known`, it is a different real name.
+    Spelling,
+}
+
+impl Relation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Relation::Same => "same",
+            Relation::Nickname => "nickname",
+            Relation::Spelling => "spelling",
+        }
+    }
+}

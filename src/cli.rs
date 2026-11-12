@@ -44,6 +44,7 @@ Examples:
   vocab list rubo                  lexicon entries matching \"rubo\"
   vocab typos                      your habitual typos, and what each means
   vocab shorthand repro reproduce  say `repro` is yours, and what it means
+  vocab names Bob --with Robert    is it a name, and could it be Robert?
   vocab --fix -f notes.md          write it back with typos and apostrophes fixed
   vocab --fix --expand -f mail.txt  ...and your shorthands spelled out
   vocab sync                       export into cSpell, macOS and Wispr Flow
@@ -257,6 +258,25 @@ pub enum Command {
         #[arg(long)]
         rm: bool,
     },
+    /// Whether each name is one people bear, how common it is, and which
+    /// names could be the same person's.
+    ///
+    /// For tools that name people (soundly): read this rather than keeping a
+    /// name list of your own. Each name gets its share of US people per
+    /// million as a given name and as a surname (Census), whether it is also
+    /// a word (`Will`), its nicknames and full names (`Bob`, `Robert`), and
+    /// the people you write to it could name: the same name, a nickname, or
+    /// one edit away (`spelling`, which is a different real name when the
+    /// name is `known`). Exits 1 when none is a name. Needs no lexicon.
+    Names {
+        /// One name each: a given name or a surname.
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// Participants to match each name against, comma-separated:
+        /// `--with "Robert Jones, Sally"`.
+        #[arg(long, value_delimiter = ',')]
+        with: Vec<String>,
+    },
     /// Show store-wide counts, what has been read, and where it exports to.
     Status,
 
@@ -445,6 +465,8 @@ enum Access {
     /// Never touches the lexicon, so must work without one.
     None,
     Read,
+    /// A read where a missing lexicon is one that knows nobody yet.
+    ReadIfAny,
     /// Checking: a read, except the first run on the default lexicon, which
     /// seeds it.
     Check,
@@ -466,6 +488,7 @@ impl Command {
                 }
             }
             // Sync writes the spell checkers' files, never the lexicon.
+            Command::Names { .. } => Access::ReadIfAny,
             Command::List { .. }
             | Command::Status
             | Command::Phrases { .. }
@@ -645,6 +668,8 @@ fn open_store(cli: &Cli, access: Access) -> Result<Store, Box<dyn std::error::Er
         // An empty stand-in, so no arm needs an Option it never reads.
         Access::None => Store::open(":memory:"),
         Access::Read => Store::open_read_only(path),
+        Access::ReadIfAny if path.exists() => Store::open_read_only(path),
+        Access::ReadIfAny => Store::open(":memory:"),
         // Read-only unless this is the run that seeds: a check that writes
         // can wait seconds on a capture hook's lock.
         Access::Check if !seeds => {
@@ -793,6 +818,38 @@ fn dispatch_inner(
         }
 
         Some(Command::Typos { words, rm }) => typos(cli, &store, words, *rm, &mut out),
+        Some(Command::Names { names, with }) => {
+            let people = store.people()?;
+            let words = crate::dict::load();
+            let proper = crate::dict::proper_names();
+            let with = (!with.is_empty()).then_some(with.as_slice());
+            let mut any = false;
+            let mut reports = Vec::new();
+            for name in names {
+                let report = crate::people::describe(
+                    name,
+                    &people,
+                    with,
+                    |w| words.as_ref().is_some_and(|d| crate::dict::contains(d, w)),
+                    |w| crate::dict::contains(&proper, w),
+                );
+                any |= report.known;
+                // -J streams; the others print once every name is in.
+                if format == Format::Ndjson && !cli.quiet {
+                    output::render_names(&mut out, std::slice::from_ref(&report), format)?;
+                } else {
+                    reports.push(report);
+                }
+            }
+            if format != Format::Ndjson && !cli.quiet {
+                output::render_names(&mut out, &reports, format)?;
+            }
+            Ok(if any {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
         Some(Command::Shorthand { words, rm }) => shorthand(cli, &store, words, *rm, &mut out),
 
         Some(Command::Help { topic }) => {

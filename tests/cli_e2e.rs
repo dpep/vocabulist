@@ -1712,3 +1712,42 @@ fn sync_from_another_lexicon_is_refused() {
             .contains("zblorgish")
     );
 }
+
+#[test]
+fn names_matches_a_nickname_to_a_participant_without_a_lexicon() {
+    // soundly asks with no lexicon of its own: the bundled tables answer,
+    // and asking must not create one.
+    let db = scratch_db("names-with");
+    let out = vocab(
+        &db,
+        &[
+            "names",
+            "Bob",
+            "Zblorg",
+            "--with",
+            "Robert Jones, Sally",
+            "-J",
+        ],
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(!db.exists());
+    let rows: Vec<serde_json::Value> = out
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2, "{}", out.stdout);
+    assert_eq!(rows[0]["known"], true);
+    assert_eq!(rows[0]["matches"][0]["name"], "Robert Jones");
+    assert_eq!(rows[0]["matches"][0]["how"], "nickname");
+    assert!(rows[0]["given"].as_f64().unwrap() > 0.0);
+    assert_eq!(rows[1]["known"], false);
+    assert_eq!(rows[1]["matches"], serde_json::json!([]));
+}
+
+#[test]
+fn names_exits_1_when_none_is_a_name() {
+    let db = scratch_db("names-none");
+    let out = vocab(&db, &["names", "Zblorg"]);
+    assert_eq!(out.code, 1, "{}", out.stdout);
+}
