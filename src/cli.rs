@@ -917,7 +917,7 @@ fn dispatch_inner(
                 let body = match text {
                     Some(t) => t.clone(),
                     None => match &cli.file {
-                        Some(path) => std::fs::read_to_string(path)?,
+                        Some(path) => read_file(path)?,
                         None => read_stdin()?,
                     },
                 };
@@ -1335,7 +1335,7 @@ fn evaluate(
     kind: Option<crate::eval::ErrorKind>,
 ) -> Result<crate::eval::EvalReport, Box<dyn std::error::Error>> {
     let text = match corpus {
-        Some(path) => std::fs::read_to_string(path)?,
+        Some(path) => read_file(path)?,
         None => read_stdin()?,
     };
     if text.trim().is_empty() {
@@ -1428,6 +1428,11 @@ fn check_input(
     })
 }
 
+/// A whole file, or an error that says which one.
+fn read_file(path: &std::path::Path) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Each line of the input — the positional text, `--file`, or piped stdin —
 /// with its terminator, so `--fix` can write the text back byte for byte.
 /// `None` when there is no input at all.
@@ -1451,9 +1456,12 @@ fn input_lines(cli: &Cli) -> io::Result<Option<Lines<'_>>> {
             text.split_inclusive('\n').map(|l| Ok(l.to_string())),
         ))
     } else if let Some(path) = &cli.file {
-        Some(Box::new(terminated(io::BufReader::new(
-            std::fs::File::open(path)?,
-        ))))
+        let named =
+            move |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", path.display()));
+        let file = std::fs::File::open(path).map_err(named)?;
+        Some(Box::new(
+            terminated(io::BufReader::new(file)).map(move |line| line.map_err(named)),
+        ))
     } else if !io::stdin().is_terminal() {
         Some(Box::new(terminated(io::stdin().lock())))
     } else {

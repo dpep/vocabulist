@@ -1413,6 +1413,29 @@ fn fix_leaves_highlighted_and_listed_pre_blocks_alone() {
 }
 
 #[test]
+fn a_file_that_cannot_be_read_is_named() {
+    let db = scratch_db("file-unreadable");
+    let dir = db.parent().unwrap();
+    let missing = dir.join("missing.md");
+    let garbled = dir.join("garbled.md");
+    std::fs::write(&garbled, b"the caf\xe9 is open\n").unwrap();
+    for (path, args) in [
+        (&missing, vec![]),
+        (&missing, vec!["--fix"]),
+        (&missing, vec!["analyze"]),
+        (&garbled, vec![]),
+        (&garbled, vec!["analyze"]),
+    ] {
+        let mut args = args.clone();
+        args.extend(["--file", path.to_str().unwrap()]);
+        let out = vocab(&db, &args);
+        assert_eq!(out.code, 2, "{args:?}: {}", out.stderr);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(out.stderr.contains(name), "{args:?}: {}", out.stderr);
+    }
+}
+
+#[test]
 fn an_unseeded_lexicon_still_knows_how_common_words_are() {
     // Never seeded, so no frequency table: the embedded core list stands in.
     let db = scratch_db("unseeded-frequency");
