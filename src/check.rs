@@ -555,6 +555,7 @@ impl Checker {
             return Vec::new();
         }
         self.profile.count("lines_checked", 1);
+        let typed: Vec<char> = line.chars().collect();
         let line = text::normalize_typography(line);
         let masked = text::mask_non_prose(&line);
         // Before checking, not after: a line that links a project and then
@@ -575,6 +576,11 @@ impl Checker {
             sentence_initial = ends_sentence(&chars, token, &tokens.get(i + 1).map(|t| t.col));
 
             if !text::is_checkable(&token.text) {
+                continue;
+            }
+            let start = token.col - 1;
+            if text::joined_to_code(&typed, start, start + token.text.chars().count()) {
+                self.profile.count("code_joined_skipped", 1);
                 continue;
             }
             if text::is_proper_noun(&token.text, starts_sentence) {
@@ -1540,6 +1546,22 @@ mod tests {
             &mut no_evidence,
         );
         assert!(f.is_empty(), "unexpected findings: {f:?}");
+    }
+
+    #[test]
+    fn a_word_joined_to_code_is_not_flagged() {
+        // What `--fix` won't rewrite, checking doesn't flag: the two agree.
+        let c = checker(&[], &["edit", "and", "then", "set", "call"]);
+        for line in [
+            "edit zzqx.rs and then",
+            "set $zzqx and then",
+            "call zzqx() and then",
+        ] {
+            let f = c.check_line_alone(line, 1, &mut no_evidence);
+            assert!(f.is_empty(), "{line:?}: {f:?}");
+        }
+        let f = c.check_line_alone("edit and/zzqx then", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1, "prose punctuation is still checked");
     }
 
     #[test]

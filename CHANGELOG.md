@@ -36,8 +36,9 @@ lexicon you already have.
   --in-place -f notes.txt "teh"` checked the text and wrote the result over
   `notes.txt`; without `--fix` the file was silently ignored.
 - **Code-shaped words are left alone outside backticks too:** `teh.rs`,
-  `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. `--fix` and
-  `--expand` now agree; `--fix` used to rewrite `teh.rs` while `--expand` left
+  `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. Checking no
+  longer flags them either, so a word `--fix` won't touch is never reported.
+  `--fix` and `--expand` now agree; `--fix` used to rewrite `teh.rs` while `--expand` left
   `repro.rs`. Prose punctuation is not code: `_teh_`, `~~teh~~`, `and/teh`,
   `teh(s)` and `teh.Next` are still fixed.
 - **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code spans**:

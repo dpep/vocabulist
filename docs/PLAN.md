@@ -904,6 +904,9 @@ the argument.
   sides is emphasis. Sentence punctuation still allows a fix. `#teh` stays
   code: a heading marker takes a space, so it's a hashtag or an anchor. A
   blockquote's `>` never gets here, the line being skipped as not prose.
+  Checking skips the same words (`Checker::check_line`), so check and fix
+  agree; on the prose corpus, the hunt's clean texts and `vocab eval` over
+  three seeds it changed no finding and no score.
 - **Byte for byte otherwise.** Lines keep their own terminators (`\r\n`
   stays), and a file without a trailing newline doesn't gain one.
 - **Text on stdout, what changed on stderr.** stdout carries the corrected

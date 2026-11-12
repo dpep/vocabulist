@@ -244,7 +244,8 @@ The text goes to stdout line by line as it's read; what changed goes to
 stderr (as JSON under `-j`/`-J`). `--in-place` rewrites the `--file` instead,
 replacing it atomically. `--fix` exits `1` when anything changed. Code is
 left alone: code spans, fenced blocks, `<code>` and its kin, URLs, and a word
-joined to code (`teh.rs`, `$teh`, `--dont`, `teh()`). An ALLCAPS word reads as
+joined to code (`teh.rs`, `$teh`, `--dont`, `teh()`), which checking doesn't
+flag either. An ALLCAPS word reads as
 an acronym and is never checked, so `TEH` stays `TEH`. The typed case is kept
 (`Teh` → `The`), and so is a curly apostrophe.
 
