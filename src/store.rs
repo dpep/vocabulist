@@ -217,6 +217,31 @@ CREATE TABLE IF NOT EXISTS sentence_lengths (
 );
 ";
 
+/// Create or migrate the schema and stamp its version, as one transaction.
+///
+/// The version is read again under the write lock: two openers can both see
+/// the old one, and the second to get the lock must find the first's work
+/// done rather than redo it — rebuilding `frequency` twice is not idempotent.
+fn upgrade(conn: &Connection) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let migrated = (|| {
+        let found: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if found >= SCHEMA_VERSION {
+            return Ok(());
+        }
+        conn.execute_batch(SCHEMA)?;
+        migrate(conn)?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+    })();
+    match migrated {
+        Ok(()) => conn.execute_batch("COMMIT"),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
 /// Bring an existing database up to the current schema.
 ///
 /// `CREATE TABLE IF NOT EXISTS` covers new tables but not new *columns*, so
@@ -264,9 +289,9 @@ fn split_frequency_by_source(conn: &Connection) -> Result<()> {
     if has_source {
         return Ok(());
     }
+    // Inside `upgrade`'s transaction, so no BEGIN of its own.
     conn.execute_batch(
-        "BEGIN;
-         CREATE TABLE frequency_new (
+        "CREATE TABLE frequency_new (
              word TEXT NOT NULL,
              source TEXT NOT NULL DEFAULT 'mined',
              count INTEGER NOT NULL DEFAULT 0,
@@ -275,8 +300,7 @@ fn split_frequency_by_source(conn: &Connection) -> Result<()> {
          INSERT INTO frequency_new (word, source, count)
              SELECT word, 'mined', count FROM frequency;
          DROP TABLE frequency;
-         ALTER TABLE frequency_new RENAME TO frequency;
-         COMMIT;",
+         ALTER TABLE frequency_new RENAME TO frequency;",
     )
 }
 
@@ -340,11 +364,7 @@ impl Store {
             return Err(store.newer_schema(found).into());
         }
         if found < SCHEMA_VERSION {
-            store.conn.execute_batch(SCHEMA)?;
-            migrate(&store.conn)?;
-            store
-                .conn
-                .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            upgrade(&store.conn)?;
         }
         Ok(store)
     }
@@ -1412,6 +1432,25 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1);
+    }
+
+    #[test]
+    fn a_migration_another_opener_finished_is_not_run_again() {
+        // Two openers both read the old version; the second gets the lock
+        // only once the first has migrated, and must notice.
+        let path = scratch("migrate-race");
+        Store::open(&path).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        // A column rerunning the migration would bring back.
+        conn.execute_batch("ALTER TABLE lexicon DROP COLUMN kind")
+            .unwrap();
+        upgrade(&conn).unwrap();
+        let rerun = conn
+            .prepare("SELECT 1 FROM pragma_table_info('lexicon') WHERE name = 'kind'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!rerun, "the migration ran twice");
     }
 
     #[test]
