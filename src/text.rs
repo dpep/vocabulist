@@ -300,17 +300,16 @@ pub const CODE_ELEMENTS: &[&str] = &["code", "kbd", "pre", "samp"];
 /// the char index of the `<` and of the char after the open tag's `>`.
 fn find_open(chars: &[char], element: &str, from: usize) -> Option<(usize, usize)> {
     let name: Vec<char> = element.chars().collect();
-    (from..chars.len()).find_map(|i| {
+    let i = (from..chars.len()).find(|&i| {
         let after_name = i + 1 + name.len();
-        let opens = chars[i] == '<'
+        chars[i] == '<'
             && chars.get(i + 1..after_name) == Some(&name[..])
-            && matches!(chars.get(after_name), Some('>' | ' '));
-        if !opens {
-            return None;
-        }
-        let close = (after_name..chars.len()).find(|&j| chars[j] == '>')?;
-        Some((i, close + 1))
-    })
+            && matches!(chars.get(after_name), Some('>' | ' '))
+    })?;
+    // No `>` after this opening means none after any later one either, so
+    // the search ends here rather than rescanning the line from each.
+    let close = (i + 1 + name.len()..chars.len()).find(|&j| chars[j] == '>')?;
+    Some((i, close + 1))
 }
 
 /// Whether `line` opens `<pre>` and leaves it open, so the lines below are
@@ -318,13 +317,12 @@ fn find_open(chars: &[char], element: &str, from: usize) -> Option<(usize, usize
 pub fn opens_pre(line: &str) -> bool {
     let lower: Vec<char> = line.chars().map(|c| c.to_ascii_lowercase()).collect();
     let close: Vec<char> = "</pre>".chars().collect();
-    let mut from = 0;
-    let mut open = false;
-    while let Some((_, body)) = find_open(&lower, "pre", from) {
-        open = !lower[body..].windows(close.len()).any(|w| w == &close[..]);
-        from = body;
+    let mut last = None;
+    while let Some((_, body)) = find_open(&lower, "pre", last.unwrap_or(0)) {
+        last = Some(body);
     }
-    open
+    // Only the last opening decides; checking each one's tail was quadratic.
+    last.is_some_and(|body| !lower[body..].windows(close.len()).any(|w| w == &close[..]))
 }
 
 /// Mask `<element>…</element>` whole, tags and contents. An element left
@@ -351,6 +349,10 @@ fn mask_element(out: &mut [char], lower: &str, element: &str) {
 /// spaces, and arithmetic never looks like `<div>`.
 fn mask_tags(out: &mut [char], line: &str) {
     let chars: Vec<char> = line.chars().collect();
+    // Where the scan from the last `<` stopped. A `<` before it would stop
+    // there too, so it is reused rather than rescanned: rescanning made a
+    // line of unclosed `<` quadratic.
+    let mut stop = 0;
     let mut i = 0;
     while i < chars.len() {
         if chars[i] != '<' {
@@ -358,10 +360,13 @@ fn mask_tags(out: &mut [char], line: &str) {
             continue;
         }
         let body_start = i + 1;
-        let mut j = body_start;
-        while j < chars.len() && chars[j] != '>' && !chars[j].is_whitespace() {
-            j += 1;
+        if stop < body_start {
+            stop = body_start;
+            while stop < chars.len() && chars[stop] != '>' && !chars[stop].is_whitespace() {
+                stop += 1;
+            }
         }
+        let j = stop;
         let looks_like_tag = j < chars.len()
             && chars[j] == '>'
             && j > body_start
@@ -435,8 +440,10 @@ fn mask_runs_from(out: &mut [char], lower: &str, marker: &str) {
 
 fn mask_around(out: &mut [char], line: &str, needle: char) {
     let chars: Vec<char> = line.chars().collect();
-    for (i, c) in chars.iter().enumerate() {
-        if *c != needle {
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != needle {
+            i += 1;
             continue;
         }
         let mut s = i;
@@ -450,6 +457,9 @@ fn mask_around(out: &mut [char], line: &str, needle: char) {
         for c in out.iter_mut().take(e).skip(s) {
             *c = ' ';
         }
+        // The rest of the run is masked already: scanning it again for each
+        // `@` made a long one quadratic.
+        i = e;
     }
 }
 
@@ -558,6 +568,20 @@ mod tests {
         assert!(!opens_pre("<pre>x</pre>"));
         assert!(opens_pre("<pre>x</pre> and <PRE>"));
         assert!(!opens_pre("<prefix>"));
+    }
+
+    #[test]
+    fn masking_a_long_line_is_linear() {
+        // Prose by `is_prose_line`'s count, and each unit re-scans the rest of
+        // the line under a quadratic mask.
+        for unit in ["<ab", "ab@", "<pre ", "<pre>x"] {
+            let line = unit.repeat(100_000 / unit.len());
+            let started = std::time::Instant::now();
+            mask_non_prose(&line);
+            opens_pre(&line);
+            let took = started.elapsed();
+            assert!(took < std::time::Duration::from_secs(2), "{unit}: {took:?}");
+        }
     }
 
     #[test]
