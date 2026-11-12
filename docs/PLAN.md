@@ -425,7 +425,11 @@ built-in checker" for a fraction of the cost of replacing it.
 themselves — macOS writes there on every "Learn Spelling". So each install
 records a sidecar manifest of precisely what it wrote, and uninstall removes
 only those lines. Sentinel comment lines would be simpler but pollute a file
-where every line is treated as a word.
+where every line is treated as a word. The same manifest lets a sync take
+back a word it wrote that no longer exports (a name dropped by
+`--uncommon`, a word whose trust lapsed), so a shared file shrinks with the
+export instead of keeping every word ever written; a word the user had
+there first was never in the manifest and is never touched.
 
 Every export is a **lossy projection** — a flat membership set, filtered to
 what an ordinary dictionary doesn't already know. The rich store stays rich;

@@ -336,7 +336,9 @@ macos      +2756   -0      ~/Library/Spelling/LocalDictionary
 ```
 
 - **macOS** backs `NSSpellChecker`, so Mail, Notes, TextEdit, and Safari stop
-  flagging your jargon after an app restart.
+  flagging your jargon after an app restart. The file is shared with what
+  you taught macOS yourself, so `sync` only adds to it and takes back words
+  it wrote that no longer export.
 - **VS Code** (cSpell) reads a file `vocab` owns. Writing it is only half the
   job: cSpell also has to be pointed at it, and nothing complains when it
   isn't. So `sync` reads your VS Code settings, and when nothing points at the

@@ -495,17 +495,31 @@ pub fn install(
         .collect();
     report.added = fresh.len();
 
-    if !dry_run && !fresh.is_empty() {
-        let mut merged = existing;
+    // A word we wrote that no longer exports is taken back, as `unsync`
+    // would: the manifest says it was ours, and macOS never forgets one.
+    let exported: BTreeSet<&str> = words.iter().map(String::as_str).collect();
+    let mut ours: BTreeSet<String> = read_lines(&target.manifest).into_iter().collect();
+    let stale: BTreeSet<String> = ours
+        .iter()
+        .filter(|w| !exported.contains(w.as_str()))
+        .cloned()
+        .collect();
+    report.removed = existing.iter().filter(|w| stale.contains(*w)).count();
+
+    if !dry_run && (!fresh.is_empty() || !stale.is_empty()) {
+        let mut merged: Vec<String> = existing
+            .into_iter()
+            .filter(|w| !stale.contains(w))
+            .collect();
         merged.extend(fresh.iter().cloned());
         write_all(&target.path, &merged)?;
 
         // The manifest is cumulative: a word we wrote last run is still ours
         // to remove, even if this run had nothing new to add.
-        let mut owned: BTreeSet<String> = read_lines(&target.manifest).into_iter().collect();
-        owned.extend(fresh);
-        let owned: Vec<String> = owned.into_iter().collect();
-        write_all(&target.manifest, &owned)?;
+        ours.retain(|w| !stale.contains(w));
+        ours.extend(fresh);
+        let ours: Vec<String> = ours.into_iter().collect();
+        write_all(&target.manifest, &ours)?;
     }
     Ok(report)
 }
@@ -684,6 +698,24 @@ mod tests {
         let report = uninstall(&target, false).unwrap();
         assert_eq!(report.removed, 2);
         assert_eq!(read_lines(&target.path), vec!["handwritten"]);
+    }
+
+    #[test]
+    fn a_word_we_wrote_that_left_the_export_is_taken_back() {
+        let dir = scratch("shrink");
+        let target = shared_target(&dir);
+        let store = Store::open(":memory:").unwrap();
+        store
+            .upsert_word("zblorg", "zblorg", Provenance::Owned, 1)
+            .unwrap();
+        // `latin` was ours to write once and no longer exports.
+        std::fs::write(&target.path, "handwritten\nzblorg\nlatin\n").unwrap();
+        write_all(&target.manifest, &["latin".into(), "zblorg".into()]).unwrap();
+
+        let report = install(&store, &target, false).unwrap();
+        assert_eq!((report.added, report.removed), (0, 1));
+        assert_eq!(read_lines(&target.path), vec!["handwritten", "zblorg"]);
+        assert_eq!(read_lines(&target.manifest), vec!["zblorg"]);
     }
 
     #[test]
