@@ -578,7 +578,7 @@ fn dispatch(cli: &Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let code = dispatch_inner(cli, &profile);
     // Profiling reports even when the command failed — a slow error path is
     // still worth seeing.
-    profile.report(&mut io::stderr().lock(), cli.format())?;
+    let _ = profile.report(&mut io::stderr().lock(), cli.format());
     code
 }
 
@@ -1415,6 +1415,8 @@ fn fix_input(
         return Ok(ExitCode::SUCCESS);
     };
 
+    // The report is best-effort: a closed stderr must not cut the text short
+    // or turn a change into exit 0. Only stdout's broken pipe ends the run.
     let mut log = io::stderr().lock();
     let mut rewritten = String::new();
     let mut report: Vec<Rewrite> = Vec::new();
@@ -1445,7 +1447,7 @@ fn fix_input(
         // In place, nothing has landed until the file is written.
         if !cli.in_place {
             for rewrite in &line_report {
-                output::stream_rewrite(&mut log, rewrite, format)?;
+                let _ = output::stream_rewrite(&mut log, rewrite, format);
             }
         }
         report.extend(line_report);
@@ -1463,10 +1465,10 @@ fn fix_input(
             crate::fix::replace_file(path, &rewritten)?;
         }
         for rewrite in &report {
-            output::stream_rewrite(&mut log, rewrite, format)?;
+            let _ = output::stream_rewrite(&mut log, rewrite, format);
         }
     }
-    output::render_rewrites(&mut log, &report, format)?;
+    let _ = output::render_rewrites(&mut log, &report, format);
     // A change is a finding, as in checking: 1 says the text was not clean.
     // A shorthand left alone is not: it was never wrong.
     Ok(if changed {

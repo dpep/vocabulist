@@ -1432,6 +1432,46 @@ fn a_closed_pipe_is_not_an_error() {
 }
 
 #[test]
+fn a_closed_stderr_does_not_cut_fix_short() {
+    use std::io::Write;
+    let db = scratch_db("closed_stderr");
+    let input = "peopel say so\n".repeat(50);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .arg("--db")
+        .arg(&db)
+        .arg("--fix")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stderr.take());
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child.wait_with_output().unwrap();
+    let _ = writer.join();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.lines().filter(|l| *l == "people say so").count(), 50);
+    assert_eq!(out.status.code(), Some(1), "a change still exits 1");
+
+    // In place, too: the file is written and the change still counts.
+    let path = db.with_file_name("notes.md");
+    std::fs::write(&path, "peopel say so\n").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vocab"))
+        .arg("--db")
+        .arg(&db)
+        .args(["--fix", "--in-place", "-f", path.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stderr.take());
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "people say so\n");
+}
+
+#[test]
 fn adding_a_word_already_seen_says_it_was_upgraded() {
     let db = scratch_db("add-upgrade");
     learn(&db, "we shipped the zblorg today", "first");
