@@ -686,6 +686,18 @@ name never becomes individually acceptable.
 Confidence follows the evidence, as everywhere else: days seen and name length,
 capped below the word paths, because this is a guess about a person.
 
+### A bundled name opening a sentence
+
+The bundled proper names (`data/propernames.txt`) let a
+capitalized `Latino` pass. Opening a sentence the capital is no evidence, and
+accepting every name there hid `Kant` for `Want`, `Thai` for `That`, `Tess`
+for `Test`: 12 of 15 such slips 0.6.0 caught. So at a sentence start a name is
+accepted only when no core word (`frequency::CORE`) more common than it — by
+SCOWL level, the one scale names and words share — sits one edit away. That
+flags 93 of 6,416 bundled names at a sentence start (`Rome`, `Chile` among
+them), against all of them in 0.6.0; a name the document also uses
+mid-sentence, or one in the lexicon, still passes.
+
 ## 12k. A missing space, and a spurious one **[done]**
 
 `alot` and `infact` were already *caught* — they are in no dictionary — but the

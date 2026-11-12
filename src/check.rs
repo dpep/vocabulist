@@ -461,6 +461,28 @@ impl Checker {
         crate::dict::contains(names, word)
     }
 
+    /// Is this name one edit from a core word that's more common than it?
+    ///
+    /// Opening a sentence, capitals carry no evidence, so `Kant we ship it`
+    /// reads as a name or as `Want` with nothing to choose between them but
+    /// how often each is written. Both sides are SCOWL levels — the one scale
+    /// the names and the words share — and a tie keeps the name.
+    fn name_shadows_a_common_word(&self, name: &str) -> bool {
+        let names = self.proper_names.get().expect("is_proper_name loaded it");
+        let Some(name_level) = crate::dict::level(names, name) else {
+            return false;
+        };
+        let Some(dictionary) = self.dictionary() else {
+            return false;
+        };
+        let query: Vec<char> = name.chars().collect();
+        let mut scratch = Scratch::default();
+        crate::frequency::CORE.iter().any(|word| {
+            crate::dict::level(dictionary, word).is_some_and(|level| level < name_level)
+                && scratch.distance(&query, word, 1).is_some()
+        })
+    }
+
     fn in_dictionary(&self, word: &str) -> bool {
         self.dictionary()
             .is_some_and(|d| crate::dict::contains(d, word))
@@ -594,6 +616,7 @@ impl Checker {
                 // capitalized, so a lowercase slip cannot hide behind a name.
                 if token.text.starts_with(|c: char| c.is_ascii_uppercase())
                     && self.is_proper_name(word)
+                    && !(starts_sentence && self.name_shadows_a_common_word(word))
                 {
                     self.profile.count("proper_names_accepted", 1);
                     continue;
@@ -1447,6 +1470,21 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn a_rare_name_opening_a_sentence_does_not_hide_a_slip() {
+        // `want` is a core word; `kant` is a name far rarer than it.
+        let c = Checker::new(HashSet::new(), Some(common(&["want", "we", "ship", "it"])))
+            .with_proper_names(vec![("kant", 50), ("zblorgia", 50)]);
+        let f = c.check_line_alone("Kant we ship it", 1, &mut no_evidence);
+        assert_eq!(words(&f[0].suggestions), vec!["want"], "{f:?}");
+        // Mid-sentence it is a name, and a name with no common neighbour is
+        // a name anywhere.
+        for line in ["we ship it, Kant", "Zblorgia we ship it"] {
+            let f = c.check_line_alone(line, 1, &mut no_evidence);
+            assert!(f.is_empty(), "{line:?}: {f:?}");
+        }
     }
 
     #[test]

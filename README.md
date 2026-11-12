@@ -148,7 +148,9 @@ digit, ALLCAPS, camelCase, URLs, paths, email addresses, inline code, fenced
 blocks, indented lines — before it forms an opinion.
 
 A proper name a dictionary knows (`Latino`, `Americans`) passes when it's
-capitalized. Lowercase, it's still checked, so a slip can't hide behind one.
+capitalized. Lowercase, it's still checked, so a slip can't hide behind one;
+nor can one opening a sentence, where `Kant` one edit from the far commoner
+`want` is flagged.
 
 ### What it finds
 

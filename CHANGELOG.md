@@ -57,7 +57,9 @@ lexicon you already have.
   and `america` as your jargon, and the checker flagged `Latino` and
   `Americans`. A bundled list of SCOWL's proper names (places, peoples, given
   names; levels 10-60, same licence) now drops them from `--uncommon` and accepts them capitalized.
-  Lowercase, a name is still checked, so a slip can't hide behind one. Your
+  Lowercase, a name is still checked, so a slip can't hide behind one, and
+  opening a sentence a name one edit from a far commoner word (`Kant`/`want`,
+  `Thai`/`that`) is still flagged. Your
   export shrinks by about 1%, including `linux` and `apache`, which a
   dictionary knows capitalized.
 - **A typo you make habitually is flagged even when seeding found it in
