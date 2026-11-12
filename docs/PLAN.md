@@ -227,16 +227,35 @@ What a speech body reaches, in `process.rs`:
   *writes*; a quoted meeting is also more prose retained than anything else
   keeps.
 
+Measured on a copy of a real store: four transcripts written to read like
+Whisper output, plus a re-run of the first. Counted as an ordinary register,
+10 words became trusted. `kubernetis` on four transcripts alone; nine
+others, `um` and `uh` among them, that the user had written once and a
+single transcript corroborated. Before the re-run was deduplicated, six more
+from the first transcript alone (`sidecar`, `standup`) were trusted because
+the re-run counted as a second document. As `speech`, none were.
+
 **The rejected options.** Counting speech like any register trusts
 `kubernetis`, as measured. Letting one written document plus speech trust a
-word looks cheap, but a dictated prompt reaches the store twice — once
-through the prompt hook, once from soundly — so one utterance would be both
-the written document and its corroboration. Requiring more speech documents
+word would have admitted the other nine, harmless here. But a dictated
+prompt reaches the store twice — once through the prompt hook, once from
+soundly — so one utterance would be both the written document and its
+corroboration. Requiring more speech documents
 only moves the bar a recurring mishearing clears.
 
-**[open]** — the user's own speech reaching a written path too (a dictated
-prompt) counts twice, once per register. That is the per-register content
-key working as designed, and harmless to trust under the rule above.
+**One transcript counts once.** A source given to `vocab capture` names the
+document, and capturing it again is skipped (the `captured` table, which
+already made re-reading a channel idempotent). A re-run or a re-polish of
+the same transcript adds nothing, though a re-polish changes the text and so
+the content key. The first capture wins, because counts cannot be unapplied
+once the prose is gone, so soundly should send a transcript once it is
+final. Without `-s` nothing is claimed, as before: a caller that might send
+the same text twice names its source.
+
+**[open]** — speech that also reaches a written path, a prompt dictated
+rather than typed, counts there as writing in the recognizer's spelling.
+Nothing on the prompt path can tell the difference. The two-document rule
+and the veto bound it as they bound any other written text.
 
 ### Other speakers **[open]**
 

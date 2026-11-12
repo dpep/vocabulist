@@ -11,6 +11,13 @@
   not yours, and speech stays out of phrases, real-word evidence, sentence
   stats and exemplars.
 
+### Changed
+
+- **`vocab capture -s <source>` captures a source once.** Capturing the same
+  source again is skipped and reported as `already captured`, so re-running
+  or re-polishing a transcript doesn't count it twice. Give each document its
+  own source; without `-s`, nothing changes.
+
 ## 0.6.1 — 2026-11-11
 
 Nothing to do on upgrade: no schema change, and every fix applies to the

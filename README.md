@@ -106,6 +106,9 @@ $ vocab process
 processed 1
 ```
 
+Text comes as an argument or on stdin. `-s` names the document it came
+from, and a source is captured once, so re-sending a document is harmless.
+
 `vocab ingest` bulk-loads JSON from stdin (NDJSON or an array of `{body,
 author?, register?, source?}`), for backfilling sent mail or old commits.
 
@@ -115,13 +118,28 @@ are terse, docs are not, and averaging them produces a voice that exists
 nowhere, so the counts stay split. The capture channel labels the register for
 free, so this needs no classifier.
 
+### From soundly
+
+soundly, an on-device transcriber, sends your transcribed speech, from
+dictation and your own mic in meetings, once a transcript is final:
+
+```sh
+vocab capture -q -r speech -s "soundly:$transcript" < "$transcript"
+```
+
+Speech is its own register. It counts what you say and nothing more: a word
+you only ever say is never trusted, because the spelling is the
+recognizer's, not yours, and soundly corrects transcripts toward trusted
+words. Speech stays out of phrases, sentence stats and exemplars too.
+§6a of [docs/PLAN.md](docs/PLAN.md) has the reasoning.
+
 ### Only your own text shapes your voice
 
 Text someone else wrote can show that a word is real, but it never counts as
 how *you* write. Assistant-drafted text is recognized by its watermarks:
 
 ```sh
-$ vocab capture -r pr -f pr-body.md
+$ vocab capture -r pr < pr-body.md
 captured as assistant (co-authored-by: claude)
 ```
 

@@ -175,6 +175,27 @@ fn speech_alone_never_earns_a_word_trust() {
     assert_eq!(vocab(&db, &["list", "--trusted", "zblorg"]).code, 0);
 }
 
+#[test]
+fn a_source_captured_again_counts_once() {
+    // A re-run, or a re-polish that changes the text, is still one document.
+    let db = scratch_db("capture-source");
+    let first = vocab(
+        &db,
+        &["capture", "the zblorg ships", "-s", "soundly:/t/a.txt"],
+    );
+    assert!(first.stdout.contains("captured"), "{}", first.stdout);
+    for body in ["the zblorg ships", "The zblorg ships, today."] {
+        let again = vocab(&db, &["capture", body, "-s", "soundly:/t/a.txt"]);
+        assert_eq!(again.code, 0);
+        assert!(again.stdout.contains("already"), "{}", again.stdout);
+    }
+    vocab(&db, &["process", "-q"]);
+    let listed = vocab(&db, &["list", "zblorg", "-j"]);
+    let rows: serde_json::Value = serde_json::from_str(&listed.stdout).unwrap();
+    assert_eq!(rows[0]["count"], 1, "{}", listed.stdout);
+    assert_eq!(vocab(&db, &["list", "--trusted", "zblorg"]).code, 1);
+}
+
 /// Capture `body` as one document of the user's prose, then process it.
 fn learn(db: &PathBuf, body: &str, source: &str) {
     let captured = vocab(db, &["capture", "-r", "slack", body, "--source", source]);

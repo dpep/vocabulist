@@ -308,7 +308,8 @@ pub enum Command {
         /// Which voice this text is in.
         #[arg(short, long, default_value = "other")]
         register: Register,
-        /// Where it came from, for provenance.
+        /// The document it came from, e.g. `soundly:<transcript>`. The same
+        /// source is captured once: capturing it again is skipped.
         #[arg(short, long)]
         source: Option<String>,
     },
@@ -854,11 +855,24 @@ fn dispatch_inner(
             }
             // Assistant-authored text is staged with its authorship recorded,
             // never silently mixed into the lexicon.
-            let (authored_by, message) = match watermark::detect(&body) {
+            let (authored_by, mut message) = match watermark::detect(&body) {
                 Some(marker) => ("assistant", format!("captured as assistant ({marker})")),
                 None => ("user", "captured".to_string()),
             };
-            store.spool(register, source.as_deref(), &body, authored_by)?;
+            // A re-run or re-polish of one transcript is one document. The
+            // first wins: once processed, its counts cannot be taken back.
+            let fresh = store.transaction(|| -> rusqlite::Result<bool> {
+                if let Some(source) = source
+                    && !store.claim_source(source)?
+                {
+                    return Ok(false);
+                }
+                store.spool(register, source.as_deref(), &body, authored_by)?;
+                Ok(true)
+            })?;
+            if !fresh {
+                message = "already captured".to_string();
+            }
             if !cli.quiet {
                 output::status(&mut out, &message, format)?;
             }
