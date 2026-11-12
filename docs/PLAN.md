@@ -1094,9 +1094,11 @@ The guards are `vocab typos`'s: a dictionary word is refused (`the=then`
 would rewrite every sentence that meant `the`, and so would `prod`, whatever
 it costs a user who writes it), and so is a word from a deliberate source
 (`trekr` is a repo, not an abbreviation). The meaning is stored as typed —
-`GitHub`, "as far as I know" — unless it is all caps, which is shouting and
-is lowercased (`REPRODUCE`); it is written back in the case the shorthand
-was typed (`Repro` → `Reproduce`).
+`GitHub`, "as far as I know", `OK`. An all-caps meaning was once lowercased
+as shouting, but it is as often an acronym (`OK`, `JSON`), and no length cut
+tells them apart. A lowercase meaning is written back in the case the
+shorthand was typed (`Repro` → `Reproduce`); one with capitals (`iPhone`)
+exactly as stored.
 
 ### Inflections
 
