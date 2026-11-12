@@ -58,6 +58,10 @@ lexicon you already have.
   Lowercase, a name is still checked, so a slip can't hide behind one. Your
   export shrinks by about 1%, including `linux` and `apache`, which a
   dictionary knows capitalized.
+- **A typo you make habitually is flagged even when seeding found it in
+  someone's README.** Prose mined from the machine vouched for any word seen
+  twice, ahead of the habitual-typo veto, so `teh` could pass unflagged and
+  `--fix` left it, while `vocab typos` listed `teh -> the`.
 - **Decomposed accents no longer split words.** `cafe` plus a combining acute
   (NFD, as macOS filenames and PDF copies carry it) is now judged exactly like
   the composed `café`.

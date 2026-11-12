@@ -418,12 +418,10 @@ impl Checker {
     /// A single word, against the lexicon, then mined prose, then the
     /// backstop dictionary.
     ///
-    /// Mined prose sits above the dictionary because the dictionary is
-    /// `web2` — Webster's Second International, published 1934. It has no
-    /// `inline`, `download`, `roadmap`, or `pre`, so a word list alone flags
-    /// ordinary modern English as misspelled. Words seen repeatedly in real
-    /// prose on this machine are real words, and the repetition threshold is
-    /// what keeps a typo in someone's README from qualifying.
+    /// Mined prose sits above the dictionary because no word list keeps up
+    /// with modern technical English. The repetition threshold keeps a
+    /// one-off typo in someone's README from qualifying, and the trust veto
+    /// keeps a recurring one out.
     fn knows_atom(&self, word: &str) -> bool {
         if self.lexicon.contains(word) {
             return true;
@@ -433,7 +431,14 @@ impl Checker {
         if self.trust.trusts(word, |w| self.in_dictionary(w)) {
             return true;
         }
-        if self.frequency_of(word) >= MIN_CORPUS_EVIDENCE {
+        // Mined prose is anyone's, so the veto still holds: a README's `teh`
+        // is no excuse for the user's.
+        if self.frequency_of(word) >= MIN_CORPUS_EVIDENCE
+            && self
+                .trust
+                .typo_of(word, |w| self.in_dictionary(w))
+                .is_none()
+        {
             return true;
         }
         self.in_dictionary(word)
@@ -1824,6 +1829,28 @@ mod tests {
         let f = c.check_line_alone("the teh widgetr shoudl zblorg work", 1, &mut no_evidence);
         let flagged: Vec<&str> = f.iter().map(|f| f.word.as_str()).collect();
         assert_eq!(flagged, ["teh", "shoudl"]);
+    }
+
+    #[test]
+    fn mined_prose_does_not_excuse_a_habitual_typo() {
+        // Seeding mines READMEs, and other people's typos are in them.
+        let trust = standings(&[
+            ("the", Provenance::Dependency, 600),
+            ("teh", Provenance::Observed, 9),
+        ]);
+        let c = Checker::new(HashSet::new(), Some(crate::dict::from_words(["the"])))
+            .with_trust(trust)
+            .with_frequency(std::collections::HashMap::from([
+                ("teh".to_string(), 4),
+                ("zblorg".to_string(), 4),
+            ]));
+        let f = c.check_line_alone("the teh zblorg", 1, &mut no_evidence);
+        let flagged: Vec<&str> = f.iter().map(|f| f.word.as_str()).collect();
+        assert_eq!(
+            flagged,
+            ["teh"],
+            "mined evidence still vouches for the rest"
+        );
     }
 
     #[test]
