@@ -458,7 +458,8 @@ two openers racing on an old lexicon migrate it once. A lexicon in a
 directory the user can't write fails a WAL read, which needs a `-shm` beside
 it; the reader then reopens it `immutable=1` (no locks, no `-shm`). That gives
 up SQLite's guard against a concurrent writer, which is acceptable only
-because nothing can write there either. Under WAL a reader never waits on a capture hook's write
+because nothing can write there either. It also never reads a `-wal`, so a non-empty
+one (a writer killed before checkpointing) is refused rather than read past. Under WAL a reader never waits on a capture hook's write
 lock. A writer refuses a newer schema too — stamping its own version would
 hand the lexicon back to the newer binary looking older than it is — and
 writes nothing on open to a lexicon already at its schema. Checking, `--fix` and `--expand` read too, with one exception: the first run

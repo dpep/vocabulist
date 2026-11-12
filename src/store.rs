@@ -333,8 +333,9 @@ fn cannot_share(e: &rusqlite::Error) -> bool {
 ///
 /// Only for a read, and acceptable there: `immutable` promises SQLite nothing
 /// changes the file, so a writer racing this reader could hand it a torn
-/// page, and a `-wal` left beside it goes unread. In a directory no one can
-/// write, no writer can be running, and its last writer checkpointed on close.
+/// page, and a `-wal` left beside it goes unread, which is why a non-empty
+/// one is refused first. In a directory no one can write, no writer can be
+/// running.
 fn open_immutable(path: &Path) -> Result<Connection> {
     let mut uri = String::from("file:");
     for c in path.to_string_lossy().chars() {
@@ -350,6 +351,24 @@ fn open_immutable(path: &Path) -> Result<Connection> {
     )?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(conn)
+}
+
+/// `immutable` never reads a `-wal`, so a non-empty one (a writer killed
+/// before it checkpointed) would be read past as if it weren't there.
+fn refuse_unread_wal(path: &Path) -> std::result::Result<(), String> {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    let wal = PathBuf::from(wal);
+    match std::fs::metadata(&wal) {
+        Ok(meta) if meta.len() > 0 => Err(format!(
+            "cannot read lexicon at {}: {} holds changes not yet written into it, \
+             and the directory isn't writable, so SQLite can't apply them; \
+             open it once from an account that can write there",
+            path.display(),
+            wal.display()
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// One staged body awaiting processing.
@@ -451,6 +470,7 @@ impl Store {
         let found = match store.schema_version() {
             Ok(found) => found,
             Err(e) if cannot_share(&e) => {
+                refuse_unread_wal(&store.path)?;
                 store.conn = open_immutable(&store.path).map_err(|_| {
                     format!(
                         "cannot read lexicon at {}: SQLite needs to create its \
@@ -1523,6 +1543,21 @@ mod tests {
         let read = Store::open_read_only(&path).and_then(|s| Ok(s.contains("zblorg")?));
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(read.unwrap());
+    }
+
+    #[test]
+    fn a_leftover_wal_in_a_read_only_directory_is_refused_not_ignored() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("ro-wal");
+        Store::open(&path).unwrap();
+        // A killed writer's uncheckpointed frames, which `immutable` skips.
+        std::fs::write(path.with_extension("db-wal"), b"frames").unwrap();
+        let dir = path.parent().unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let read = Store::open_read_only(&path);
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = read.err().expect("refused").to_string();
+        assert!(err.contains("-wal"), "{err}");
     }
 
     #[test]
