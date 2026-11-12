@@ -479,6 +479,45 @@ impl Checker {
         self.check_line(line, line_no, &mut Names::new(), evidence)
     }
 
+    /// A finding for the capitalized run opening `tokens`, if it misspells
+    /// someone we know. The whole run is tried before its first token,
+    /// because a full name is far stronger evidence than either half: `Ada
+    /// Lovelacee` against `ada lovelace` is one edit in twelve characters,
+    /// where `Lovelacee` alone would have to be judged on its own.
+    fn misspelled_name_run(
+        &self,
+        tokens: &[Token],
+        normalized: &[String],
+        line_no: usize,
+    ) -> Option<Finding> {
+        let run_end = tokens
+            .iter()
+            .take_while(|t| t.text.starts_with(|c: char| c.is_ascii_uppercase()))
+            .count();
+        for len in (1..=run_end).rev() {
+            let candidate = normalized[..len].join(" ");
+            if let Some((correct, confidence)) = self.misspelled_name(&candidate) {
+                self.profile.count("name_findings", 1);
+                return Some(Finding {
+                    kind: FindingKind::Unknown,
+                    word: tokens[..len]
+                        .iter()
+                        .map(|t| t.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    line: line_no,
+                    col: tokens[0].col,
+                    suggestions: vec![Suggestion {
+                        word: correct,
+                        score: 1.0,
+                    }],
+                    confidence,
+                });
+            }
+        }
+        None
+    }
+
     /// Check one line, returning findings tagged with `line`/`col`.
     ///
     /// `evidence` supplies n-gram counts for the real-word pass; pass a
@@ -525,44 +564,7 @@ impl Checker {
                 // right while no dictionary can hold a name. Once people are
                 // known, the same tokens become the only place a misspelled
                 // colleague could ever be caught.
-                //
-                // The whole capitalized run is tried before its first token,
-                // because a full name is far stronger evidence than either
-                // half: `Ada Lovelacee` against `ada lovelace` is one edit in
-                // twelve characters, where `Lovelacee` alone would have to be
-                // judged on its own.
-                let run_end = tokens[i..]
-                    .iter()
-                    .zip(normalized[i..].iter())
-                    .take_while(|(t, _)| {
-                        t.text
-                            .chars()
-                            .next()
-                            .is_some_and(|c| c.is_ascii_uppercase())
-                    })
-                    .count();
-                for len in (1..=run_end).rev() {
-                    let candidate = normalized[i..i + len].join(" ");
-                    if let Some((correct, confidence)) = self.misspelled_name(&candidate) {
-                        self.profile.count("name_findings", 1);
-                        findings.push(Finding {
-                            kind: FindingKind::Unknown,
-                            word: tokens[i..i + len]
-                                .iter()
-                                .map(|t| t.text.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" "),
-                            line: line_no,
-                            col: token.col,
-                            suggestions: vec![Suggestion {
-                                word: correct,
-                                score: 1.0,
-                            }],
-                            confidence,
-                        });
-                        break;
-                    }
-                }
+                findings.extend(self.misspelled_name_run(&tokens[i..], &normalized[i..], line_no));
                 continue;
             }
             self.profile.count("tokens_checked", 1);
