@@ -513,6 +513,10 @@ fn a_shorthand_that_could_never_apply_is_refused() {
     assert_eq!(vocab(&db, &["add", "zblorg"]).code, 0);
     // A dictionary word would be rewritten in every sentence that uses it.
     assert_eq!(vocab(&db, &["shorthand", "the=then"]).code, 2);
+    // Even when it is also deliberate: removing it would not help.
+    assert_eq!(vocab(&db, &["add", "then"]).code, 0);
+    let out = vocab(&db, &["shorthand", "then=than"]);
+    assert!(!out.stderr.contains("vocab rm"), "{}", out.stderr);
     // A word from a deliberate source is a word, not an abbreviation.
     assert_eq!(vocab(&db, &["shorthand", "zblorg=zebra"]).code, 2);
     // `--expand` rewrites one word at a time, so a phrase is never typed as one.

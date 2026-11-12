@@ -1123,6 +1123,10 @@ fn refuse_a_word(
     word: &str,
     what: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // The dictionary first: for a word in both, `vocab rm` would not help.
+    if dictionary.is_some_and(|d| crate::dict::contains(d, word)) {
+        return Err(format!("{word} is a dictionary word, so it cannot always be {what}").into());
+    }
     if let Some(standing) = trust.standing(word)
         && standing.provenance > crate::types::Provenance::Observed
     {
@@ -1132,9 +1136,6 @@ fn refuse_a_word(
             standing.provenance.as_str()
         )
         .into());
-    }
-    if dictionary.is_some_and(|d| crate::dict::contains(d, word)) {
-        return Err(format!("{word} is a dictionary word, so it cannot always be {what}").into());
     }
     Ok(())
 }
