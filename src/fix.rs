@@ -72,9 +72,11 @@ pub fn replace_file(path: &Path, contents: &str) -> io::Result<()> {
             .write(true)
             .create_new(true)
             .open(&temp)?;
+        // Before the text goes in: created with the umask's mode, a private
+        // file's contents would sit world-readable until the rename.
+        file.set_permissions(permissions)?;
         file.write_all(contents.as_bytes())?;
         file.sync_all()?;
-        std::fs::set_permissions(&temp, permissions)?;
         std::fs::rename(&temp, &target)
     })();
     if written.is_err() {
