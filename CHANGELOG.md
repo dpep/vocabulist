@@ -2,79 +2,91 @@
 
 ## Unreleased
 
+Nothing to do on upgrade: no schema change, and every fix applies to the
+lexicon you already have.
+
 ### Fixed
 
-- **`vocab hook` always exits 0, as its help promised.** A lexicon that
-  would not open — a held write lock, an unreadable path — made the hook exit
-  2, which Claude Code reads as "block this prompt" and so erased what you
-  had typed. A hook now skips the event instead, and gives up on a held lock
-  after 250 ms rather than holding your prompt for five seconds.
-- **`--file` with text to check is a usage error (exit 2).** `vocab --fix
+**Hooks and the lexicon**
+
+- **`vocab hook` always exits 0**, as its help promised. A lexicon that would
+  not open (a held lock, an unreadable path) made it exit 2, which Claude Code
+  reads as "block this prompt", erasing what you typed. It now skips the
+  event, and gives up on a held lock after 250 ms instead of five seconds.
+- **A writing command refuses a lexicon from a newer vocab** rather than
+  stamping its own schema version over it, which the newer binary would then
+  misread. A hook skips the event. Opening a lexicon already at the current
+  schema no longer writes to it.
+- **Checking, `--fix` and `--expand` open the lexicon read-only**, so a check
+  no longer waits on a capture hook's lock. Only the first run on the default
+  lexicon writes, to seed it. A check no longer creates a `--db` that
+  doesn't exist.
+- **A `--db` that was never seeded knows how common words are.** Without a
+  frequency table, scores went flat and a never-seen slip like `teh` was never
+  fixed. The embedded core frequencies now stand in, in memory.
+
+**`--fix` and `--expand`**
+
+- **`--in-place` replaces the file atomically**, follows a symlink to its
+  target, keeps the file's permissions, refuses a read-only file, and reports
+  fixes only once they're written.
+- **`--file` plus text to check is a usage error (exit 2).** `vocab --fix
   --in-place -f notes.txt "teh"` checked the text and wrote the result over
   `notes.txt`; without `--fix` the file was silently ignored.
-- **`--in-place` replaces the file atomically**, through a symlink to its
-  target and keeping its permissions, refuses a read-only file, and reports
-  fixes only once they are written.
-- **A writing command refuses a lexicon from a newer vocab** instead of
-  stamping it back to its own schema version, which a newer binary would
-  then misread. A hook skips the event. Opening a lexicon already at the
-  current schema no longer writes to it.
-- **Checking, `--fix` and `--expand` open the lexicon read-only.** They
-  opened it for writing on every run, so each check could wait on a capture
-  hook's lock. Only the first run on the default lexicon, which seeds it,
-  writes. A check against a `--db` that does not exist no longer creates it.
-- **`--fix` and `--expand` leave code-shaped words alone** outside backticks
-  too: `teh.rs`, `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`.
-  They also now agree on this, where `--fix` rewrote `teh.rs` and `--expand`
-  left `repro.rs`.
-- **No more archaic contractions.** Apostrophe forms derived from the
-  bundled word list are limited to `n't`, `'ve`, `'ll`, `'re` and `'m`, so
-  `een`, `oer`, `neer`, `eer` and `Hed` are no longer rewritten to `e'en`,
-  `o'er`, `ne'er`, `e'er` and `He'd`. Your own lexicon's forms (`y'all`) still
-  count. `ive` now becomes `I've`, not `i've`.
-- **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code
-  spans**, so their contents are neither flagged nor rewritten, and a `<pre>`
-  block spanning lines is skipped like a fenced one.
-- **`vocab shorthand` refuses what `vocab typos` refuses:** a dictionary
-  word (`the=then`) and a word from a deliberate source (`trekr=trek`). The
-  meaning is stored lowercase (`repro=REPRODUCE`). A shorthand you already
-  confirmed for a dictionary word is kept; `vocab shorthand --rm` it if
-  `--expand` writes it where you meant the word.
-- **A `--db` that was never seeded knows how common words are.** It had no
-  frequency table, so scores went flat and a never-seen slip like `teh` was
-  never fixed. The embedded core frequencies now stand in, in memory, without
-  writing the lexicon.
-- **Decomposed accents no longer split words.** `cafe` plus a combining
-  acute (NFD, as macOS filenames and PDF copies carry it) was read as `cafe`
-  and flagged; it is now judged exactly as the composed `café` is.
-- **A very long line no longer takes minutes.** Checking was quadratic in
-  the length of a line, so a 96 KB single line (a pasted log, a minified
-  file) ran for minutes; it now takes seconds.
-- **`vocab list | head` exits quietly** instead of printing `Broken pipe (os
-  error 32)` and exiting 2.
-- **`vocab typos` refuses a pair that is not one word each** (`teh "the
-  end"`, `t3h the`), which `--fix` could never apply sensibly.
-- **`vocab add` reports an upgrade:** adding a word already learned from
-  your text said `added 0`; it now says `added 0, upgraded 1`.
-- **`--fix` keeps curly apostrophes curly:** on a line typed with `’`,
-  `dont` becomes `don’t` and `Teh’s` becomes `The’s`, not a straight `'`.
+- **Code-shaped words are left alone outside backticks too:** `teh.rs`,
+  `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. `--fix` and
+  `--expand` now agree; `--fix` used to rewrite `teh.rs` while `--expand` left
+  `repro.rs`.
+- **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code spans**:
+  never flagged or rewritten, and a multi-line `<pre>` is skipped like a fenced
+  block.
+- **No more archaic contractions.** Apostrophe forms from the bundled word list
+  are limited to `n't`, `'ve`, `'ll`, `'re` and `'m`, so `een`, `oer`, `neer`,
+  `eer` and `Hed` no longer become `e'en`, `o'er`, `ne'er`, `e'er` and `He'd`.
+  Forms from your own lexicon (`y'all`) still count. `ive` now becomes `I've`,
+  not `i've`.
+- **Curly apostrophes stay curly:** on a line typed with `’`, `dont` becomes
+  `don’t` and `Teh’s` becomes `The’s`.
+
+**Checking**
+
 - **Proper names are known as proper names.** SCOWL's word lists hold no
   capitalized words, so `vocab list --uncommon` (and `sync`) passed `latin`
   and `america` as your jargon, and the checker flagged `Latino` and
-  `Americans`. A bundled list of SCOWL's proper names (places, peoples,
-  given names; levels 10-60, same licence) now drops those from
-  `--uncommon` and accepts them when typed capitalized. Lowercase, a name is
-  still checked, so a slip cannot hide behind one. On a real lexicon this
-  drops about 1% of the export, including `linux` and `apache`, which a
+  `Americans`. A bundled list of SCOWL's proper names (places, peoples, given
+  names; levels 10-60, same licence) now drops them from `--uncommon` and accepts them capitalized.
+  Lowercase, a name is still checked, so a slip can't hide behind one. Your
+  export shrinks by about 1%, including `linux` and `apache`, which a
   dictionary knows capitalized.
+- **Decomposed accents no longer split words.** `cafe` plus a combining acute
+  (NFD, as macOS filenames and PDF copies carry it) is now judged exactly like
+  the composed `café`.
+- **A very long line takes seconds, not minutes.** Checking was quadratic in
+  line length, so a 96 KB single line (a pasted log, a minified file) took
+  minutes.
+
+**Commands**
+
+- **`vocab shorthand` refuses what `vocab typos` refuses:** a dictionary word
+  (`the=then`) and a word from a deliberate source (`trekr=trek`). The meaning
+  is stored lowercase (`repro=REPRODUCE`). A shorthand you already confirmed
+  for a dictionary word is kept; `vocab shorthand --rm` it if `--expand`
+  writes it where you meant the word.
+- **`vocab typos` refuses a pair that isn't one word each** (`teh "the end"`,
+  `t3h the`), which `--fix` could never apply sensibly.
+- **`vocab add` reports an upgrade:** adding a word already learned from your
+  text said `added 0`; it now says `added 0, upgraded 1`.
+- **`vocab list | head` exits quietly** instead of printing `Broken pipe (os
+  error 32)` and exiting 2.
 
 ### Docs
 
-- `--fix` never promised `TEH` → `THE` honestly: an all-caps word reads as an
-  acronym and is never checked. The docs now say so.
-- A name the document puts in a code span or URL is learned as it is read, so
-  it excuses a prose mention below it but not one above it. `--fix` streams
-  and checking matches it, so the two never disagree about a line.
+- An ALLCAPS word reads as an acronym and is never checked, so `--fix` leaves
+  `TEH` alone. The docs no longer imply otherwise.
+- A name the document puts in a code span or URL is learned as it's read, so
+  it excuses a prose mention below it but not above it. `--fix` streams, and
+  checking now reads names the same way, so the two never disagree about a
+  line.
 
 ## 0.6.0 — 2026-11-11
 
