@@ -453,6 +453,18 @@ impl Command {
             | Command::Phrases { .. }
             | Command::Eval { .. }
             | Command::Sync { .. } => Access::Read,
+            // A usage error, which must not create, migrate or seed a lexicon
+            // before saying so.
+            Command::Typos { words, rm }
+                if !matches!((words.len(), rm), (0 | 2, false) | (1, true)) =>
+            {
+                Access::None
+            }
+            Command::Shorthand { words, rm: true } | Command::Rm { word: words, .. }
+                if words.is_empty() =>
+            {
+                Access::None
+            }
             Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
             Command::Typos { words, rm: false } if words.is_empty() => Access::Read,
             Command::Shorthand { words, rm: false } if words.is_empty() => Access::Read,

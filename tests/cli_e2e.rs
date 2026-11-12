@@ -1065,6 +1065,21 @@ fn commands_that_never_read_the_lexicon_work_without_one() {
 }
 
 #[test]
+fn a_usage_error_never_opens_the_lexicon() {
+    let db = scratch_db("usage_error");
+    for args in [
+        &["typos", "teh"][..],
+        &["typos", "teh", "the", "then"],
+        &["typos", "--rm"],
+        &["shorthand", "--rm"],
+        &["rm"],
+    ] {
+        assert_eq!(vocab(&db, args).code, 2, "{args:?}");
+        assert!(!db.exists(), "{args:?} created the database");
+    }
+}
+
+#[test]
 fn reading_does_not_wait_on_a_writer() {
     let db = scratch_db("read_while_writing");
     vocab(&db, &["add", "zblorg"]);

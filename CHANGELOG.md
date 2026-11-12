@@ -85,6 +85,10 @@ lexicon you already have.
 - **`vocab sync` reports what changed in the files it owns** (cSpell, Wispr
   Flow): a run with nothing new said `+2756 -0` every time; it now says
   `+0 -0`, and counts the words that left.
+- **A usage error says so before touching the lexicon.** `vocab typos teh`
+  (no meaning given), `vocab rm` and `vocab shorthand --rm` with nothing named
+  created, upgraded, or on first run spent seconds seeding a lexicon before
+  reporting the mistake.
 - **`vocab list | head` exits quietly** instead of printing `Broken pipe (os
   error 32)` and exiting 2.
 
