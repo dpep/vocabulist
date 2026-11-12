@@ -110,7 +110,7 @@ processed 1
 author?, register?, source?}`), for backfilling sent mail or old commits.
 
 Text is tracked per **register** — `prompt`, `slack`, `email`, `commit`, `pr`,
-`doc`, `code`, `other` — the voice you write in for a given audience. Prompts
+`doc`, `code`, `speech`, `other` — the voice you write in for a given audience. Prompts
 are terse, docs are not, and averaging them produces a voice that exists
 nowhere, so the counts stay split. The capture channel labels the register for
 free, so this needs no classifier.

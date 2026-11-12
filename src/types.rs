@@ -117,6 +117,9 @@ pub enum Register {
     Pr,
     Doc,
     Code,
+    /// The user's own words, transcribed from speech. Teaches what they say,
+    /// never how a word is spelled (PLAN §6a).
+    Speech,
     Other,
 }
 
@@ -130,6 +133,7 @@ impl Register {
             Register::Pr => "pr",
             Register::Doc => "doc",
             Register::Code => "code",
+            Register::Speech => "speech",
             Register::Other => "other",
         }
     }
@@ -143,6 +147,7 @@ impl Register {
             "pr" => Register::Pr,
             "doc" => Register::Doc,
             "code" => Register::Code,
+            "speech" => Register::Speech,
             "other" => Register::Other,
             _ => return None,
         })

@@ -179,7 +179,7 @@ what boilerplate looks like from the inside regardless of how it arrived.
 
 A single "writing style" is a fiction. You write in at least these voices:
 
-`prompt` · `slack` · `email` · `commit` · `pr` · `doc` · `code` · `other`
+`prompt` · `slack` · `email` · `commit` · `pr` · `doc` · `code` · `speech` · `other`
 
 Prompts to an assistant are terse, imperative, elliptical. Drafting an email in
 that voice would be actively wrong. Email varies more by recipient than by you.
@@ -192,6 +192,67 @@ no embeddings. Counts stay split by register rather than summed.
 **[open]** — audience conditioning within a register. Email to a close
 colleague and email to a vendor are different registers wearing the same label,
 and the recipient is available at capture time.
+
+### 6a. Speech **[done]**
+
+soundly sends the user's own transcribed speech — dictation, and their own
+mic in a meeting — as `vocab capture -r speech -s soundly:<transcript>`.
+It is the user's words in a recognizer's spelling: the mirror image of a
+colleague's text, which is someone else's words in a real spelling. So it
+teaches the other axis. A colleague corroborates that a word is *spelled*
+that way and says nothing about voice; a transcript says what the user *says*
+and nothing about spelling.
+
+What a speech body reaches, in `process.rs`:
+
+- **Its own register counts** (`word_registers`), and the `documents` total.
+  That is all.
+- **Not `lexicon.count`**, the written total that the habitual-typo veto
+  weighs, so speech is never summed with prose or prompts.
+- **Not `word_sources`, so never trust.** Trust (§12l) counts documents
+  because recurrence is evidence a spelling is real. A recognizer's
+  mishearing (`kubernetis`) recurs across transcripts as reliably as the
+  word it misheard, and the dictionary exclusion doesn't help, because the
+  mishearing isn't in the dictionary either. soundly then corrects toward
+  trusted words, so a mishearing trusted by speech would be fed back into
+  every later transcript and recur faster. A speech-only word stays
+  untrusted however often it is said; two written documents trust it as
+  they always did, and speech neither helps nor hurts.
+- **Not n-grams.** They are read across registers as real-word evidence
+  (`check.rs`, `ngram::check_real_word`), and homophones — `then`/`than`,
+  `their`/`there` — are exactly where a recognizer picks the spelling.
+  Spoken phrasing is also full of fillers no draft wants.
+- **Not sentence shape or exemplars.** Sentence boundaries and punctuation
+  are the recognizer's, and an exemplar exists to show how the user
+  *writes*; a quoted meeting is also more prose retained than anything else
+  keeps.
+
+**The rejected options.** Counting speech like any register trusts
+`kubernetis`, as measured. Letting one written document plus speech trust a
+word looks cheap, but a dictated prompt reaches the store twice — once
+through the prompt hook, once from soundly — so one utterance would be both
+the written document and its corroboration. Requiring more speech documents
+only moves the bar a recurring mishearing clears.
+
+**[open]** — the user's own speech reaching a written path too (a dictated
+prompt) counts twice, once per register. That is the per-register content
+key working as designed, and harmless to trust under the rule above.
+
+### Other speakers **[open]**
+
+Learning a colleague's spoken lingo — the names and jargon said in a meeting
+— is not allowed today, on purpose. The store is one person's: their counts,
+their voice, and "only the user's own text shapes voice" (§5) is what keeps
+it from becoming an average of the room. A second speaker's transcript
+through `ingest` with an `author` teaches nothing.
+
+Doing it properly means **profiles**: a speaker key on the voice tables
+(`word_registers`, `ngrams`, `exemplars`, `prose_stats`), the user as the
+default profile every existing query reads, and a shared vocabulary that
+another profile's words could corroborate — which for speech still cannot
+mean spelling. Diarization belongs to soundly; vocabulist would only take a
+speaker label. Not before there is a consumer that reads another person's
+profile.
 
 ## 7. Seeding from ground truth
 

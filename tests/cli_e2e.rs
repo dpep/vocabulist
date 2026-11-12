@@ -142,6 +142,39 @@ fn capture_then_process_teaches_the_lexicon() {
     assert_eq!(vocab(&db, &["zblorg shipped"]).code, 0);
 }
 
+#[test]
+fn speech_alone_never_earns_a_word_trust() {
+    // A recognizer's mishearing recurs across transcripts as reliably as
+    // real jargon does, and only writing says how a word is spelled.
+    let db = scratch_db("speech-trust");
+    for n in 1..=4 {
+        let source = format!("soundly:/t/{n}.txt");
+        vocab(
+            &db,
+            &[
+                "capture",
+                "-r",
+                "speech",
+                "the zblorg cluster is upgraded",
+                "-s",
+                &source,
+                "-q",
+            ],
+        );
+    }
+    vocab(&db, &["process", "-q"]);
+    assert_eq!(vocab(&db, &["list", "--trusted", "zblorg"]).code, 1);
+    assert_eq!(vocab(&db, &["zblorg works"]).code, 1);
+    let speech = vocab(&db, &["analyze", "--lexicon", "--register", "speech", "-j"]);
+    assert_eq!(speech.code, 0, "{}", speech.stderr);
+
+    // One written document is not enough beside it, two are.
+    learn(&db, "the zblorg ships", "first");
+    assert_eq!(vocab(&db, &["list", "--trusted", "zblorg"]).code, 1);
+    learn(&db, "the zblorg ships", "second");
+    assert_eq!(vocab(&db, &["list", "--trusted", "zblorg"]).code, 0);
+}
+
 /// Capture `body` as one document of the user's prose, then process it.
 fn learn(db: &PathBuf, body: &str, source: &str) {
     let captured = vocab(db, &["capture", "-r", "slack", body, "--source", source]);

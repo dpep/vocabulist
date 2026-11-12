@@ -68,6 +68,27 @@ fn process_one(
     // was still read.
     store.bump_prose(register, "documents", 1)?;
 
+    // A transcript is the user's words in a recognizer's spelling, the
+    // mirror image of a colleague's text: evidence of what they say, none of
+    // how a word is spelled. So it reaches the speech register's counts and
+    // stops there. Not `lexicon.count`, which is the written total the veto
+    // weighs. No `word_sources`, which is what trust counts, or a
+    // recognizer's recurring mishearing would earn trust, and soundly would
+    // then correct toward it. No n-grams either: they are read across registers as
+    // real-word evidence, and homophones are exactly where a recognizer
+    // picks the spelling. Sentence shape and exemplars are its punctuation,
+    // not the user's (PLAN §6a).
+    if register == Register::Speech {
+        if authored_by == "user" {
+            for word in body.lines().flat_map(text::prose_words) {
+                store.upsert_word(&word, &word, Provenance::Observed, 0)?;
+                store.bump_register(&word, register, 1)?;
+            }
+        }
+        store.retire_spool(id)?;
+        return Ok(());
+    }
+
     if authored_by != "user" {
         for word in body.lines().flat_map(text::prose_words) {
             store.upsert_word(&word, &word, Provenance::Observed, 0)?;
@@ -306,6 +327,40 @@ mod tests {
         assert_eq!(store.source_count("zblorg").unwrap(), 1);
         assert_eq!(store.ngram_count("the zblorg").unwrap(), 1);
         assert!(store.prose_totals(None).unwrap()["sentences"] > 0);
+    }
+
+    #[test]
+    fn speech_counts_what_you_say_but_never_how_it_is_spelled() {
+        let store = Store::open(":memory:").unwrap();
+        let line = "the zblorg ships today and the zblorg ships tomorrow too";
+        store
+            .spool(Register::Speech, Some("soundly:a"), line, "user")
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+
+        assert_eq!(
+            store.word_counts(Some(Register::Speech)).unwrap()["zblorg"],
+            2
+        );
+        // Never summed into the written total.
+        assert!(!store.word_counts(None).unwrap().contains_key("zblorg"));
+        // Trust counts documents, and a transcript is not one.
+        assert_eq!(store.source_count("zblorg").unwrap(), 0);
+        assert_eq!(store.ngram_count("the zblorg").unwrap(), 0);
+        assert!(store.exemplars(Register::Speech).unwrap().is_empty());
+        let totals = store.prose_totals(Some(Register::Speech)).unwrap();
+        assert_eq!(totals.get("sentences").copied().unwrap_or(0), 0);
+        assert_eq!(totals["documents"], 1);
+    }
+
+    #[test]
+    fn someone_elses_speech_teaches_nothing() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .spool_with_author(Register::Speech, None, "the zblorg", "other", Some("x"))
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        assert!(!store.contains("zblorg").unwrap());
     }
 
     #[test]

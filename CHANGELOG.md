@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A `speech` register** for your own transcribed speech, which soundly
+  sends with `vocab capture -r speech`. It gets its own counts, never summed
+  with what you write, and teaches nothing else: a word you only say is
+  never trusted however often you say it, because a recognizer's spelling is
+  not yours, and speech stays out of phrases, real-word evidence, sentence
+  stats and exemplars.
+
 ## 0.6.1 — 2026-11-11
 
 Nothing to do on upgrade: no schema change, and every fix applies to the
