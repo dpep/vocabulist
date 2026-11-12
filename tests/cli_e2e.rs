@@ -1351,6 +1351,20 @@ fn a_very_long_line_is_checked_in_linear_time() {
     let took = started.elapsed();
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
+
+    // Not prose, but prose by the line test's count: unclosed tags, an
+    // address run, and one enormous token.
+    for unit in ["<ab", "ab@", "ab'"] {
+        let line = unit.repeat(96_000 / unit.len()) + "\n";
+        let started = std::time::Instant::now();
+        let out = run(&db, &["--fix", "-J"], Some(&line));
+        let took = started.elapsed();
+        assert_ne!(out.code, 2, "{unit}: {}", out.stderr);
+        assert!(
+            took < std::time::Duration::from_secs(20),
+            "{unit}: took {took:?}"
+        );
+    }
 }
 
 #[test]

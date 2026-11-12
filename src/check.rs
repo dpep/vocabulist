@@ -289,14 +289,14 @@ impl Checker {
     /// selective enough to be safe: `alot` yields `a lot` and nothing else,
     /// since `al`, `ot`, `alo` and `t` are not words.
     fn split_in_two(&self, word: &str) -> Option<String> {
-        let chars: Vec<char> = word.chars().collect();
-        if chars.len() < 3 {
+        if word.chars().count() < 3 {
             return None;
         }
         let usable = |part: &str| {
             // A one-letter half is only ever `a` or `I`. Allowing any single
             // letter turns every unknown token into a split.
-            if part.chars().count() == 1 {
+            let mut letters = part.chars();
+            if letters.next().is_some() && letters.next().is_none() {
                 return matches!(part, "a" | "i");
             }
             // Common, not merely present. A word list deep enough to be
@@ -308,10 +308,11 @@ impl Checker {
                 .is_some_and(|level| level <= COMMON_LEVEL)
         };
         let mut found = None;
-        for at in 1..chars.len() {
-            let head: String = chars[..at].iter().collect();
-            let tail: String = chars[at..].iter().collect();
-            if usable(&head) && usable(&tail) {
+        // Sliced, not collected: copying both halves at every split point made
+        // a long token quadratic.
+        for (at, _) in word.char_indices().skip(1) {
+            let (head, tail) = word.split_at(at);
+            if usable(head) && usable(tail) {
                 // More than one way to split it is not a correction, it is a
                 // coin flip.
                 if found.is_some() {
