@@ -1504,6 +1504,28 @@ fn a_file_a_command_would_not_read_is_a_usage_error() {
 }
 
 #[test]
+fn help_offers_file_only_where_it_is_read() {
+    let db = scratch_db("file-help");
+    for (args, offered) in [
+        (&["--help"][..], true),
+        (&["analyze", "--help"], true),
+        (&["add", "--help"], false),
+        (&["sync", "--help"], false),
+    ] {
+        let out = vocab(&db, args);
+        assert_eq!(out.stdout.contains("--file"), offered, "{args:?}");
+    }
+    // Both places analyze can take it from still work.
+    let path = db.with_file_name("text.txt");
+    std::fs::write(&path, "the widget is here\n").unwrap();
+    let file = path.to_str().unwrap();
+    for args in [&["analyze", "-f", file][..], &["-f", file, "analyze"]] {
+        assert_eq!(vocab(&db, args).code, 0, "{args:?}");
+    }
+    assert_eq!(vocab(&db, &["analyze", "-f", file, "some text"]).code, 2);
+}
+
+#[test]
 fn a_closed_stderr_does_not_cut_fix_short() {
     use std::io::Write;
     let db = scratch_db("closed_stderr");

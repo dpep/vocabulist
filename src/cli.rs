@@ -98,7 +98,9 @@ pub struct Cli {
 
     /// Read input from this file, checked line by line (like piped stdin).
     /// Not with text as well: which one to read would be a guess.
-    #[arg(short, long, global = true)]
+    // Not global, so it is offered only where it is read: here and on
+    // `analyze`, which declares its own.
+    #[arg(short, long)]
     pub file: Option<PathBuf>,
 
     /// Write the text back with corrections applied, instead of reporting
@@ -337,6 +339,9 @@ pub enum Command {
     Analyze {
         /// Text to analyze. Omit with --lexicon, or pipe via stdin.
         text: Option<String>,
+        /// Analyze this file instead of text or stdin.
+        #[arg(short, long, conflicts_with = "text")]
+        file: Option<PathBuf>,
         /// Analyze the accumulated corpus instead of a text.
         #[arg(long)]
         lexicon: bool,
@@ -540,8 +545,8 @@ impl Cli {
 
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
-    // Not `conflicts_with`: `--file` is global, and clap rejects a conflict
-    // naming an argument most subcommands lack.
+    // Not `conflicts_with`: `vocab -f x analyze text` names the two on
+    // different commands.
     if cli.file.is_some() && cli.has_text() {
         Cli::command()
             .error(
@@ -908,6 +913,7 @@ fn dispatch_inner(
 
         Some(Command::Analyze {
             text,
+            file,
             lexicon,
             register,
         }) => {
@@ -916,7 +922,7 @@ fn dispatch_inner(
             } else {
                 let body = match text {
                     Some(t) => t.clone(),
-                    None => match &cli.file {
+                    None => match file.as_ref().or(cli.file.as_ref()) {
                         Some(path) => read_file(path)?,
                         None => read_stdin()?,
                     },
