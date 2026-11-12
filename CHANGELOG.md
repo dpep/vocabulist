@@ -81,8 +81,8 @@ lexicon you already have.
   `Americans`. A bundled list of SCOWL's proper names (places, peoples, given
   names; levels 10-60, same licence) now drops them from `--uncommon` and accepts them capitalized.
   Lowercase, a name is still checked, so a slip can't hide behind one, and
-  opening a sentence a name one edit from a far commoner word (`Kant`/`want`,
-  `Thai`/`that`) is still flagged. Only a name merely observed in your text
+  opening a sentence a rare name one edit from a far commoner word
+  (`Thai`/`that`, `Tess`/`test`) is still flagged. Only a name merely observed in your text
   leaves the export; one you added, own or installed (`vocab add Thor`, a
   repo called `faraday`) stays. Your export shrinks by about 0.5%.
 - **A typo you make habitually is flagged even when seeding found it in

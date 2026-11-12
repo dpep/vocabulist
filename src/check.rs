@@ -463,22 +463,36 @@ impl Checker {
 
     /// Is this name one edit from a core word that's more common than it?
     ///
-    /// Opening a sentence, capitals carry no evidence, so `Kant we ship it`
-    /// reads as a name or as `Want` with nothing to choose between them but
+    /// Opening a sentence, capitals carry no evidence, so `Thai is here`
+    /// reads as a name or as `That` with nothing to choose between them but
     /// how often each is written. Both sides are SCOWL levels — the one scale
     /// the names and the words share — and a tie keeps the name.
+    ///
+    /// Only where the closeness is evidence: a name SCOWL ranks common
+    /// (`Leo`, `Jew`) is meant; nearly every name of three letters is an edit
+    /// from some core word; and a different first letter (`Kant`/`want`,
+    /// `Rome`/`some`) is the slip a typist almost never makes, on the very
+    /// key they shifted for.
     fn name_shadows_a_common_word(&self, name: &str) -> bool {
+        // SCOWL ranks almost every name 50; this keeps its few hundred
+        // commonest out of the gate.
+        const COMMON_NAME_LEVEL: u8 = 40;
+        const MIN_LEN: usize = 4;
         let names = self.proper_names.get().expect("is_proper_name loaded it");
         let Some(name_level) = crate::dict::level(names, name) else {
             return false;
         };
+        let query: Vec<char> = name.chars().collect();
+        if name_level <= COMMON_NAME_LEVEL || query.len() < MIN_LEN {
+            return false;
+        }
         let Some(dictionary) = self.dictionary() else {
             return false;
         };
-        let query: Vec<char> = name.chars().collect();
         let mut scratch = Scratch::default();
         crate::frequency::CORE.iter().any(|word| {
-            crate::dict::level(dictionary, word).is_some_and(|level| level < name_level)
+            word.chars().next() == query.first().copied()
+                && crate::dict::level(dictionary, word).is_some_and(|level| level < name_level)
                 && scratch.distance(&query, word, 1).is_some()
         })
     }
@@ -1490,15 +1504,37 @@ mod tests {
 
     #[test]
     fn a_rare_name_opening_a_sentence_does_not_hide_a_slip() {
-        // `want` is a core word; `kant` is a name far rarer than it.
-        let c = Checker::new(HashSet::new(), Some(common(&["want", "we", "ship", "it"])))
-            .with_proper_names(vec![("kant", 50), ("zblorgia", 50)]);
-        let f = c.check_line_alone("Kant we ship it", 1, &mut no_evidence);
-        assert_eq!(words(&f[0].suggestions), vec!["want"], "{f:?}");
+        // `type` is a core word; `tyre` is a name far rarer than it.
+        let c = Checker::new(HashSet::new(), Some(common(&["type", "we", "ship", "it"])))
+            .with_proper_names(vec![("tyre", 50), ("zblorgia", 50)]);
+        let f = c.check_line_alone("Tyre we ship it", 1, &mut no_evidence);
+        assert_eq!(words(&f[0].suggestions), vec!["type"], "{f:?}");
         // Mid-sentence it is a name, and a name with no common neighbour is
         // a name anywhere.
-        for line in ["we ship it, Kant", "Zblorgia we ship it"] {
+        for line in ["we ship it, Tyre", "Zblorgia we ship it"] {
             let f = c.check_line_alone(line, 1, &mut no_evidence);
+            assert!(f.is_empty(), "{line:?}: {f:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_opening_a_sentence_is_flagged_only_on_real_evidence() {
+        let dictionary = common(&["type", "want", "are", "test", "we", "ship", "it"]);
+        let cases = [
+            // A common name is a name, whatever it sits beside.
+            (("tess", 40), "Tess"),
+            // A different first letter: the one a typist almost never gets
+            // wrong, and the capital makes it the most deliberate keystroke.
+            (("kant", 50), "Kant"),
+            // Nearly every short name is an edit from some core word, so
+            // being one is no evidence of a slip.
+            (("ara", 50), "Ara"),
+        ];
+        for ((name, level), typed) in cases {
+            let c = Checker::new(HashSet::new(), Some(dictionary.clone()))
+                .with_proper_names(vec![(name, level)]);
+            let line = format!("{typed} we ship it");
+            let f = c.check_line_alone(&line, 1, &mut no_evidence);
             assert!(f.is_empty(), "{line:?}: {f:?}");
         }
     }

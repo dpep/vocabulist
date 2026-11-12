@@ -715,11 +715,24 @@ The bundled proper names (`data/propernames.txt`) let a
 capitalized `Latino` pass. Opening a sentence the capital is no evidence, and
 accepting every name there hid `Kant` for `Want`, `Thai` for `That`, `Tess`
 for `Test`: 12 of 15 such slips 0.6.0 caught. So at a sentence start a name is
-accepted only when no core word (`frequency::CORE`) more common than it — by
-SCOWL level, the one scale names and words share — sits one edit away. That
-flags 93 of 6,416 bundled names at a sentence start (`Rome`, `Chile` among
-them), against all of them in 0.6.0; a name the document also uses
-mid-sentence, or one in the lexicon, still passes.
+flagged when a core word (`frequency::CORE`) more common than it — by SCOWL
+level, the one scale names and words share — sits one edit away, and only
+where that closeness is evidence:
+
+- the name is rare by SCOWL (above level 40), so `Leo` and `Jew` are names;
+- it has four letters or more, since most bundled names of three letters or
+  fewer are an edit from some core word and closeness says nothing about them;
+- the core word shares its first letter, the one a typist almost never gets
+  wrong, and here the key they shifted for (`Rome`/`some`, `Chile`/`while`).
+
+SCOWL ranks nearly every name 50, so the level cut cannot tell `Turin` or
+`Owen` from `Kant`; no bundled data ranks names finer. On the hunt's
+measure (`X is here.` for each bundled name) the gate flags 58 of 6,430
+names, down from 105; it still catches `Thai`, `Tess`, `Quito`, `Principe`,
+`Hals`, `Mott` and `Tyre`, and gave up `Kant`, `Las` (first letter), `Hus`,
+`Ara` and `Ats` (short) to stay quiet on `Rome`, `Chile`, `Ali` and `Jill`.
+A name the document also uses mid-sentence, or one in the lexicon, still
+passes.
 
 ## 12k. A missing space, and a spurious one **[done]**
 
