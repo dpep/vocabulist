@@ -1311,6 +1311,20 @@ derived index to the schema and to dictionary-file invalidation. These earn
 their keep in the Phase 5 LSP, which is a long-lived process worth amortizing
 into. Not before.
 
+**Known, deferred from the pre-release hunt:**
+
+- *Suggestion memoization.* A document repeating one unknown word scans the
+  dictionary for it every time; a per-run cache keyed on the normalized word
+  would make the repeats free. Cheap, but only documents thick with one typo
+  benefit.
+- *A single very long token* is still quadratic somewhere on the suggestion
+  path, where the line-length fixes did not reach. Bounded in practice by
+  `is_checkable` rejecting most such tokens; worth a profile before a fix.
+- *`content_key` folds digit runs* so a template with a session id or count
+  dedupes, which also makes "issue 123" and "issue 456" one capture. A lost
+  sighting, not a wrong one; folding only long digit runs (ids, dates) would
+  keep short numbers distinct.
+
 ## 12b. Cold start, and what didn't work **[open]**
 
 Context-aware correction needs collocation evidence, and a fresh corpus has
