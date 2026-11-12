@@ -445,9 +445,24 @@ impl Store {
         if store.schema_version()? == SCHEMA_VERSION {
             return Ok(store);
         }
+        let found = store.schema_version()?;
         let Self { conn, path } = store;
         drop(conn);
-        drop(Self::open(&path)?);
+        Self::open(&path).map_err(|e| {
+            let read_only = e
+                .downcast_ref::<rusqlite::Error>()
+                .is_some_and(cannot_share);
+            if !read_only {
+                return e;
+            }
+            format!(
+                "lexicon at {} is schema v{found} and needs a one-time upgrade to \
+                 v{SCHEMA_VERSION}, which its directory doesn't allow; run any vocab \
+                 command once from an account that can write there",
+                path.display()
+            )
+            .into()
+        })?;
         Self::open_read_only_as_is(path)
     }
 
@@ -1558,6 +1573,24 @@ mod tests {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let err = read.err().expect("refused").to_string();
         assert!(err.contains("-wal"), "{err}");
+    }
+
+    #[test]
+    fn an_older_lexicon_in_a_read_only_directory_says_it_needs_an_upgrade() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("ro-older-dir");
+        Store::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+            .unwrap();
+        let dir = path.parent().unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let read = Store::open_read_only(&path);
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = read.err().expect("refused").to_string();
+        assert!(err.contains("upgrade"), "{err}");
+        assert!(err.contains(&path.display().to_string()), "{err}");
     }
 
     #[test]
