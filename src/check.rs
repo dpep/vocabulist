@@ -344,6 +344,14 @@ impl Checker {
         if self.people.contains_key(candidate) || self.knows(candidate) {
             return None;
         }
+        // A name people bear is someone else, not a slip: `Sara` beside a
+        // known `Sarah`. A full name only if every part is one.
+        if candidate
+            .split(' ')
+            .all(|part| crate::people::is_known(part) || self.is_proper_name(part))
+        {
+            return None;
+        }
 
         let mut matches = self
             .people
@@ -477,6 +485,7 @@ impl Checker {
         // SCOWL ranks almost every name 50; this keeps its few hundred
         // commonest out of the gate.
         const COMMON_NAME_LEVEL: u8 = 40;
+        const COMMON_PERSON_SHARE: f32 = 100.0;
         const MIN_LEN: usize = 4;
         let names = self.proper_names.get().expect("is_proper_name loaded it");
         let Some(name_level) = crate::dict::level(names, name) else {
@@ -484,6 +493,12 @@ impl Checker {
         };
         let query: Vec<char> = name.chars().collect();
         if name_level <= COMMON_NAME_LEVEL || query.len() < MIN_LEN {
+            return false;
+        }
+        // A name one American in ten thousand bears (`Owen`, `Mary`) is
+        // meant. Measured in PLAN §12j: the slips worth catching (`Mott`,
+        // `Thai`, `Tess`) all sit under 60 per million.
+        if crate::people::share(name).is_some_and(|s| s.people() >= COMMON_PERSON_SHARE) {
             return false;
         }
         let Some(dictionary) = self.dictionary() else {
@@ -1518,6 +1533,20 @@ mod tests {
     }
 
     #[test]
+    fn a_name_many_people_bear_opening_a_sentence_is_a_name() {
+        // SCOWL ranks `owen` and `mott` alike; the Census does not.
+        let dictionary = common(&["own", "most", "we", "ship", "it"]);
+        let c = Checker::new(HashSet::new(), Some(dictionary))
+            .with_proper_names(vec![("mott", 50), ("owen", 50)]);
+        assert!(
+            c.check_line_alone("Owen we ship it", 1, &mut no_evidence)
+                .is_empty()
+        );
+        let f = c.check_line_alone("Mott we ship it", 1, &mut no_evidence);
+        assert_eq!(words(&f[0].suggestions), vec!["most"], "{f:?}");
+    }
+
+    #[test]
     fn a_name_opening_a_sentence_is_flagged_only_on_real_evidence() {
         let dictionary = common(&["type", "want", "are", "test", "we", "ship", "it"]);
         let cases = [
@@ -1785,11 +1814,22 @@ mod tests {
         // no way to tell which was meant. Telling someone they misspelled a
         // colleague when they did not is worse than missing it.
         let c = with_people(&[("jon smith", 5), ("ron smith", 5)]);
-        assert!(c.misspelled_name("ton smith").is_none());
+        assert!(c.misspelled_name("xon smith").is_none());
 
         // With only one of them known, the same input is answerable.
         let c = with_people(&[("jon smith", 5)]);
-        assert!(c.misspelled_name("ton smith").is_some());
+        assert!(c.misspelled_name("xon smith").is_some());
+    }
+
+    #[test]
+    fn a_real_name_one_edit_from_a_colleague_is_someone_else() {
+        // `Sara` and `Joan` are names people bear, not slips for `Sarah` and
+        // `John`; a full name is someone else only if every part is a name.
+        let c = with_people(&[("sarah", 5), ("john smith", 5)]);
+        assert!(c.misspelled_name("sara").is_none());
+        assert!(c.misspelled_name("joan smith").is_none());
+        assert!(c.misspelled_name("sarha").is_some());
+        assert!(c.misspelled_name("john smiht").is_some());
     }
 
     #[test]

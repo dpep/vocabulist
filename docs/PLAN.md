@@ -777,6 +777,10 @@ is worse than saying nothing at all. So:
   target, so it cannot convict anything.
 - **Not already a word.** `Field`, `Green`, and `Baker` are surnames and also
   words, and the word reading wins.
+- **Not already a name.** `Sara` beside a known `Sarah`, `Joan` beside
+  `John`, `Kohn` beside `John`: a name people bear is someone else, not a
+  slip. A run is a name when every part is one, by the Census tables
+  (`data/names.txt`), the nickname table, or SCOWL's proper names.
 - **Four characters minimum.** Initials sit one edit from half the world.
 
 ### The run is tried before its parts
@@ -807,13 +811,41 @@ where that closeness is evidence:
   wrong, and here the key they shifted for (`Rome`/`some`, `Chile`/`while`).
 
 SCOWL ranks nearly every name 50, so the level cut cannot tell `Turin` or
-`Owen` from `Kant`; no bundled data ranks names finer. On the hunt's
+`Owen` from `Kant`; the Census shares below now do. On the hunt's
 measure (`X is here.` for each bundled name) the gate flags 58 of 6,430
 names, down from 105; it still catches `Thai`, `Tess`, `Quito`, `Principe`,
 `Hals`, `Mott` and `Tyre`, and gave up `Kant`, `Las` (first letter), `Hus`,
 `Ara` and `Ats` (short) to stay quiet on `Rome`, `Chile`, `Ali` and `Jill`.
 A name the document also uses mid-sentence, or one in the lexicon, still
 passes.
+
+### Names people bear **[measured]**
+
+`data/names.txt` (`script/build-names.sh`) is the finer ranking that was
+missing: the share of US people bearing each name, per million, from the
+1990 Census given names and 2010 Census surnames (public domain) — one
+scale for a given name and a surname. 14,896 names, two significant
+figures, surnames cut at 3,000 people. SSA birth counts would cover names
+popular after 1990 (`Jayden`), but ssa.gov refuses scripted downloads;
+SCOWL's proper names still back those.
+
+**The sentence-start gate** now passes a name borne by 100 per million
+people or more. On the `X is here.` run over every bundled name (6,416
+lines, an empty lexicon) it flags 53 names, down from 70; the 17 freed are
+`Mary`, `Luke`, `Owen`, `Seth`, `Stuart`, `Dana`, `Cody`, `Cole`, `Reid`,
+`Cain`, `Chang`, `Howe`, `Knox`, `Lang`, `Mann`, `Shaw`, `Tate`. The gap is
+clean: every slip the gate exists for sits at 58 per million or below
+(`Mott` 58, `Thai` 40, `Tess` 15, `Tyre` 8.7, `Principe` 7.5, `Quito`
+5.2, `Hals` unlisted) and every freed name at 140 or above. What it gives
+up is `Dana is here` meant as `Data is here`, and `Mary` for `Many`; a
+writer who means a woman of that name is far likelier.
+
+**The real-name veto** on a misspelled colleague. Of single edits of the
+1,021 commonest given names (100 per million or more, four letters or
+more) that are not dictionary words, 5,288 are names people bear — `Joan`,
+`Jamie`, `Roberta` — and each was flagged as a misspelling once the user
+knew the common name; SCOWL alone knew 582 of them. The cost is the
+catches that land on a real name: 1.6% of those 335,666 corruptions.
 
 ## 12k. A missing space, and a spurious one **[done]**
 
@@ -1532,7 +1564,7 @@ recall describes single-character damage only.
 
 ## 12e. Bundled data: what is generated, what ships **[decided]**
 
-Two files in `data/` are generated, committed, and embedded with
+The files in `data/` are generated, committed, and embedded with
 `include_str!`. Both are English-only and deliberately so — accepting `colour`
 *and* `color`, or one language's vocabulary inside another's, means never
 flagging either.
@@ -1542,6 +1574,8 @@ flagging either.
 | `wordlist.txt` (982 KB) | `script/build-wordlist.sh` | SCOWL levels 10–60, `english-*` + `american-*` | public-domain sources under an MIT-like grant |
 | `propernames.txt` (140 KB) | `script/build-wordlist.sh` | SCOWL levels 10–60, `english-upper` + `american-upper` | the same |
 | `cues.txt` | `script/build-cues.sh` | Google Books Ngrams, `eng-all` 2-grams | CC BY 3.0 |
+| `names.txt` (174 KB) | `script/build-names.sh` | US Census 1990 given names, 2010 surnames | public domain |
+| `nicknames.txt` (38 KB) | `script/build-names.sh` | carltonnorthern/nicknames | Apache-2.0 |
 
 **The split is the point.** Deriving the cue table streams about 39 GB and
 takes twenty minutes. Doing that on every install, or asking each user to do

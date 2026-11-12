@@ -20,7 +20,8 @@
 # Two maintainer-only targets rebuild the bundled data. They are the ONLY
 # things here that touch the network, and users never run them:
 #
-#   make data       - regenerate data/wordlist.txt, data/propernames.txt and data/cues.txt
+#   make data       - regenerate data/wordlist.txt, data/propernames.txt, data/cues.txt,
+#                     data/names.txt and data/nicknames.txt
 #   make data-cues  - just the cue table (~20 min, streams ~39 GB)
 #
 # Everything in data/ is generated, committed, and embedded at compile time, so
@@ -40,7 +41,7 @@ BIN   := vocab
 CLAUDE_BIN_DIR ?= $(HOME)/.claude/bin
 
 .DEFAULT_GOAL := help
-.PHONY: help build release link unlink install uninstall test lint fmt clean data data-words data-cues data-cue-counts
+.PHONY: help build release link unlink install uninstall test lint fmt clean data data-words data-names data-cues data-cue-counts
 
 help:
 	@echo "vocabulist targets:"
@@ -56,8 +57,9 @@ help:
 	@echo "  make clean      cargo clean"
 	@echo ""
 	@echo "maintainer only (network, slow, output is committed):"
-	@echo "  make data       regenerate data/wordlist.txt, data/propernames.txt and data/cues.txt"
+	@echo "  make data       regenerate every generated file in data/"
 	@echo "  make data-words SCOWL word list only"
+	@echo "  make data-names Census name shares and nicknames"
 	@echo "  make data-cues  re-derive cues from committed counts (seconds)"
 	@echo "  make data-cue-counts  refetch counts from Google Books (~39 GB)"
 
@@ -105,10 +107,13 @@ clean:
 # Order matters. The cue builder filters context words against the word list,
 # so a stale list quietly drops cues.
 
-data: data-words data-cues
+data: data-words data-names data-cues
 
 data-words:
 	./script/build-wordlist.sh
+
+data-names:
+	./script/build-names.sh
 
 # Re-derive cues from the committed counts. Seconds, no network.
 data-cues:

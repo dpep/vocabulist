@@ -128,6 +128,7 @@ vocabulist/
     check.rs      ← the checker, suggestion ranking, bounded edit distance
     cue.rs        ← bundled collocates that settle a confusion with no corpus
     names.rs      ← names the document reveals, so they don't read as typos
+    people.rs     ← how many people bear a name, and its nicknames
     process.rs    ← spool → counts, and the authorship rule that governs it
     prune.rs      ← remove what today's rules would reject, learned under old ones
     template.rs   ← boilerplate learned as prose, found across rows not within one
@@ -201,11 +202,13 @@ cargo test`.
 | `data/wordlist.txt` | `script/build-wordlist.sh` | SCOWL levels 10-60 |
 | `data/propernames.txt` | `script/build-wordlist.sh` | SCOWL levels 10-60, `*-upper` |
 | `data/cues.txt` | `script/build-cues.sh` | Google Books Ngrams (CC BY 3.0) |
+| `data/names.txt` | `script/build-names.sh` | US Census given names and surnames (public domain) |
+| `data/nicknames.txt` | `script/build-names.sh` | carltonnorthern/nicknames (Apache-2.0) |
 
 They are committed so a build needs no network and no 39 GB download. Never
 hand-edit them — change the script and regenerate, so the provenance of a
 megabyte of embedded data stays a command anyone can rerun. Licensing lives in
-`data/COPYING.wordlist` and in each script's header; read those before changing
+`data/COPYING.wordlist`, `data/COPYING.names`, and each script's header; read those before changing
 a source or a level cutoff.
 
 ## Schema changes

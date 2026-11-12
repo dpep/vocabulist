@@ -21,6 +21,7 @@ pub mod ingest;
 pub mod names;
 pub mod ngram;
 pub mod output;
+pub mod people;
 pub mod process;
 pub mod profile;
 pub mod prune;
