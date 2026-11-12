@@ -31,10 +31,14 @@ pub fn apply(line: &str, fixes: Vec<Fix>) -> (String, Vec<Fix>) {
         let Some(span) = chars.get(start..end) else {
             continue;
         };
-        let typed: String = crate::text::normalize_typography(&span.iter().collect::<String>());
-        if typed != fix.from || crate::text::joined_to_code(&chars, start, end) {
+        let typed: String = span.iter().collect();
+        if crate::text::normalize_typography(&typed) != fix.from
+            || crate::text::joined_to_code(&chars, start, end)
+        {
             continue;
         }
+        // The report names what was replaced as it was typed, curly or not.
+        fix.from = typed;
         fix.to = match_case(&fix.from, &fix.to);
         if curly {
             fix.to = fix.to.replace('\'', "\u{2019}");
@@ -199,6 +203,7 @@ mod tests {
             landed[0].to, "The\u{2019}s",
             "the report says what was written"
         );
+        assert_eq!(landed[0].from, "Teh\u{2019}s", "and what it replaced");
         // A contraction typed with no apostrophe gets the typographer's one
         // only when the line already uses it.
         let (out, _) = apply("it\u{2019}s fine, dont", vec![fix(12, "dont", "don't")]);
