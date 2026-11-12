@@ -25,6 +25,10 @@ lexicon you already have.
   vocab, checking, `list` and `status` exited 2 on a lexicon from an older
   schema until a writing command migrated it; they now migrate it once and
   carry on. Two commands opening an old lexicon at once migrate it once.
+- **A lexicon in a directory you can't write can still be read.** Checking,
+  `list` and `status` failed with "attempt to write a readonly database",
+  because SQLite's WAL needs a `-shm` file beside the lexicon. They now fall
+  back to reading it as an unchanging file.
 - **A prompt the hook failed to stage can be captured again.** It was marked
   captured before it was staged, so a failed write lost that text for good.
 - **A `--db` that was never seeded knows how common words are.** Without a

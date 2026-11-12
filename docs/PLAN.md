@@ -445,7 +445,11 @@ it, exactly as the next writing command would, and the reader reopens
 read-only. Refusing it left every check, `list` and `status` failing (exit 2)
 after an upgrade until something happened to write. The migration is one
 `BEGIN IMMEDIATE` transaction that rereads the version under the lock, so
-two openers racing on an old lexicon migrate it once. Under WAL a reader never waits on a capture hook's write
+two openers racing on an old lexicon migrate it once. A lexicon in a
+directory the user can't write fails a WAL read, which needs a `-shm` beside
+it; the reader then reopens it `immutable=1` (no locks, no `-shm`). That gives
+up SQLite's guard against a concurrent writer, which is acceptable only
+because nothing can write there either. Under WAL a reader never waits on a capture hook's write
 lock. A writer refuses a newer schema too — stamping its own version would
 hand the lexicon back to the newer binary looking older than it is — and
 writes nothing on open to a lexicon already at its schema. Checking, `--fix` and `--expand` read too, with one exception: the first run

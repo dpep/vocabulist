@@ -319,6 +319,39 @@ fn add_column(conn: &Connection, sql: &str) -> Result<()> {
     }
 }
 
+/// Did a read fail only because WAL's `-shm` file couldn't be made or
+/// written — a lexicon in a directory this user can't write?
+fn cannot_share(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::CannotOpen)
+    )
+}
+
+/// Open `path` as an immutable file: no locks and no `-shm`, so a directory
+/// that can't be written is no obstacle.
+///
+/// Only for a read, and acceptable there: `immutable` promises SQLite nothing
+/// changes the file, so a writer racing this reader could hand it a torn
+/// page, and a `-wal` left beside it goes unread. In a directory no one can
+/// write, no writer can be running, and its last writer checkpointed on close.
+fn open_immutable(path: &Path) -> Result<Connection> {
+    let mut uri = String::from("file:");
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '?' | '#' | '%' => uri.push_str(&format!("%{:02X}", c as u32)),
+            c => uri.push(c),
+        }
+    }
+    uri.push_str("?mode=ro&immutable=1");
+    let conn = Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(conn)
+}
+
 /// One staged body awaiting processing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpoolRow {
@@ -414,8 +447,21 @@ impl Store {
         }
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
-        let store = Self { conn, path };
-        let found = store.schema_version()?;
+        let mut store = Self { conn, path };
+        let found = match store.schema_version() {
+            Ok(found) => found,
+            Err(e) if cannot_share(&e) => {
+                store.conn = open_immutable(&store.path).map_err(|_| {
+                    format!(
+                        "cannot read lexicon at {}: SQLite needs to create its \
+                         shared-memory file beside it, and the directory isn't writable",
+                        store.path.display()
+                    )
+                })?;
+                store.schema_version()?
+            }
+            Err(e) => return Err(e.into()),
+        };
         if found > SCHEMA_VERSION {
             return Err(store.newer_schema(found).into());
         }
@@ -1461,6 +1507,22 @@ mod tests {
             .exists([])
             .unwrap();
         assert!(!rerun, "the migration ran twice");
+    }
+
+    #[test]
+    fn a_lexicon_in_a_read_only_directory_can_still_be_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("ro-dir dir?#%");
+        Store::open(&path)
+            .unwrap()
+            .upsert_word("zblorg", "zblorg", Provenance::User, 1)
+            .unwrap();
+        let dir = path.parent().unwrap();
+        // WAL's shared-memory file cannot be created here.
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let read = Store::open_read_only(&path).and_then(|s| Ok(s.contains("zblorg")?));
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(read.unwrap());
     }
 
     #[test]
