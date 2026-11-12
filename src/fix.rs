@@ -164,8 +164,11 @@ mod tests {
             "read x.teh",
             "a->teh",
             "teh=1",
-            "teh/x",
+            "teh/x/y",
+            "x/teh.rs",
+            "teh/",
             "_teh",
+            "foo_teh_bar",
             "teh[0]",
             "#teh",
         ] {
@@ -189,6 +192,13 @@ mod tests {
             "[teh](x)",
             "it's teh!",
             "wait — teh",
+            "_teh_",
+            "__teh__",
+            "~~teh~~",
+            "and/teh",
+            "teh/send",
+            "teh(s)",
+            "teh.Next",
         ] {
             let col = column_of(line, "teh");
             let (out, landed) = apply(line, vec![fix(col, "teh", "the")]);

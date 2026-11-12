@@ -38,7 +38,8 @@ lexicon you already have.
 - **Code-shaped words are left alone outside backticks too:** `teh.rs`,
   `$teh`, `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. `--fix` and
   `--expand` now agree; `--fix` used to rewrite `teh.rs` while `--expand` left
-  `repro.rs`.
+  `repro.rs`. Prose punctuation is not code: `_teh_`, `~~teh~~`, `and/teh`,
+  `teh(s)` and `teh.Next` are still fixed.
 - **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code spans**:
   never flagged or rewritten, and a `<pre>` that starts a line and stays open
   is skipped to its `</pre>` like a fenced block.

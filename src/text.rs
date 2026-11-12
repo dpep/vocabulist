@@ -114,17 +114,30 @@ fn push_token(
 ///
 /// A rewrite must never touch one: it names a file, a variable or a flag,
 /// whatever it looks like. Prose punctuation is not code, so `.`, `:` count
-/// only with a word on their far side (`teh.rs`, not `teh.`), and brackets
-/// only as a call or an index (`teh()`, not `(teh)`). Read off the line as
-/// typed, so an em dash is not mistaken for a hyphen.
+/// only with a word on their far side (`teh.rs`, not `teh.`, nor the missed
+/// space of `teh.Next`), and brackets only as a call or an index (`teh()`,
+/// not `(teh)` or `teh(s)`). A `/` needs a path's evidence (`x/teh/y`,
+/// `x/teh.rs`, `/teh`), since `and/teh` is prose, and matching `_` or `~~`
+/// on both sides is emphasis. Read off the line as typed, so an em dash is
+/// not mistaken for a hyphen.
+///
+/// `#` stays code: a heading marker is followed by a space, so `#teh` is a
+/// hashtag or an anchor, an identifier either way.
 pub fn joined_to_code(chars: &[char], start: usize, end: usize) -> bool {
     const ALWAYS: &[char] = &[
-        '$', '_', '=', '/', '\\', '-', '#', '@', '%', '&', '+', '^', '~', '|', '<', '>', '{', '}',
+        '$', '_', '=', '\\', '-', '#', '@', '%', '&', '+', '^', '~', '|', '<', '>', '{', '}',
     ];
+    if is_emphasis(chars, start, end) {
+        return false;
+    }
     let wordish = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
     let before = start.checked_sub(1).and_then(|i| chars.get(i));
     let after = chars.get(end);
     let joined_before = match before {
+        Some('/') => {
+            !wordish(start.checked_sub(2).and_then(|i| chars.get(i)))
+                || has_path_evidence(chars, start, end)
+        }
         Some(c) if ALWAYS.contains(c) => true,
         Some('.') => wordish(start.checked_sub(2).and_then(|i| chars.get(i))),
         Some(':') => start
@@ -134,14 +147,58 @@ pub fn joined_to_code(chars: &[char], start: usize, end: usize) -> bool {
         _ => false,
     };
     let joined_after = match after {
-        Some(c) if ALWAYS.contains(c) || *c == '(' || *c == '[' => true,
-        Some('.') => wordish(chars.get(end + 1)),
+        Some('/') => !wordish(chars.get(end + 1)) || has_path_evidence(chars, start, end),
+        Some('(') => !chars[end..].starts_with(&['(', 's', ')']),
+        Some(c) if ALWAYS.contains(c) || *c == '[' => true,
+        Some('.') => {
+            let sentence = chars.get(end + 1).is_some_and(|c| c.is_uppercase())
+                && chars.get(end + 2).is_some_and(|c| c.is_lowercase());
+            wordish(chars.get(end + 1)) && !sentence
+        }
         Some(':') => chars
             .get(end + 1)
             .is_some_and(|c| *c == ':' || c.is_alphanumeric()),
         _ => false,
     };
     joined_before || joined_after
+}
+
+/// Is the word wrapped in the same run of `_` or `~` on each side, with no
+/// word beyond either: `_teh_`, `~~teh~~`, but not `foo_teh_bar`?
+fn is_emphasis(chars: &[char], start: usize, end: usize) -> bool {
+    let Some(&marker) = start.checked_sub(1).and_then(|i| chars.get(i)) else {
+        return false;
+    };
+    if !matches!(marker, '_' | '~') {
+        return false;
+    }
+    let left = chars[..start]
+        .iter()
+        .rev()
+        .take_while(|c| **c == marker)
+        .count();
+    let right = chars[end..].iter().take_while(|c| **c == marker).count();
+    let beyond = |c: Option<&char>| c.is_none_or(|c| !c.is_alphanumeric());
+    let outer_left = (start - left).checked_sub(1).and_then(|i| chars.get(i));
+    left == right && beyond(outer_left) && beyond(chars.get(end + right))
+}
+
+/// Does the whitespace-delimited run around the word read as a path: a
+/// second `/`, or a file extension?
+fn has_path_evidence(chars: &[char], start: usize, end: usize) -> bool {
+    let from = chars[..start]
+        .iter()
+        .rposition(|c| c.is_whitespace())
+        .map_or(0, |i| i + 1);
+    let to = chars[end..]
+        .iter()
+        .position(|c| c.is_whitespace())
+        .map_or(chars.len(), |i| end + i);
+    let run = &chars[from..to];
+    run.iter().filter(|c| **c == '/').count() > 1
+        || run
+            .windows(2)
+            .any(|w| w[0] == '.' && w[1].is_alphanumeric())
 }
 
 /// Should this token be checked at all? Anything that isn't plausibly prose

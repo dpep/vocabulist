@@ -897,9 +897,13 @@ the argument.
 - **Never on a word joined to code** (`text::joined_to_code`, applied in
   `fix::apply` so `--fix` and `--expand` share it): `teh.rs`, `$teh`,
   `--dont`, `foo::teh`, `teh()`, `x.teh`, `args=1`. Backticks are not the only
-  way prose names code. `.` and `:` count only with a word on their far side,
-  and brackets only as a call or an index, so sentence punctuation still
-  allows a fix.
+  way prose names code. `.` and `:` count only with a word on their far side
+  (and not `teh.Next`, a missed space), brackets only as a call or an index
+  (not `teh(s)`), `/` only with a path's evidence — a second `/`, a `.ext`,
+  or no word across it — so `and/teh` is prose, and matching `_`/`~~` on both
+  sides is emphasis. Sentence punctuation still allows a fix. `#teh` stays
+  code: a heading marker takes a space, so it's a hashtag or an anchor. A
+  blockquote's `>` never gets here, the line being skipped as not prose.
 - **Byte for byte otherwise.** Lines keep their own terminators (`\r\n`
   stays), and a file without a trailing newline doesn't gain one.
 - **Text on stdout, what changed on stderr.** stdout carries the corrected
