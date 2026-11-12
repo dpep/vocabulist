@@ -312,10 +312,21 @@ fn find_open(chars: &[char], element: &str, from: usize) -> Option<(usize, usize
     Some((i, close + 1))
 }
 
-/// Whether `line` opens `<pre>` and leaves it open, so the lines below are
-/// inside it until one closes it.
+/// Whether `line` opens a `<pre>` block and leaves it open, so the lines
+/// below are inside it until one closes it.
+///
+/// Only at the start of the line, as a fence is: a `<pre>` further along is
+/// one being written about — in backticks, a comment, a sentence — and taking
+/// it for an opener silenced the rest of the document.
 pub fn opens_pre(line: &str) -> bool {
-    let lower: Vec<char> = line.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let lower: Vec<char> = line
+        .trim_start()
+        .chars()
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if find_open(&lower, "pre", 0).is_none_or(|(start, _)| start != 0) {
+        return false;
+    }
     let close: Vec<char> = "</pre>".chars().collect();
     let mut last = None;
     while let Some((_, body)) = find_open(&lower, "pre", last.unwrap_or(0)) {
@@ -326,15 +337,20 @@ pub fn opens_pre(line: &str) -> bool {
 }
 
 /// Mask `<element>…</element>` whole, tags and contents. An element left
-/// open runs to the end of the line.
+/// open on its line masks nothing here: it is a tag being written about
+/// (`use the <code> tag`), and masking to the end of the line hid the prose
+/// after it and harvested that prose as names.
 fn mask_element(out: &mut [char], lower: &str, element: &str) {
     let chars: Vec<char> = lower.chars().collect();
     let close: Vec<char> = format!("</{element}>").chars().collect();
     let mut from = 0;
     while let Some((start, body)) = find_open(&chars, element, from) {
-        let end = (body..chars.len())
+        let Some(end) = (body..chars.len())
             .find(|&j| chars[j..].starts_with(&close))
-            .map_or(chars.len(), |j| j + close.len());
+            .map(|j| j + close.len())
+        else {
+            break;
+        };
         for c in out.iter_mut().take(end).skip(start) {
             *c = ' ';
         }
@@ -556,8 +572,10 @@ mod tests {
     #[test]
     fn html_code_elements_are_masked_whole() {
         let masked = mask_non_prose("see <code>a b</code> and <Kbd x=1>c</Kbd> or <pre>d");
-        assert_eq!(tokenize(&masked).len(), 3, "{masked:?}");
+        assert_eq!(tokenize(&masked).len(), 4, "{masked:?}");
         assert_eq!(masked.chars().count(), 51, "columns survive");
+        // Left open, it is a tag being talked about, not a span.
+        assert!(mask_non_prose("use the <code> tag").contains("tag"));
         // Not an element: a tag whose name only starts the same way.
         assert!(mask_non_prose("<codex>word</codex>").contains("word"));
     }
@@ -566,8 +584,10 @@ mod tests {
     fn a_pre_left_open_is_noticed() {
         assert!(opens_pre("<pre class=\"x\">"));
         assert!(!opens_pre("<pre>x</pre>"));
-        assert!(opens_pre("<pre>x</pre> and <PRE>"));
+        assert!(opens_pre("  <pre>x</pre> and <PRE>"));
         assert!(!opens_pre("<prefix>"));
+        // Only as a block opener, like a fence.
+        assert!(!opens_pre("wrap it in a <pre> element"));
     }
 
     #[test]

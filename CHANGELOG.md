@@ -40,8 +40,8 @@ lexicon you already have.
   `--expand` now agree; `--fix` used to rewrite `teh.rs` while `--expand` left
   `repro.rs`.
 - **HTML `<code>`, `<kbd>`, `<pre>` and `<samp>` are masked like code spans**:
-  never flagged or rewritten, and a multi-line `<pre>` is skipped like a fenced
-  block.
+  never flagged or rewritten, and a `<pre>` that starts a line and stays open
+  is skipped to its `</pre>` like a fenced block.
 - **No more archaic contractions.** Apostrophe forms from the bundled word list
   are limited to `n't`, `'ve`, `'ll`, `'re` and `'m`, so `een`, `oer`, `neer`,
   `eer` and `Hed` no longer become `e'en`, `o'er`, `ne'er`, `e'er` and `He'd`.

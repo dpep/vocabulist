@@ -1096,9 +1096,9 @@ impl<'a> Scanner<'a> {
             self.names.observe_code(line);
         }
 
-        // HTML's fence. The opening line is checked with the block masked,
-        // and the closing one is skipped whole: what follows `</pre>` on it
-        // is rare enough not to be worth splitting the line for.
+        // HTML's fence. Its opening and closing lines are skipped whole:
+        // prose sharing a line with `<pre>` or `</pre>` is rare enough not to
+        // be worth splitting the line for.
         if self.in_pre {
             self.in_pre = !line.to_ascii_lowercase().contains("</pre>");
             return Vec::new();
@@ -1117,7 +1117,11 @@ impl<'a> Scanner<'a> {
             return Vec::new();
         }
 
-        self.in_pre = text::opens_pre(line);
+        if text::opens_pre(line) {
+            self.in_pre = true;
+            self.names.observe_code(line);
+            return Vec::new();
+        }
         self.prose = true;
         self.checker
             .check_line(line, self.line_no, &mut self.names, evidence)
@@ -1376,6 +1380,46 @@ mod tests {
             found.extend(scanner.feed(line, &mut no_evidence));
         }
         assert_eq!(found.len(), 1, "the prose after the fence is checked");
+    }
+
+    #[test]
+    fn a_pre_mentioned_in_prose_opens_no_block() {
+        let c = checker(
+            &[],
+            &["wrap", "it", "in", "a", "element", "or", "see", "the"],
+        );
+        for opener in [
+            "wrap it in a `<pre>` element",
+            "see <!-- <pre> --> the element",
+            "see https://example.com/<pre> the element",
+            "wrap it in a <pre> element",
+        ] {
+            let mut scanner = Scanner::new(&c);
+            let mut found = Vec::new();
+            for line in [opener, "the zzqx"] {
+                found.extend(scanner.feed(line, &mut no_evidence));
+            }
+            assert_eq!(found.len(), 1, "{opener:?} hid the next line");
+        }
+        // At the start of a line it opens one, as a fence does.
+        let mut scanner = Scanner::new(&c);
+        let mut found = Vec::new();
+        for line in ["  <pre class=\"x\">", "the zzqx", "</pre>", "the zzqxw"] {
+            found.extend(scanner.feed(line, &mut no_evidence));
+        }
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].word, "zzqxw");
+    }
+
+    #[test]
+    fn an_unclosed_inline_tag_masks_nothing() {
+        let c = checker(&[], &["use", "the", "tag", "and"]);
+        let mut scanner = Scanner::new(&c);
+        let mut found = Vec::new();
+        for line in ["use the <code> tag, zzqx", "and zzqx"] {
+            found.extend(scanner.feed(line, &mut no_evidence));
+        }
+        assert_eq!(found.len(), 2, "{found:?}");
     }
 
     #[test]
