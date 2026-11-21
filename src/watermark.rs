@@ -83,6 +83,25 @@ pub fn detect(body: &str) -> Option<&'static str> {
     body.lines().find_map(line_marker)
 }
 
+/// `body` with its attribution removed, keeping every sentence of the
+/// assistant's own: trailer lines go, and a prefix marker (`claudomatic: …`)
+/// loses only the prefix. For measuring how the assistant writes, where the
+/// trailer is not writing and [`strip_trailer`] would discard a message
+/// whose marker comes first.
+pub fn without_markers(body: &str) -> String {
+    body.split('\n')
+        .filter_map(|line| match line_marker(line) {
+            None => Some(line),
+            Some(marker) if marker.ends_with(':') => {
+                let at = line.to_ascii_lowercase().find(marker)?;
+                Some(line[at + marker.len()..].trim_start())
+            }
+            Some(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Convenience predicate for the ingest path.
 pub fn is_assistant_authored(body: &str) -> bool {
     detect(body).is_some()
@@ -202,5 +221,17 @@ mod tests {
     #[test]
     fn strip_is_a_noop_without_markers() {
         assert_eq!(strip_trailer("just my words"), "just my words");
+    }
+
+    #[test]
+    fn without_markers_keeps_the_assistants_sentences() {
+        assert_eq!(
+            without_markers("Ship the widget.\n\nCo-Authored-By: Claude <noreply@x>"),
+            "Ship the widget.\n"
+        );
+        assert_eq!(
+            without_markers("claudomatic: opened the PR"),
+            "opened the PR"
+        );
     }
 }

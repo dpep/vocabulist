@@ -379,6 +379,33 @@ pub enum Command {
         #[arg(short, long)]
         register: Option<Register>,
     },
+    /// How you write, below the level of words — punctuation, hedging,
+    /// person, how a message opens and ends — and whether a draft sounds
+    /// like you.
+    ///
+    /// With no text, shows your profile for a register beside the assistant
+    /// baseline, if one has been learned. With text, `--file` or `--check`
+    /// (stdin), scores the draft against them and exits 1 on any marker
+    /// that departs from yours.
+    Voice {
+        /// A draft to check.
+        text: Option<String>,
+        /// Check this file.
+        #[arg(short, long, conflicts_with = "text")]
+        file: Option<PathBuf>,
+        /// Check text piped on stdin.
+        #[arg(long)]
+        check: bool,
+        /// The register to show, or the one the draft is written for.
+        #[arg(short, long, default_value = "prompt")]
+        register: Register,
+        /// Replace a profile from JSON on stdin in `vocab ingest`'s shape
+        /// (`{body, register?}`): `user` for your own writing, `assistant`
+        /// for the baseline a draft is scored against. Replaces each register
+        /// the input names, so feed the whole corpus, not an increment.
+        #[arg(long, value_name = "AUTHOR", conflicts_with_all = ["text", "file", "check"])]
+        load: Option<VoiceAuthor>,
+    },
     /// Bulk-load text from JSON on stdin — NDJSON or an array of
     /// `{body, author?, register?, source?}`.
     ///
@@ -501,6 +528,7 @@ impl Command {
             Command::List { .. }
             | Command::Status
             | Command::Phrases { .. }
+            | Command::Voice { load: None, .. }
             | Command::Eval { .. }
             | Command::Sync { .. } => Access::Read,
             // A usage error, which must not create, migrate or seed a lexicon
@@ -532,7 +560,24 @@ impl Command {
             | Command::Capture { .. }
             | Command::Process { .. }
             | Command::Ingest { .. }
+            | Command::Voice { load: Some(_), .. }
             | Command::Hook { .. } => Access::Write,
+        }
+    }
+}
+
+/// Whose writing a voice profile describes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum VoiceAuthor {
+    User,
+    Assistant,
+}
+
+impl VoiceAuthor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VoiceAuthor::User => "user",
+            VoiceAuthor::Assistant => "assistant",
         }
     }
 }
@@ -553,7 +598,7 @@ impl Cli {
     fn has_text(&self) -> bool {
         match &self.command {
             None => self.text.is_some(),
-            Some(Command::Analyze { text, .. }) => text.is_some(),
+            Some(Command::Analyze { text, .. } | Command::Voice { text, .. }) => text.is_some(),
             Some(_) => false,
         }
     }
@@ -562,7 +607,10 @@ impl Cli {
     /// anywhere, and a command that ignored it (`vocab add -f words.txt`)
     /// did so silently.
     fn reads_file(&self) -> bool {
-        matches!(self.command, None | Some(Command::Analyze { .. }))
+        matches!(
+            self.command,
+            None | Some(Command::Analyze { .. } | Command::Voice { .. })
+        )
     }
 
     /// Default is human; `-J/--ndjson` wins over `-j/--json`.
@@ -980,6 +1028,7 @@ fn dispatch_inner(
         }
 
         Some(Command::Process { limit }) => {
+            crate::hook::reconcile_spool(&store);
             let processed =
                 profile.time("process", || crate::process::process_spool(&store, *limit))?;
             if !cli.quiet {
@@ -1052,6 +1101,103 @@ fn dispatch_inner(
                 output::render_analysis(&mut out, &report, format)?;
             }
             Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Voice {
+            load: Some(author),
+            register,
+            ..
+        }) => {
+            let mut profiles: std::collections::BTreeMap<&str, crate::voice::Counts> =
+                std::collections::BTreeMap::new();
+            let mut skipped = 0;
+            for record in crate::ingest::parse(&read_stdin()?)? {
+                // The authorship rule `ingest` applies: a record attributed
+                // to anyone, or carrying an assistant's marker, is not yours.
+                let body = match author {
+                    VoiceAuthor::User
+                        if record.author.is_some()
+                            || crate::watermark::is_assistant_authored(&record.body) =>
+                    {
+                        skipped += 1;
+                        continue;
+                    }
+                    VoiceAuthor::User => record.body,
+                    VoiceAuthor::Assistant => crate::watermark::without_markers(&record.body),
+                };
+                let register = record
+                    .register
+                    .as_deref()
+                    .and_then(Register::parse)
+                    .unwrap_or(*register);
+                let profile = profiles.entry(register.as_str()).or_default();
+                crate::voice::add(profile, &crate::voice::measure(&body));
+            }
+            store.transaction(|| -> rusqlite::Result<()> {
+                for (register, counts) in &profiles {
+                    let register = Register::parse(register).unwrap_or(Register::Other);
+                    store.replace_voice(register, author.as_str(), counts)?;
+                }
+                Ok(())
+            })?;
+            if !cli.quiet {
+                output::render_voice_load(&mut out, &profiles, author.as_str(), skipped, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Voice {
+            text,
+            file,
+            check,
+            register,
+            load: None,
+        }) => {
+            let yours = store.voice(*register, "user")?;
+            let baseline = store.voice(*register, "assistant")?;
+            let draft = match (text, file.as_ref().or(cli.file.as_ref()), check) {
+                (Some(t), _, _) => Some(t.clone()),
+                (None, Some(path), _) => Some(read_file(path)?),
+                (None, None, true) => Some(read_stdin()?),
+                (None, None, false) => None,
+            };
+            let Some(draft) = draft else {
+                if !cli.quiet {
+                    output::render_voice_profile(&mut out, *register, &yours, &baseline, format)?;
+                }
+                // A query: nothing of yours in this register is an empty result.
+                let empty = yours.get("sentences").copied().unwrap_or(0) == 0;
+                return Ok(if empty {
+                    ExitCode::from(1)
+                } else {
+                    ExitCode::SUCCESS
+                });
+            };
+            if yours.get("sentences").copied().unwrap_or(0) == 0 {
+                return Err(format!(
+                    "no {} writing of yours to compare with yet — capture some, or `vocab voice --load user`",
+                    register.as_str()
+                )
+                .into());
+            }
+            let measured = crate::voice::measure(&draft);
+            let baseline = (!baseline.is_empty()).then_some(&baseline);
+            let scored = crate::voice::compare(&measured, &yours, baseline);
+            let flagged = scored.iter().filter(|d| crate::voice::departs(d)).count();
+            if !cli.quiet {
+                output::render_voice_check(
+                    &mut out,
+                    *register,
+                    &scored,
+                    baseline.is_some(),
+                    format,
+                )?;
+            }
+            Ok(if flagged > 0 {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            })
         }
 
         Some(Command::Ingest { selves, register }) => {

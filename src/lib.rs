@@ -33,4 +33,5 @@ pub mod template;
 pub mod text;
 pub mod trust;
 pub mod types;
+pub mod voice;
 pub mod watermark;

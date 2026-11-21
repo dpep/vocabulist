@@ -287,8 +287,8 @@ pub fn render_unlearn(
             };
             writeln!(
                 out,
-                "{verb} {} phrase counts and {} word counts from {} texts",
-                report.phrase_counts, report.word_counts, report.texts
+                "{verb} {} phrase counts, {} word counts and {} style counts from {} texts",
+                report.phrase_counts, report.word_counts, report.voice_counts, report.texts
             )?;
             if report.phrases_emptied > 0 || report.exemplars > 0 {
                 writeln!(
@@ -315,9 +315,214 @@ pub fn render_unlearn(
                 "phrase_counts": report.phrase_counts,
                 "phrases_emptied": report.phrases_emptied,
                 "word_counts": report.word_counts,
+                "voice_counts": report.voice_counts,
                 "exemplars": report.exemplars,
                 "sample": report.sample.iter().map(|(g, n)| json!({"phrase": g, "taken": n})).collect::<Vec<_>>(),
                 "dry_run": dry_run,
+            }),
+            format,
+        ),
+    }
+}
+
+/// A rate as shown: per sentence or message as a fraction, per word per
+/// thousand. Rounded where it is built, to what the counts support.
+fn voice_rate(rate: crate::voice::Rate, per: crate::voice::Per) -> Option<f64> {
+    (rate.opportunities > 0).then(|| {
+        let r = rate.count as f64 / rate.opportunities as f64 * per.scale();
+        (r * 1000.0).round() / 1000.0
+    })
+}
+
+fn per_label(per: crate::voice::Per) -> &'static str {
+    match per {
+        crate::voice::Per::Sentence => "per sentence",
+        crate::voice::Per::Word => "per 1000 words",
+        crate::voice::Per::Message => "per message",
+    }
+}
+
+pub fn render_voice_profile(
+    out: &mut impl Write,
+    register: crate::types::Register,
+    yours: &crate::voice::Counts,
+    baseline: &crate::voice::Counts,
+    format: Format,
+) -> std::io::Result<()> {
+    use crate::voice::{MARKERS, Rate};
+    let total = |c: &crate::voice::Counts, k: &str| c.get(k).copied().unwrap_or(0);
+    let rows: Vec<_> = MARKERS
+        .iter()
+        .map(|m| {
+            let y = Rate::of(yours, m);
+            let b = Rate::of(baseline, m);
+            // How many times the baseline's rate yours is, smoothed so a
+            // marker one side never used is a large ratio, not infinity.
+            let ratio = (b.opportunities > 0 && y.opportunities > 0)
+                .then(|| (y.smoothed() / b.smoothed() * 100.0).round() / 100.0);
+            (m, y, b, ratio)
+        })
+        .collect();
+    match format {
+        Format::Human => {
+            writeln!(
+                out,
+                "{}: {} messages, {} sentences, {} words of yours",
+                register.as_str(),
+                total(yours, "messages"),
+                total(yours, "sentences"),
+                total(yours, "words")
+            )?;
+            let has_baseline = total(baseline, "sentences") > 0;
+            if has_baseline {
+                writeln!(
+                    out,
+                    "baseline: {} sentences the assistant drafted",
+                    total(baseline, "sentences")
+                )?;
+            }
+            if total(yours, "sentences") == 0 {
+                return Ok(());
+            }
+            writeln!(out)?;
+            for (m, y, b, ratio) in &rows {
+                let Some(rate) = voice_rate(*y, m.per) else {
+                    continue;
+                };
+                write!(out, "  {:<48} {rate:>7.3} {}", m.gloss, per_label(m.per))?;
+                if let (Some(br), Some(ratio)) = (voice_rate(*b, m.per), ratio) {
+                    write!(out, "   assistant {br:.3}  x{ratio}")?;
+                }
+                writeln!(out)?;
+            }
+            Ok(())
+        }
+        _ => emit(
+            out,
+            &json!({
+                "register": register.as_str(),
+                "messages": total(yours, "messages"),
+                "sentences": total(yours, "sentences"),
+                "words": total(yours, "words"),
+                "baseline_sentences": total(baseline, "sentences"),
+                "markers": rows.iter().map(|(m, y, b, ratio)| json!({
+                    "marker": m.name,
+                    "per": m.per.denominator(),
+                    "count": y.count,
+                    "rate": voice_rate(*y, m.per),
+                    "baseline_count": b.count,
+                    "baseline_rate": voice_rate(*b, m.per),
+                    "ratio": ratio,
+                })).collect::<Vec<_>>(),
+            }),
+            format,
+        ),
+    }
+}
+
+pub fn render_voice_check(
+    out: &mut impl Write,
+    register: crate::types::Register,
+    scored: &[crate::voice::Departure],
+    against_baseline: bool,
+    format: Format,
+) -> std::io::Result<()> {
+    let flagged: Vec<_> = scored.iter().filter(|d| crate::voice::departs(d)).collect();
+    match format {
+        Format::Human => {
+            if flagged.is_empty() {
+                writeln!(out, "reads like your {} writing", register.as_str())?;
+                return Ok(());
+            }
+            let against = if against_baseline {
+                "unlike you, and more like the assistant"
+            } else {
+                "unlike you"
+            };
+            writeln!(
+                out,
+                "{} markers read {against} ({}):",
+                flagged.len(),
+                register.as_str()
+            )?;
+            for d in flagged {
+                let draft = voice_rate(d.draft, d.per).unwrap_or(0.0);
+                let yours = voice_rate(d.yours, d.per).unwrap_or(0.0);
+                write!(out, "  {:<48} draft {draft:.3}  you {yours:.3}", d.gloss)?;
+                if let Some(b) = d.baseline.and_then(|b| voice_rate(b, d.per)) {
+                    write!(out, "  assistant {b:.3}")?;
+                }
+                writeln!(out, "   {} (evidence {})", per_label(d.per), d.evidence)?;
+            }
+            Ok(())
+        }
+        _ => {
+            let row = |d: &crate::voice::Departure| {
+                json!({
+                    "marker": d.marker,
+                    "per": d.per.denominator(),
+                    "draft_count": d.draft.count,
+                    "draft_opportunities": d.draft.opportunities,
+                    "draft_rate": voice_rate(d.draft, d.per),
+                    "your_rate": voice_rate(d.yours, d.per),
+                    "baseline_rate": d.baseline.and_then(|b| voice_rate(b, d.per)),
+                    "evidence": d.evidence,
+                    "toward_assistant": d.toward_assistant,
+                    "departs": crate::voice::departs(d),
+                })
+            };
+            if format == Format::Ndjson {
+                for d in scored {
+                    emit(out, &row(d), format)?;
+                }
+                return Ok(());
+            }
+            emit(
+                out,
+                &json!({
+                    "register": register.as_str(),
+                    "against": if against_baseline { "baseline" } else { "you" },
+                    "departures": flagged.len(),
+                    "markers": scored.iter().map(row).collect::<Vec<_>>(),
+                }),
+                format,
+            )
+        }
+    }
+}
+
+pub fn render_voice_load(
+    out: &mut impl Write,
+    profiles: &std::collections::BTreeMap<&str, crate::voice::Counts>,
+    author: &str,
+    skipped: usize,
+    format: Format,
+) -> std::io::Result<()> {
+    let sentences = |c: &crate::voice::Counts| c.get("sentences").copied().unwrap_or(0);
+    match format {
+        Format::Human => {
+            for (register, counts) in profiles {
+                writeln!(
+                    out,
+                    "replaced {author} {register}: {} sentences",
+                    sentences(counts)
+                )?;
+            }
+            if skipped > 0 {
+                writeln!(out, "skipped {skipped} not written by you")?;
+            }
+            Ok(())
+        }
+        _ => emit(
+            out,
+            &json!({
+                "author": author,
+                "skipped": skipped,
+                "registers": profiles.iter().map(|(r, c)| json!({
+                    "register": r,
+                    "messages": c.get("messages").copied().unwrap_or(0),
+                    "sentences": sentences(c),
+                })).collect::<Vec<_>>(),
             }),
             format,
         ),

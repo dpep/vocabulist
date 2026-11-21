@@ -90,6 +90,13 @@ fn process_one(
     }
 
     if authored_by != "user" {
+        // The one thing an assistant's text is allowed to shape: the
+        // baseline a draft written as you is scored against (voice.rs). It is
+        // stored under its own author and never read as yours.
+        if authored_by == "assistant" {
+            let writing = watermark::without_markers(body);
+            store.bump_voice(register, "assistant", &crate::voice::measure(&writing))?;
+        }
         for word in body.lines().flat_map(text::prose_words) {
             store.upsert_word(&word, &word, Provenance::Observed, 0)?;
             store.record_word_source(&word, doc)?;
@@ -135,6 +142,7 @@ fn process_one(
     // Sentence-level facts, recorded now because the prose is about to be
     // deleted and none of this can be derived from word counts later.
     record_prose_shape(store, register, body)?;
+    store.bump_voice(register, "user", &crate::voice::measure(body))?;
     store.retire_spool(id)?;
     Ok(())
 }
@@ -254,6 +262,8 @@ pub struct UnlearnReport {
     /// Phrases whose count reached zero, so they are gone.
     pub phrases_emptied: usize,
     pub word_counts: i64,
+    /// Style marker counts taken back, including their denominators.
+    pub voice_counts: i64,
     pub exemplars: usize,
     /// The phrases that lost the most, for reading rather than counting.
     pub sample: Vec<(String, i64)>,
@@ -287,6 +297,7 @@ pub fn unlearn(
     let mut exemplars = Vec::new();
     let mut lengths: HashMap<(Register, i64), i64> = HashMap::new();
     let mut prose: HashMap<(Register, &str), i64> = HashMap::new();
+    let mut voice: HashMap<Register, crate::voice::Counts> = HashMap::new();
 
     for (register, body) in texts {
         let register = *register;
@@ -320,6 +331,10 @@ pub fn unlearn(
         *prose.entry((register, "words")).or_default() += word_total;
         *prose.entry((register, "syllables")).or_default() += syllables;
         *prose.entry((register, "documents")).or_default() += 1;
+        crate::voice::add(
+            voice.entry(register).or_default(),
+            &crate::voice::measure(body),
+        );
     }
 
     let mut report = UnlearnReport {
@@ -328,19 +343,21 @@ pub fn unlearn(
     };
     let mut lost: HashMap<String, i64> = HashMap::new();
     for ((gram, register), by) in &grams {
-        let before = store.ngram_count(gram)?;
-        let taken = store.unlearn(Unlearn::Gram(gram, *register), *by, apply)?;
+        let (taken, emptied) = store.unlearn(Unlearn::Gram(gram, *register), *by, apply)?;
         if taken > 0 {
             report.phrase_counts += taken;
             *lost.entry(gram.clone()).or_default() += taken;
-            if before == taken {
-                report.phrases_emptied += 1;
-            }
+            report.phrases_emptied += usize::from(emptied);
         }
     }
     for ((word, register), by) in &words {
-        report.word_counts += store.unlearn(Unlearn::WordIn(word, *register), *by, apply)?;
-        store.unlearn(Unlearn::Word(word), *by, apply)?;
+        report.word_counts += store
+            .unlearn(Unlearn::WordIn(word, *register), *by, apply)?
+            .0;
+        // Speech never adds to the written total the veto weighs.
+        if *register != Register::Speech {
+            store.unlearn(Unlearn::Word(word), *by, apply)?;
+        }
     }
     for (register, line) in &exemplars {
         report.exemplars += store.unlearn_exemplar(*register, line, apply)?;
@@ -350,6 +367,14 @@ pub fn unlearn(
     }
     for ((register, metric), by) in &prose {
         store.unlearn(Unlearn::Prose(*register, metric), *by, apply)?;
+    }
+
+    for (register, counts) in &voice {
+        for (marker, by) in counts {
+            report.voice_counts += store
+                .unlearn(Unlearn::Voice(*register, marker), *by, apply)?
+                .0;
+        }
     }
 
     let mut sample: Vec<(String, i64)> = lost.into_iter().collect();
@@ -572,5 +597,49 @@ mod tests {
             .unwrap();
         process_spool(&store, 10).unwrap();
         assert_eq!(store.ngram_count("ship widgets").unwrap(), 0);
+    }
+
+    #[test]
+    fn an_assistant_trailer_is_not_part_of_the_baseline() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .spool(
+                Register::Pr,
+                Some("pr"),
+                "Ship the widget.\n\nCo-Authored-By: Claude <noreply@example.com>",
+                "assistant",
+            )
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        let baseline = store.voice(Register::Pr, "assistant").unwrap();
+        assert_eq!(baseline.get("sentences"), Some(&1));
+        assert_eq!(baseline.get("colon"), None);
+        assert_eq!(baseline.get("unterminated"), None);
+    }
+
+    #[test]
+    fn unlearning_speech_leaves_the_written_total_alone() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .upsert_word("widget", "widget", Provenance::Observed, 3)
+            .unwrap();
+        store
+            .spool(Register::Speech, None, "the widget works", "user")
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        unlearn(
+            &store,
+            &[(Register::Speech, "the widget works".into())],
+            true,
+        )
+        .unwrap();
+        let count: i64 = store
+            .list(None, usize::MAX)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.word == "widget")
+            .map(|e| e.count)
+            .unwrap();
+        assert_eq!(count, 3);
     }
 }

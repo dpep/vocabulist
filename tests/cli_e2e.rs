@@ -982,6 +982,96 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
 }
 
 #[test]
+fn voice_learns_from_your_text_and_checks_a_draft_against_it() {
+    let db = scratch_db("voice");
+    for prose in [
+        "should we ship the widget? maybe tomorrow",
+        "can we try the zblorg first - i think it's faster",
+        "let's merge it and see how it goes",
+        "maybe we wait on the release",
+        "do we need the quux flag here",
+        "seems like the cache is cold. should we warm it",
+        "i'm not sure we need that",
+        "how about we drop the old path",
+        "could we split this into two changes",
+        "probably fine to land as is",
+        "yes ship it",
+        "what if we cut the retry",
+    ] {
+        vocab(&db, &["capture", "-r", "slack", prose, "-q"]);
+    }
+    vocab(&db, &["process", "-q"]);
+
+    let profile = vocab(&db, &["voice", "-r", "slack", "-j"]);
+    assert_eq!(profile.code, 0, "{}", profile.stderr);
+    let v: serde_json::Value = serde_json::from_str(&profile.stdout).unwrap();
+    assert_eq!(v["messages"], 12);
+    let lower = v["markers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["marker"] == "lowercase_start")
+        .unwrap();
+    assert_eq!(lower["rate"], 1.0, "{lower}");
+
+    // Twelve messages is too few to call anything unusual; a fuller profile,
+    // replacing the captured one, can.
+    let corpus: String = (0..60)
+        .map(|i| format!("{{\"body\":\"should we ship widget {i}? maybe - i think so\"}}\n"))
+        .collect();
+    let load = run(
+        &db,
+        &["voice", "--load", "user", "-r", "slack", "-q"],
+        Some(&corpus),
+    );
+    assert_eq!(load.code, 0, "{}", load.stderr);
+
+    // Without a baseline, a draft is judged by how unlikely it is for you.
+    let draft = "The widget has been rebuilt. It is ready: the notes were written. \
+                 The cache was warmed. Nothing remains.";
+    let check = vocab(&db, &["voice", "-r", "slack", draft]);
+    assert_eq!(check.code, 1, "{}{}", check.stdout, check.stderr);
+    assert!(check.stdout.contains("unlike you"), "{}", check.stdout);
+    let own = run(
+        &db,
+        &["voice", "-r", "slack", "--check"],
+        Some("should we ship it? maybe"),
+    );
+    assert_eq!(own.code, 0, "{}", own.stdout);
+
+    // A baseline turns surprise into a comparison, and a register with no
+    // writing of yours is an error rather than a verdict.
+    let baseline =
+        "{\"body\":\"The widget is ready: it was rebuilt; nothing remains.\"}\n".repeat(30);
+    let load = run(
+        &db,
+        &["voice", "--load", "assistant", "-r", "slack", "-j"],
+        Some(&baseline),
+    );
+    assert_eq!(load.code, 0, "{}", load.stderr);
+    let check = vocab(&db, &["voice", "-r", "slack", "-j", draft]);
+    let v: serde_json::Value = serde_json::from_str(&check.stdout).unwrap();
+    assert_eq!(v["against"], "baseline");
+    assert_eq!(check.code, 1);
+    assert_eq!(vocab(&db, &["voice", "-r", "email", draft]).code, 2);
+    // Showing a register with nothing of yours is an empty query.
+    assert_eq!(vocab(&db, &["voice", "-r", "email"]).code, 1);
+
+    // Loading your profile applies the authorship rule ingest does.
+    let mixed = "{\"body\":\"should we ship it? maybe\"}\n\
+                 {\"body\":\"The widget is ready.\",\"author\":\"colleague\"}\n\
+                 {\"body\":\"Ready to merge.\\n\\nCo-Authored-By: Claude <x>\"}\n";
+    let load = run(
+        &db,
+        &["voice", "--load", "user", "-r", "doc", "-j"],
+        Some(mixed),
+    );
+    let v: serde_json::Value = serde_json::from_str(&load.stdout).unwrap();
+    assert_eq!(v["skipped"], 2, "{}", load.stdout);
+    assert_eq!(v["registers"][0]["messages"], 1);
+}
+
+#[test]
 fn templates_finds_boilerplate_that_shape_cannot() {
     let db = scratch_db("templates");
     // Boilerplate: ordinary words in an ordinary order, so `prune` is blind

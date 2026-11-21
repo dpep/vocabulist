@@ -142,6 +142,7 @@ vocabulist/
     contraction.rs← apostrophe-less contractions (`dont` → `don't`)
     fix.rs        ← `--fix`: write corrections back, in place and in case
     complexity.rs ← vocabulary and readability metrics
+    voice.rs      ← style markers per register, and scoring a draft against them
     watermark.rs  ← assistant-authored detection
     help.rs       ← `vocab help <topic>`, for options as well as subcommands
     hook.rs       ← Claude Code hook handlers

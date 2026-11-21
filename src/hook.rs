@@ -115,9 +115,7 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
             // uses the plugin — never the CLI — still gets a seeded lexicon
             // and, with it, the detected identities that read-capture needs.
             maybe_seed(store);
-            if let Some(root) = projects_root() {
-                reconcile_origins(store, &root);
-            }
+            reconcile_spool(store);
             let _ = crate::process::process_spool(store, STOP_PROCESS_LIMIT);
         }
         _ => {}
@@ -154,6 +152,14 @@ fn projects_root() -> Option<std::path::PathBuf> {
     Some(config.join("projects"))
 }
 
+/// Re-attribute staged prompts nobody typed, against the transcripts in the
+/// usual place. Every path that drains the spool calls this first.
+pub fn reconcile_spool(store: &Store) {
+    if let Some(root) = projects_root() {
+        reconcile_origins(store, &root);
+    }
+}
+
 /// Re-attribute staged prompts that another session submitted.
 ///
 /// A peer's message (a plugin notification, another session's
@@ -180,17 +186,21 @@ fn reconcile_origins(store: &Store, projects: &std::path::Path) {
     for (session, rows) in by_session {
         let foreign = foreign_prompts(projects, session);
         for row in rows {
-            if foreign.contains(&content_key(Register::Prompt, &row.body)) {
-                let _ = store.set_spool_author(row.id, "other");
+            if let Some(author) = foreign.get(&content_key(Register::Prompt, &row.body)) {
+                let _ = store.set_spool_author(row.id, author);
             }
         }
     }
 }
 
 /// Content keys of every turn in a session's transcript that a person did
-/// not type.
-fn foreign_prompts(projects: &std::path::Path, session: &str) -> std::collections::HashSet<String> {
-    let mut keys = std::collections::HashSet::new();
+/// not type, each with who wrote it: `assistant` for a suggestion the person
+/// accepted, `other` for anything another session sent.
+fn foreign_prompts(
+    projects: &std::path::Path,
+    session: &str,
+) -> std::collections::HashMap<String, &'static str> {
+    let mut keys = std::collections::HashMap::new();
     // A session id names a file; anything else is not one of ours.
     if session.is_empty()
         || !session
@@ -215,8 +225,10 @@ fn foreign_prompts(projects: &std::path::Path, session: &str) -> std::collection
     };
     for line in text.lines() {
         // Most lines have no origin, and a typed prompt's is `human`; skip
-        // parsing both.
-        if !line.contains("\"origin\"") || line.contains("\"kind\":\"human\"") {
+        // parsing both. An accepted prompt suggestion is `human` too, but the
+        // assistant wrote it: the person only pressed tab.
+        let suggested = line.contains("\"promptSource\":\"suggestion_accepted\"");
+        if !line.contains("\"origin\"") || (line.contains("\"kind\":\"human\"") && !suggested) {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
@@ -227,7 +239,11 @@ fn foreign_prompts(projects: &std::path::Path, session: &str) -> std::collection
         let (Some(kind), Some(body)) = (kind, body) else {
             continue;
         };
-        if entry.get("type").and_then(Value::as_str) != Some("user") || kind == "human" {
+        let accepted =
+            entry.get("promptSource").and_then(Value::as_str) == Some("suggestion_accepted");
+        if entry.get("type").and_then(Value::as_str) != Some("user")
+            || (kind == "human" && !accepted)
+        {
             continue;
         }
         // The transcript frames the text the hook saw with one line of its own.
@@ -235,7 +251,11 @@ fn foreign_prompts(projects: &std::path::Path, session: &str) -> std::collection
             Some((first, rest)) if first.ends_with(':') && first.contains("sent a message") => rest,
             _ => body,
         };
-        keys.insert(content_key(Register::Prompt, strip_envelopes(bare).trim()));
+        let author = if accepted { "assistant" } else { "other" };
+        keys.insert(
+            content_key(Register::Prompt, strip_envelopes(bare).trim()),
+            author,
+        );
     }
     keys
 }
@@ -650,16 +670,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let peer = "widgetbot: PR #12 checks pending \u{2192} success";
         let typed = "ship the small focused change";
+        let suggested = "run the full widget suite";
         let transcript = [
             json!({"type": "user", "origin": {"kind": "peer"},
                    "message": {"content": format!("Another Claude session sent a message:\n{peer}")}}),
             json!({"type": "user", "origin": {"kind": "human"}, "message": {"content": typed}}),
+            json!({"type": "user", "origin": {"kind": "human"}, "promptSource": "suggestion_accepted",
+                   "message": {"content": suggested}}),
         ]
         .map(|v| v.to_string())
         .join("\n");
         std::fs::write(dir.join("sess-1.jsonl"), transcript).unwrap();
 
-        for prompt in [peer, typed] {
+        for prompt in [peer, typed, suggested] {
             run(
                 "user-prompt-submit",
                 &s,
@@ -681,6 +704,7 @@ mod tests {
         assert_eq!(
             authors,
             vec![
+                (suggested.to_string(), "assistant".to_string()),
                 (typed.to_string(), "user".to_string()),
                 (peer.to_string(), "other".to_string())
             ]

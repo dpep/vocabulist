@@ -29,8 +29,21 @@
   prompt with nothing in it to say a person did not type it, and its status
   text topped `vocab phrases`. The end-of-turn hook now checks the session
   transcript, which records who sent each turn, and keeps a peer's text out
-  of your voice. To take back what one already taught, feed it to
-  `vocab prune --unlearn`.
+  of your voice, and a prompt suggestion you accepted with tab counts as
+  the assistant's, which wrote it. To take back what one already taught,
+  feed it to `vocab prune --unlearn`.
+
+### Added
+
+- **`vocab voice`** profiles how you write below the level of words:
+  lowercase starts, questions, commas, colons, dashes, hedges, `we`, how a
+  message opens and whether it ends with punctuation, per register. With a
+  draft (`vocab voice -r slack "…"`, `--file`, or `--check` on stdin) it
+  scores each marker against your profile and an assistant baseline, and
+  exits 1 when a habit in the draft is unusual for you and typical of the
+  assistant. `--load user|assistant` replaces a profile from a corpus on
+  stdin. The lexicon schema moves to version 9, so an older `vocab` will
+  refuse it once this one has opened it: upgrade every copy you run.
 
 ### Changed
 

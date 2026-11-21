@@ -24,7 +24,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// How long an ordinary command waits on another process's write lock: long
 /// enough to sit out a seed or a spool run finishing.
@@ -43,6 +43,8 @@ pub enum Unlearn<'a> {
     Word(&'a str),
     Prose(Register, &'a str),
     SentenceLength(Register, i64),
+    /// A style marker of the user's (voice.rs).
+    Voice(Register, &'a str),
 }
 
 /// Per-connection settings, run on every writing open. WAL persists in the
@@ -224,6 +226,18 @@ CREATE TABLE IF NOT EXISTS sentence_lengths (
     length INTEGER NOT NULL,
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (register, length)
+);
+
+-- Style markers (voice.rs) per register, as counts over their opportunity
+-- (sentences, words, messages are rows here too). `author` is `user`, or
+-- `assistant` for the contrast baseline a draft is scored against -- never
+-- read as the user's voice.
+CREATE TABLE IF NOT EXISTS voice (
+    register TEXT NOT NULL,
+    author TEXT NOT NULL,
+    marker TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (register, author, marker)
 );
 ";
 
@@ -1115,11 +1129,12 @@ impl Store {
     }
 
     /// Take back up to `by` of a count processing added, never below zero.
-    /// Returns how much was (or, without `apply`, would be) taken.
+    /// Returns how much was (or, without `apply`, would be) taken, and
+    /// whether that empties the row.
     ///
     /// `table` and `key` are this module's own literals, never input. An
     /// n-gram row that reaches zero is deleted, since `ngrams` means seen.
-    pub fn unlearn(&self, target: Unlearn<'_>, by: i64, apply: bool) -> Result<i64> {
+    pub fn unlearn(&self, target: Unlearn<'_>, by: i64, apply: bool) -> Result<(i64, bool)> {
         let (table, column, filter, a, b): (&str, &str, &str, String, String) = match target {
             Unlearn::Gram(gram, register) => (
                 "ngrams",
@@ -1147,6 +1162,13 @@ impl Store {
                 "value",
                 "register = ?3 AND metric = ?2",
                 metric.to_string(),
+                register.as_str().to_string(),
+            ),
+            Unlearn::Voice(register, marker) => (
+                "voice",
+                "count",
+                "register = ?3 AND marker = ?2 AND author = 'user'",
+                marker.to_string(),
                 register.as_str().to_string(),
             ),
             Unlearn::SentenceLength(register, length) => (
@@ -1179,7 +1201,7 @@ impl Store {
                 )?;
             }
         }
-        Ok(taken)
+        Ok((taken, taken > 0 && taken == have))
     }
 
     /// Drop an exemplar that is exactly this text.
@@ -1195,6 +1217,48 @@ impl Store {
             "DELETE FROM exemplars WHERE register = ?1 AND text = ?2",
             params![register.as_str(), text],
         )
+    }
+
+    /// Add one message's style marker counts to a register's profile.
+    pub fn bump_voice(
+        &self,
+        register: Register,
+        author: &str,
+        counts: &crate::voice::Counts,
+    ) -> Result<()> {
+        for (marker, by) in counts {
+            self.conn.execute(
+                "INSERT INTO voice (register, author, marker, count) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(register, author, marker) DO UPDATE SET count = count + ?4",
+                params![register.as_str(), author, marker, by],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Replace a register's profile for one author.
+    pub fn replace_voice(
+        &self,
+        register: Register,
+        author: &str,
+        counts: &crate::voice::Counts,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM voice WHERE register = ?1 AND author = ?2",
+            params![register.as_str(), author],
+        )?;
+        self.bump_voice(register, author, counts)
+    }
+
+    /// A register's style marker counts for one author; empty if none.
+    pub fn voice(&self, register: Register, author: &str) -> Result<crate::voice::Counts> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT marker, count FROM voice WHERE register = ?1 AND author = ?2")?;
+        let rows = stmt.query_map(params![register.as_str(), author], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        rows.collect()
     }
 
     /// Record one sentence's length, bucketed at [`MAX_SENTENCE_BUCKET`].

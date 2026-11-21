@@ -154,8 +154,13 @@ they are trusted to know:
    `SendMessage` — carries no marker at all: the hook payload is the bare
    text. The transcript records the turn's `origin`, though, and by `Stop` it
    is written, so the Stop hook re-attributes any staged prompt whose
-   transcript turn has a non-`human` origin before processing it. That reads
-   an undocumented schema and fails open.
+   transcript turn has a non-`human` origin before processing it. A prompt
+   suggestion the user accepted with tab is recorded as `human` with
+   `promptSource: suggestion_accepted`; the assistant wrote it, so it is
+   re-attributed to `assistant`. That reads an undocumented schema and fails
+   open, and it leaves a race: the Stop hook drains every session's spool,
+   so another session's Stop can process a peer prompt in the moment
+   between its capture and its transcript line being written.
 3. **Identical text counts once.** Every capture claims a key — a message id
    where the source has one, otherwise a hash of the text with case,
    whitespace, and digit runs folded. A hook that fires the same template
@@ -405,7 +410,7 @@ it one line at a time is why an audit ends with the same fragments at the top
 of the list. Only collocations go — the words stay in the lexicon, and a
 genuine pairing re-accumulates from zero.
 
-## 10. Stylometry — beyond vocabulary **[open]**
+## 10. Stylometry — beyond vocabulary **[exploring: `vocab voice`]**
 
 Words are the first layer. Style is the second, and the interesting question
 isn't *what to measure* — it's what each measurement **maps onto**, because a
@@ -474,6 +479,84 @@ is the part to get right, and the part most likely to be wrong at first:
    contractions in Slack, not in docs." A generated draft can be measured
    against these and revised, which is strictly better than an adjective in a
    prompt.
+
+### `vocab voice` — the first cut **[exploring]**
+
+The baseline that turned out to matter is not English at large but **the
+assistant**, measured on the same work. A user's typed prompts and the
+assistant's replies in the same transcripts share their subject matter, so
+what differs between them is style rather than topic, and the assistant is
+exactly the voice a draft written "as the user" drifts toward. Measured on
+one user's typed prompts (468 messages, ~12.7k words) against the
+assistant's replies in the same sessions (~22k sentences):
+
+| Marker | User | Assistant |
+|---|---|---|
+| sentence starts lowercase | 0.88 | 0.18 |
+| sentence is a question | 0.22 | 0.02 |
+| commas per sentence | 0.31 | 0.67 |
+| colons per sentence | 0.04 | 0.33 |
+| em dashes per sentence | 0.000 | 0.010 |
+| spaced hyphen as a dash, per sentence | 0.039 | 0.000 |
+| passive per sentence | 0.03 | 0.09 |
+| hedges per 1000 words | 13.6 | 1.2 |
+| we/us/our/let's per 1000 words | 31.9 | 1.2 |
+| message ends unpunctuated | 0.61 | 0.17 |
+| message opens as a request | 0.11 | 0.00 |
+
+Markers that came out level (contraction rate, first person singular,
+run-on sentences, exclamations) were dropped or kept only where they
+separate other registers; a marker both sides use at the same rate tells a
+draft nothing. The surviving set is `voice::MARKERS`.
+
+**Shape.** Each marker is a count over an opportunity (sentence, word,
+message), recorded per register at processing time like sentence lengths,
+so a profile is integers and no prose. The user's text is recorded as
+`user`. Assistant-drafted text — which already reaches the store as the
+corroboration-only `assistant` author — is recorded as `assistant`, the one
+thing that author is allowed to shape, and it is read only as the baseline
+a draft is scored against, never as the user's voice. `--load AUTHOR`
+replaces a register's profile from a corpus on stdin, for backfill;
+replacement rather than addition, so reloading is idempotent.
+
+**Scoring.** For each marker, a profile of `c` occurrences in `n`
+opportunities predicts the count in a draft's `m` opportunities as negative
+binomial (a Gamma(½, 1) prior on the rate, updated by the profile), so a thin
+profile predicts widely and a thick one tightly. A first cut scored with
+point rates, and a baseline of one message outvoted hundreds of sentences of
+the user's. A marker departs when its count is rarer than one in a hundred
+under the user's predictive, and — when there is a baseline — ten times
+likelier under the assistant's. The baseline can only withdraw a departure,
+never raise one: an empty profile predicts everything a little, so a
+baseline allowed to add findings adds them where it knows least. Both bars
+are conventional, and both scores (`evidence`, `toward_assistant`) are in the
+JSON. The check refuses a register with no writing of the user's rather than
+borrowing another's.
+
+In-sample on the corpus above, the check flags 2.5% of the user's messages
+and a third of the assistant's — 89% of replies of six sentences or more, 7%
+of one- or two-sentence ones. Short text carries little evidence and the
+check says so by staying quiet, which is the direction this tool errs in.
+
+**The register problem.** Prompts are one register; the drafts worth
+checking are Slack messages, email, and PR descriptions. A prompt profile
+expects questions, `we`, and requests, which a status update rightly lacks,
+so prompt habits must not be imposed on a Slack draft. And the user's own
+writing in those registers is scarce and getting scarcer: as drafting moves
+to the assistant, recent PRs and messages are the assistant's prose lightly
+edited, with no attribution to tell them apart. The usable sources are
+writing that predates assistant drafting (git history and Slack before a
+cutoff), text the user typed directly (prompts, chat replies), and — the
+best signal for a voice check — the user's edits to a draft, which say
+exactly what they changed and why. Backfill adapters live outside the
+binary (§5) and feed `ingest` or `voice --load`.
+
+**Not yet.** Diction tells (`leverage`, `robust`, `ensure`) — a log-odds
+word list of user versus assistant would catch what punctuation cannot, but
+it needs the assistant's word counts, which the store deliberately never
+keeps as voice. Sentence openers as a distribution. Sentence-length variance
+in the check (the profile has it in `sentence_lengths`). Directness and
+formality as dimensions built from the markers, per the table above.
 
 **Open questions.** Which markers actually discriminate *you* from a baseline
 versus merely describing English? How much corpus is needed before a marker
