@@ -25,6 +25,12 @@
   `Tess`, `Mott`) are still flagged.
 <!-- /lane: names -->
 
+### Changed
+
+- **`vocab typos` confirms several pairs at once**, as pairs or as
+  `TYPO=INTENDED` the way `vocab shorthand` takes them, and `--rm` forgets
+  several. The word meant may be a file name: `vocab typos claudmd=claude.md`.
+
 ## 0.6.2 — 2026-11-12
 
 ### Added

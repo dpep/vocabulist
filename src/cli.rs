@@ -227,13 +227,15 @@ pub enum Command {
     /// and says what held it back (`edit`: not a swap of two letters;
     /// `short`: three letters; `variant`: a British spelling).
     /// `vocab typos teh the` confirms a pair: it is then always a typo,
-    /// whatever the counts say. To say a word is real instead, `vocab add` it.
+    /// whatever the counts say. Several pairs, or `teh=the`, confirm several;
+    /// the word meant may be a file name (`claudmd=claude.md`). To say a word
+    /// is real instead, `vocab add` it.
     Typos {
-        /// A typo and the word it means, to confirm; with `--rm`, just the
-        /// typo.
-        #[arg(value_name = "TYPO [INTENDED]")]
+        /// Typos and the words they mean, as pairs or `TYPO=INTENDED`; with
+        /// `--rm`, just the typos.
+        #[arg(value_name = "TYPO INTENDED | TYPO=INTENDED")]
         words: Vec<String>,
-        /// Forget a confirmed pair instead of adding one.
+        /// Forget the named typos instead of confirming them.
         #[arg(long)]
         rm: bool,
     },
@@ -496,8 +498,9 @@ impl Command {
             | Command::Sync { .. } => Access::Read,
             // A usage error, which must not create, migrate or seed a lexicon
             // before saying so.
-            Command::Typos { words, rm }
-                if !matches!((words.len(), rm), (0 | 2, false) | (1, true)) =>
+            Command::Typos { words, rm: true } if words.is_empty() => Access::None,
+            Command::Typos { words, rm: false }
+                if !words.is_empty() && typo_pairs(words).is_none() =>
             {
                 Access::None
             }
@@ -1163,7 +1166,7 @@ fn resolve_targets(name: Option<&str>) -> Result<Vec<sync::Target>, Box<dyn std:
     }
 }
 
-/// `vocab typos`: list the pairs, confirm one, or forget one.
+/// `vocab typos`: list the pairs, confirm some, or forget some.
 fn typos(
     cli: &Cli,
     store: &Store,
@@ -1191,46 +1194,98 @@ fn typos(
                 ExitCode::SUCCESS
             })
         }
-        ([typo], true) => {
-            let forgotten = store.forget_typo(typo)?;
+        ([], true) => Err(TYPO_USAGE.into()),
+        (typos, true) => {
+            let mut forgotten = 0;
+            store.transaction(|| -> Result<(), rusqlite::Error> {
+                for typo in typos {
+                    forgotten += usize::from(store.forget_typo(typo)?);
+                }
+                Ok(())
+            })?;
             if !cli.quiet {
-                let msg = if forgotten { "removed" } else { "not found" };
-                output::status(out, msg, format)?;
+                output::status(out, &format!("removed {forgotten}"), format)?;
             }
-            Ok(if forgotten {
+            Ok(if forgotten > 0 {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
             })
         }
-        ([typo, intended], false) => {
-            if typo == intended {
-                return Err(format!("{typo} cannot be a typo of itself").into());
+        (words, false) => {
+            let pairs = typo_pairs(words).ok_or(TYPO_USAGE)?;
+            let trust = store.trust()?;
+            let dictionary = crate::dict::load();
+            for (typo, intended) in &pairs {
+                if typo == intended {
+                    return Err(format!("{typo} cannot be a typo of itself").into());
+                }
+                // `--fix` swaps one word for one word.
+                if !text::is_lexical(typo) {
+                    return Err(format!(
+                        "`{typo}` is not a word: a typo is one word, of letters, \
+                         apostrophes and hyphens"
+                    )
+                    .into());
+                }
+                if !is_typo_target(intended) {
+                    return Err(format!(
+                        "`{intended}` is not a word: give one word or file name, \
+                         of letters, apostrophes, hyphens and dots"
+                    )
+                    .into());
+                }
+                refuse_a_word(&trust, dictionary.as_ref(), typo, "a typo")?;
             }
-            // `--fix` swaps one word for one word.
-            if let Some(bad) = [typo, intended].into_iter().find(|w| !text::is_lexical(w)) {
-                return Err(format!(
-                    "`{bad}` is not a word: give one word each, of letters, \
-                     apostrophes and hyphens"
-                )
-                .into());
-            }
-            refuse_a_word(
-                &store.trust()?,
-                crate::dict::load().as_ref(),
-                typo,
-                "a typo",
-            )?;
-            // The latest word on a form wins: it is a typo, not a shorthand.
-            store.forget_shorthand(typo)?;
-            store.confirm_typo(typo, intended)?;
+            store.transaction(|| -> Result<(), rusqlite::Error> {
+                for (typo, intended) in &pairs {
+                    // The latest word on a form wins: it is a typo, not a shorthand.
+                    store.forget_shorthand(typo)?;
+                    store.confirm_typo(typo, intended)?;
+                }
+                Ok(())
+            })?;
             if !cli.quiet {
-                output::status(out, &format!("confirmed {typo} -> {intended}"), format)?;
+                let said: Vec<String> = pairs.iter().map(|(t, i)| format!("{t} -> {i}")).collect();
+                output::status(out, &format!("confirmed {}", said.join(", ")), format)?;
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("give a typo and the word it means, or `--rm` and the typo".into()),
     }
+}
+
+const TYPO_USAGE: &str = "give each typo and the word it means, as `TYPO INTENDED` or \
+                          `TYPO=INTENDED`, or `--rm` and the typos";
+
+/// The pairs `vocab typos` was given, in either form: `teh the`,
+/// `teh=the`, or several of each. `None` for an odd word out.
+fn typo_pairs(words: &[String]) -> Option<Vec<(String, String)>> {
+    let (joined, positional): (Vec<&String>, Vec<&String>) =
+        words.iter().partition(|w| w.contains('='));
+    if positional.len() % 2 != 0 {
+        return None;
+    }
+    let mut pairs: Vec<(&str, &str)> = joined.iter().filter_map(|w| w.split_once('=')).collect();
+    pairs.extend(positional.chunks(2).map(|p| (p[0].as_str(), p[1].as_str())));
+    let pairs: Vec<(String, String)> = pairs
+        .into_iter()
+        .map(|(t, i)| (t.trim().to_string(), i.trim().to_string()))
+        .collect();
+    (!pairs.is_empty() && pairs.iter().all(|(t, i)| !t.is_empty() && !i.is_empty()))
+        .then_some(pairs)
+}
+
+/// What a typo may mean: a word, or a file name (`claude.md`), which is as
+/// often what a slip was aiming at.
+fn is_typo_target(word: &str) -> bool {
+    text::is_lexical(word)
+        || (word.contains('.')
+            && word.split('.').all(|part| {
+                !part.is_empty()
+                    && part
+                        .chars()
+                        .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+            }))
 }
 
 /// Refuse to call `word` a typo or a shorthand (`what`) when it is a word.

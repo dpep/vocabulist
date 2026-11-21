@@ -253,6 +253,54 @@ fn typos_are_learned_confirmed_and_retracted() {
 }
 
 #[test]
+fn typos_confirms_several_pairs_and_a_file_name() {
+    let db = scratch_db("typos-several");
+    assert_eq!(
+        vocab(
+            &db,
+            &[
+                "typos",
+                "shoudl",
+                "should",
+                "taht",
+                "that",
+                "claudmd=claude.md"
+            ]
+        )
+        .code,
+        0
+    );
+    let out = vocab(&db, &["typos", "-J"]);
+    let mut confirmed: Vec<(String, String)> = out
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .map(|p| {
+            (
+                p["typo"].as_str().unwrap().into(),
+                p["intended"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    confirmed.sort();
+    assert_eq!(
+        confirmed,
+        [
+            ("claudmd", "claude.md"),
+            ("shoudl", "should"),
+            ("taht", "that")
+        ]
+        .map(|(t, i)| (t.to_string(), i.to_string()))
+    );
+
+    let out = run(&db, &["--fix"], Some("edit claudmd taht way\n"));
+    assert_eq!(out.stdout, "edit claude.md that way\n");
+
+    assert_eq!(vocab(&db, &["typos", "--rm", "shoudl", "taht"]).code, 0);
+    assert_eq!(vocab(&db, &["typos", "-J"]).stdout.lines().count(), 1);
+}
+
+#[test]
 fn fix_writes_back_slips_and_leaves_candidates_alone() {
     let db = scratch_db("fix");
     // `teh` is an inferred typo here (a transposition), `wiidget` a candidate
@@ -442,6 +490,9 @@ fn a_typo_confirmation_that_could_never_apply_is_refused() {
         ("teh", "!!"),
         ("te h", "the"),
         ("t3h", "the"),
+        ("teh", ".md"),
+        ("teh", "claude..md"),
+        ("te.h", "the"),
     ] {
         assert_eq!(
             vocab(&db, &["typos", typo, intended]).code,
