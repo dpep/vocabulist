@@ -272,6 +272,58 @@ pub fn render_prune(
     }
 }
 
+pub fn render_unlearn(
+    out: &mut impl Write,
+    report: &crate::process::UnlearnReport,
+    dry_run: bool,
+    format: Format,
+) -> std::io::Result<()> {
+    match format {
+        Format::Human => {
+            let verb = if dry_run {
+                "would take back"
+            } else {
+                "took back"
+            };
+            writeln!(
+                out,
+                "{verb} {} phrase counts and {} word counts from {} texts",
+                report.phrase_counts, report.word_counts, report.texts
+            )?;
+            if report.phrases_emptied > 0 || report.exemplars > 0 {
+                writeln!(
+                    out,
+                    "{} phrases and {} exemplars gone entirely",
+                    report.phrases_emptied, report.exemplars
+                )?;
+            }
+            if !report.sample.is_empty() {
+                writeln!(out, "\nmost affected:")?;
+                for (gram, n) in &report.sample {
+                    writeln!(out, "  {gram:<36} -{n}")?;
+                }
+            }
+            if dry_run {
+                writeln!(out, "\n(dry run — nothing changed)")?;
+            }
+            Ok(())
+        }
+        _ => emit(
+            out,
+            &json!({
+                "texts": report.texts,
+                "phrase_counts": report.phrase_counts,
+                "phrases_emptied": report.phrases_emptied,
+                "word_counts": report.word_counts,
+                "exemplars": report.exemplars,
+                "sample": report.sample.iter().map(|(g, n)| json!({"phrase": g, "taken": n})).collect::<Vec<_>>(),
+                "dry_run": dry_run,
+            }),
+            format,
+        ),
+    }
+}
+
 pub fn render_status(
     out: &mut impl Write,
     status: &StoreStatus,

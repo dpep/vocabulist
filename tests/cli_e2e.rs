@@ -917,6 +917,71 @@ fn prune_removes_ids_but_keeps_your_own_words() {
 }
 
 #[test]
+fn unlearn_takes_back_only_what_a_leaked_text_taught() {
+    let db = scratch_db("unlearn");
+    let leak = "widgetbot checks pending success merged by zblorg";
+    for prose in [
+        leak,
+        "widgetbot checks pending success merged by quux",
+        "the review was merged by friday",
+        "the review was merged by noon",
+    ] {
+        vocab(&db, &["capture", "-r", "prompt", prose, "-q"]);
+    }
+    vocab(&db, &["process", "-q"]);
+    let count = |gram: &str| {
+        let out = vocab(
+            &db,
+            &["phrases", "--min-count", "1", "--limit", "500", "-J"],
+        );
+        out.stdout
+            .lines()
+            .find(|l| l.contains(&format!("\"{gram}\"")))
+            .map_or(0, |l| {
+                let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                v["count"].as_i64().unwrap()
+            })
+    };
+    assert_eq!(count("merged by"), 4);
+
+    let stdin = format!(
+        "{{\"body\":\"{leak}\"}}\n{{\"body\":\"widgetbot checks pending success merged by quux\"}}\n\
+         {{\"body\":\"{leak}\"}}\n"
+    );
+    let dry = run(
+        &db,
+        &["prune", "--unlearn", "--dry-run", "-j"],
+        Some(&stdin),
+    );
+    assert_eq!(dry.code, 0, "{}", dry.stderr);
+    assert!(
+        dry.stdout.contains("\"texts\": 2"),
+        "a repeat counts once: {}",
+        dry.stdout
+    );
+    assert_eq!(count("checks pending"), 2, "a dry run changes nothing");
+
+    run(&db, &["prune", "--unlearn", "-q"], Some(&stdin));
+    assert_eq!(count("checks pending"), 0);
+    // The user's own use of a phrase the leak shared survives.
+    assert_eq!(count("merged by"), 2);
+
+    // Asking for more than is there empties it, and goes no further.
+    run(
+        &db,
+        &["prune", "--unlearn", "-q"],
+        Some("{\"body\":\"merged by merged by merged by\"}"),
+    );
+    assert_eq!(count("merged by"), 0);
+    let all = vocab(&db, &["phrases", "--min-count", "1", "--limit", "500"]);
+    assert!(
+        !all.stdout.contains('-'),
+        "no negative counts: {}",
+        all.stdout
+    );
+}
+
+#[test]
 fn templates_finds_boilerplate_that_shape_cannot() {
     let db = scratch_db("templates");
     // Boilerplate: ordinary words in an ordinary order, so `prune` is blind

@@ -35,6 +35,16 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// without distorting the range real prose lives in.
 pub const MAX_SENTENCE_BUCKET: i64 = 60;
 
+/// A count that [`Store::unlearn`] can take back.
+#[derive(Debug, Clone, Copy)]
+pub enum Unlearn<'a> {
+    Gram(&'a str, Register),
+    WordIn(&'a str, Register),
+    Word(&'a str),
+    Prose(Register, &'a str),
+    SentenceLength(Register, i64),
+}
+
 /// Per-connection settings, run on every writing open. WAL persists in the
 /// file, so re-asserting it on a lexicon already in WAL writes nothing.
 const PRAGMAS: &str = "
@@ -381,6 +391,8 @@ pub struct SpoolRow {
     pub authored_by: String,
     /// Stable per-row document key, for source-diversity counting.
     pub doc: String,
+    /// Where it came from: a session id for a prompt, a tool for a send.
+    pub source: Option<String>,
 }
 
 pub struct Store {
@@ -882,9 +894,19 @@ impl Store {
                 body: r.get(2)?,
                 authored_by: r.get(3)?,
                 doc: format!("{}#{id}", source.as_deref().unwrap_or("capture")),
+                source,
             })
         })?;
         rows.collect()
+    }
+
+    /// Re-attribute a staged row before it is processed.
+    pub fn set_spool_author(&self, id: i64, authored_by: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE spool SET authored_by = ?2 WHERE id = ?1 AND processed_at IS NULL",
+            params![id, authored_by],
+        )?;
+        Ok(())
     }
 
     /// Delete a spool row once its counts have landed. The counts survive; the
@@ -1090,6 +1112,89 @@ impl Store {
             params![register.as_str(), metric, by],
         )?;
         Ok(())
+    }
+
+    /// Take back up to `by` of a count processing added, never below zero.
+    /// Returns how much was (or, without `apply`, would be) taken.
+    ///
+    /// `table` and `key` are this module's own literals, never input. An
+    /// n-gram row that reaches zero is deleted, since `ngrams` means seen.
+    pub fn unlearn(&self, target: Unlearn<'_>, by: i64, apply: bool) -> Result<i64> {
+        let (table, column, filter, a, b): (&str, &str, &str, String, String) = match target {
+            Unlearn::Gram(gram, register) => (
+                "ngrams",
+                "count",
+                "gram = ?2 AND register = ?3",
+                gram.to_string(),
+                register.as_str().to_string(),
+            ),
+            Unlearn::WordIn(word, register) => (
+                "word_registers",
+                "count",
+                "word = ?2 AND register = ?3",
+                word.to_string(),
+                register.as_str().to_string(),
+            ),
+            Unlearn::Word(word) => (
+                "lexicon",
+                "count",
+                "word = ?2 AND ?3 = ?3",
+                word.to_string(),
+                String::new(),
+            ),
+            Unlearn::Prose(register, metric) => (
+                "prose_stats",
+                "value",
+                "register = ?3 AND metric = ?2",
+                metric.to_string(),
+                register.as_str().to_string(),
+            ),
+            Unlearn::SentenceLength(register, length) => (
+                "sentence_lengths",
+                "count",
+                "register = ?3 AND length = ?2",
+                length.min(MAX_SENTENCE_BUCKET).to_string(),
+                register.as_str().to_string(),
+            ),
+        };
+        let have: i64 = self
+            .conn
+            .query_row(
+                &format!("SELECT {column} FROM {table} WHERE {filter} AND ?1 = ?1"),
+                params![by, a, b],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let taken = have.clamp(0, by.max(0));
+        if apply && taken > 0 {
+            self.conn.execute(
+                &format!("UPDATE {table} SET {column} = {column} - ?1 WHERE {filter}"),
+                params![taken, a, b],
+            )?;
+            if table == "ngrams" {
+                self.conn.execute(
+                    "DELETE FROM ngrams WHERE count <= 0 AND gram = ?1 AND register = ?2",
+                    params![a, b],
+                )?;
+            }
+        }
+        Ok(taken)
+    }
+
+    /// Drop an exemplar that is exactly this text.
+    pub fn unlearn_exemplar(&self, register: Register, text: &str, apply: bool) -> Result<usize> {
+        if !apply {
+            return self.conn.query_row(
+                "SELECT COUNT(*) FROM exemplars WHERE register = ?1 AND text = ?2",
+                params![register.as_str(), text],
+                |r| r.get(0),
+            );
+        }
+        self.conn.execute(
+            "DELETE FROM exemplars WHERE register = ?1 AND text = ?2",
+            params![register.as_str(), text],
+        )
     }
 
     /// Record one sentence's length, bucketed at [`MAX_SENTENCE_BUCKET`].

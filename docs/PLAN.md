@@ -150,6 +150,12 @@ they are trusted to know:
    `<agent-message from="…">` — an attribute, which is why matching bare tags
    missed it — and introduced by a frame that sits outside the tag anyway.
    There is nothing in either turn worth keeping.
+   A prompt *another session* sent — a plugin's notification, a peer's
+   `SendMessage` — carries no marker at all: the hook payload is the bare
+   text. The transcript records the turn's `origin`, though, and by `Stop` it
+   is written, so the Stop hook re-attributes any staged prompt whose
+   transcript turn has a non-`human` origin before processing it. That reads
+   an undocumented schema and fails open.
 3. **Identical text counts once.** Every capture claims a key — a message id
    where the source has one, otherwise a hash of the text with case,
    whitespace, and digit runs folded. A hook that fires the same template
@@ -169,11 +175,20 @@ however it got there, which is the same standard `MIN_SOURCES` already
 applies to words. Rule 4 asks about the session rather than the text, which
 is why it needs to know nothing about what the text says.
 
-None of the four will be the last word. Six leaks have been found so far and
+None of the four will be the last word. Seven leaks have been found so far and
 every one was invisible until a person read `vocab phrases`, so the store
 also gets a backstop that assumes the next capture path leaks: `templates`
 (§9a) reconstructs repeated verbatim runs from the n-gram tables, which is
 what boilerplate looks like from the inside regardless of how it arrived.
+
+When a leak is found, the text that leaked usually still exists — a
+notification is still in the transcript — even though the prose the store
+learned it from is gone. `prune --unlearn` takes that text on stdin and
+subtracts exactly what processing would have added, never below zero, where
+`rm --phrase` deletes a phrase the user also says. Nothing records which
+counts a given text added, so text that was never learned, or is fed twice,
+still takes from the phrases it shares with the user's: feed only what
+leaked, once, and read the dry run.
 
 ## 6. Registers
 

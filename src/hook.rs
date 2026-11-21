@@ -115,6 +115,9 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
             // uses the plugin — never the CLI — still gets a seeded lexicon
             // and, with it, the detected identities that read-capture needs.
             maybe_seed(store);
+            if let Some(root) = projects_root() {
+                reconcile_origins(store, &root);
+            }
             let _ = crate::process::process_spool(store, STOP_PROCESS_LIMIT);
         }
         _ => {}
@@ -141,6 +144,100 @@ fn maybe_seed(store: &Store) {
     if seeded.is_ok() {
         let _ = store.mark_seeded();
     }
+}
+
+/// Where Claude Code keeps session transcripts.
+fn projects_root() -> Option<std::path::PathBuf> {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".claude")))?;
+    Some(config.join("projects"))
+}
+
+/// Re-attribute staged prompts that another session submitted.
+///
+/// A peer's message (a plugin notification, another session's
+/// `SendMessage`) fires `UserPromptSubmit` with bare text and nothing in the
+/// payload says who sent it, so it is captured as typed. The transcript does
+/// say: the turn is recorded with an `origin` whose kind is not `human`. That
+/// record is not there yet when the prompt hook runs, but it is by `Stop`, so
+/// this runs then, before the spool is processed. Undocumented schema, so it
+/// fails open: a transcript it cannot find or read changes nothing.
+fn reconcile_origins(store: &Store, projects: &std::path::Path) {
+    let Ok(pending) = store.pending_spool(STOP_PROCESS_LIMIT) else {
+        return;
+    };
+    let mut by_session: std::collections::HashMap<&str, Vec<&crate::store::SpoolRow>> =
+        std::collections::HashMap::new();
+    for row in &pending {
+        if row.register == Register::Prompt
+            && row.authored_by == "user"
+            && let Some(session) = row.source.as_deref()
+        {
+            by_session.entry(session).or_default().push(row);
+        }
+    }
+    for (session, rows) in by_session {
+        let foreign = foreign_prompts(projects, session);
+        for row in rows {
+            if foreign.contains(&content_key(Register::Prompt, &row.body)) {
+                let _ = store.set_spool_author(row.id, "other");
+            }
+        }
+    }
+}
+
+/// Content keys of every turn in a session's transcript that a person did
+/// not type.
+fn foreign_prompts(projects: &std::path::Path, session: &str) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    // A session id names a file; anything else is not one of ours.
+    if session.is_empty()
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return keys;
+    }
+    let name = format!("{session}.jsonl");
+    let Ok(dirs) = std::fs::read_dir(projects) else {
+        return keys;
+    };
+    let Some(transcript) = dirs
+        .flatten()
+        .map(|d| d.path().join(&name))
+        .find(|p| p.is_file())
+    else {
+        return keys;
+    };
+    let Ok(text) = std::fs::read_to_string(transcript) else {
+        return keys;
+    };
+    for line in text.lines() {
+        // Most lines have no origin, and a typed prompt's is `human`; skip
+        // parsing both.
+        if !line.contains("\"origin\"") || line.contains("\"kind\":\"human\"") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let kind = entry.pointer("/origin/kind").and_then(Value::as_str);
+        let body = entry.pointer("/message/content").and_then(Value::as_str);
+        let (Some(kind), Some(body)) = (kind, body) else {
+            continue;
+        };
+        if entry.get("type").and_then(Value::as_str) != Some("user") || kind == "human" {
+            continue;
+        }
+        // The transcript frames the text the hook saw with one line of its own.
+        let bare = match body.split_once('\n') {
+            Some((first, rest)) if first.ends_with(':') && first.contains("sent a message") => rest,
+            _ => body,
+        };
+        keys.insert(content_key(Register::Prompt, strip_envelopes(bare).trim()));
+    }
+    keys
 }
 
 /// Envelope tags whose contents the harness injects into a prompt.
@@ -315,7 +412,7 @@ fn capture_own_messages(store: &Store, input: &HookInput) {
 /// same template. Nothing that folds together under that is two different
 /// sentences. The hash is all that persists — the prose still goes to the
 /// spool and is still dropped when processed.
-fn content_key(register: Register, body: &str) -> String {
+pub(crate) fn content_key(register: Register, body: &str) -> String {
     let mut folded = String::with_capacity(body.len());
     let (mut space, mut digit) = (false, false);
     for c in body.chars() {
@@ -543,6 +640,54 @@ mod tests {
             },
         );
         assert!(s.pending_spool(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_prompt_another_session_sent_is_not_the_users_prose() {
+        let s = store();
+        let projects = std::env::temp_dir().join(format!("vocab-origin-{}", std::process::id()));
+        let dir = projects.join("-some-repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let peer = "widgetbot: PR #12 checks pending \u{2192} success";
+        let typed = "ship the small focused change";
+        let transcript = [
+            json!({"type": "user", "origin": {"kind": "peer"},
+                   "message": {"content": format!("Another Claude session sent a message:\n{peer}")}}),
+            json!({"type": "user", "origin": {"kind": "human"}, "message": {"content": typed}}),
+        ]
+        .map(|v| v.to_string())
+        .join("\n");
+        std::fs::write(dir.join("sess-1.jsonl"), transcript).unwrap();
+
+        for prompt in [peer, typed] {
+            run(
+                "user-prompt-submit",
+                &s,
+                &HookInput {
+                    prompt: prompt.into(),
+                    session_id: "sess-1".into(),
+                    ..Default::default()
+                },
+            );
+        }
+        reconcile_origins(&s, &projects);
+        let mut authors: Vec<(String, String)> = s
+            .pending_spool(10)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.body, r.authored_by))
+            .collect();
+        authors.sort();
+        assert_eq!(
+            authors,
+            vec![
+                (typed.to_string(), "user".to_string()),
+                (peer.to_string(), "other".to_string())
+            ]
+        );
+        // A session id that is not a file name reads nothing.
+        assert!(foreign_prompts(&projects, "../etc").is_empty());
+        std::fs::remove_dir_all(&projects).unwrap();
     }
 
     #[test]

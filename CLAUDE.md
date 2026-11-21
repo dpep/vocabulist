@@ -55,7 +55,10 @@ decisions — reach for it before inventing a method that has a name.
   notifications; a turn carrying a `<command-*>` or `<agent-message` marker is
   dropped whole, because the prose arrives around those tags rather than
   inside them, and stripping would leave a skill author's instructions or a
-  subagent hand-back frame looking like something the user typed; and every
+  subagent hand-back frame looking like something the user typed; a prompt
+  another session sent carries no marker at all, so the Stop hook reads the
+  transcript's `origin` for each staged prompt and re-attributes a peer's
+  before processing; and every
   capture claims a content key, so a template that fires every session counts
   once. Each of those was feeding machine text into the voice profile for
   weeks before anyone looked. Assume the next capture path has the same hole.

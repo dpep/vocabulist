@@ -204,40 +204,159 @@ fn record_phrases(
     Ok(())
 }
 
+/// One body's sentence lengths, and its word and syllable totals.
+fn prose_shape(body: &str) -> (Vec<i64>, i64, i64) {
+    let mut lengths = Vec::new();
+    let mut syllables = 0i64;
+    for sentence in crate::complexity::split_sentences(body) {
+        let normalized = text::normalize_typography(&sentence);
+        let masked = text::mask_non_prose(&normalized);
+        let words: Vec<String> = text::tokenize(&masked)
+            .iter()
+            .map(|t| text::normalize(&t.text))
+            .filter(|w| w.chars().any(char::is_alphabetic))
+            .collect();
+        if words.is_empty() {
+            continue;
+        }
+        lengths.push(words.len() as i64);
+        syllables += words
+            .iter()
+            .map(|w| crate::complexity::count_syllables(w) as i64)
+            .sum::<i64>();
+    }
+    let words = lengths.iter().sum();
+    (lengths, words, syllables)
+}
+
 /// Fold one body's sentence shape into the running per-register stats.
 fn record_prose_shape(
     store: &Store,
     register: Register,
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut words = 0i64;
-    let mut syllables = 0i64;
-    let mut sentences = 0i64;
-
-    for sentence in crate::complexity::split_sentences(body) {
-        let normalized = text::normalize_typography(&sentence);
-        let masked = text::mask_non_prose(&normalized);
-        let length: Vec<String> = text::tokenize(&masked)
-            .iter()
-            .map(|t| text::normalize(&t.text))
-            .filter(|w| w.chars().any(char::is_alphabetic))
-            .collect();
-        if length.is_empty() {
-            continue;
-        }
-        sentences += 1;
-        words += length.len() as i64;
-        syllables += length
-            .iter()
-            .map(|w| crate::complexity::count_syllables(w) as i64)
-            .sum::<i64>();
-        store.bump_sentence_length(register, length.len() as i64)?;
+    let (lengths, words, syllables) = prose_shape(body);
+    for &length in &lengths {
+        store.bump_sentence_length(register, length)?;
     }
-
-    store.bump_prose(register, "sentences", sentences)?;
+    store.bump_prose(register, "sentences", lengths.len() as i64)?;
     store.bump_prose(register, "words", words)?;
     store.bump_prose(register, "syllables", syllables)?;
     Ok(())
+}
+
+/// What [`unlearn`] took back, or would.
+#[derive(Debug, Default, PartialEq)]
+pub struct UnlearnReport {
+    pub texts: usize,
+    /// Phrase counts taken back, summed over phrases.
+    pub phrase_counts: i64,
+    /// Phrases whose count reached zero, so they are gone.
+    pub phrases_emptied: usize,
+    pub word_counts: i64,
+    pub exemplars: usize,
+    /// The phrases that lost the most, for reading rather than counting.
+    pub sample: Vec<(String, i64)>,
+}
+
+/// Take back what processing learned from these texts, as if they had been
+/// written by someone else.
+///
+/// For a capture leak found after the fact: the prose is gone, but the text
+/// that leaked usually is not — a relayed notification is still in the
+/// transcript — so feeding it back here subtracts exactly its counts, where
+/// `rm --phrase` deletes a shared phrase like `merged by` outright.
+///
+/// Counts never go below zero, but nothing records which counts a text
+/// added, so text that was never learned — or is fed twice — still takes from
+/// the phrases it shares with yours. Feed only what leaked, once. Every
+/// phrase length is taken back, though longer ones were counted only once
+/// their prefix recurred; the floor absorbs that. Words
+/// stay in the lexicon (a word in a leaked line is still a word), as does the
+/// record of which documents a word appeared in.
+pub fn unlearn(
+    store: &Store,
+    texts: &[(Register, String)],
+    apply: bool,
+) -> Result<UnlearnReport, Box<dyn std::error::Error>> {
+    use crate::store::Unlearn;
+    use std::collections::HashMap;
+
+    let mut grams: HashMap<(String, Register), i64> = HashMap::new();
+    let mut words: HashMap<(String, Register), i64> = HashMap::new();
+    let mut exemplars = Vec::new();
+    let mut lengths: HashMap<(Register, i64), i64> = HashMap::new();
+    let mut prose: HashMap<(Register, &str), i64> = HashMap::new();
+
+    for (register, body) in texts {
+        let register = *register;
+        let body = watermark::strip_trailer(body);
+        for line in body.lines() {
+            let Some(tokens) = text::prose_tokens(line) else {
+                continue;
+            };
+            for word in tokens.iter().filter(|w| text::is_lexical(w)) {
+                *words.entry((word.clone(), register)).or_default() += 1;
+            }
+            for run in tokens.split(|t| !text::is_lexical(t)) {
+                for n in 2..=MAX_PHRASE.min(run.len()) {
+                    for gram in ngram::ngrams(run, n) {
+                        *grams.entry((gram, register)).or_default() += 1;
+                    }
+                }
+            }
+            if tokens.len() >= 6 {
+                exemplars.push((
+                    register,
+                    text::normalize_typography(line).trim().to_string(),
+                ));
+            }
+        }
+        let (shape, word_total, syllables) = prose_shape(body);
+        for length in &shape {
+            *lengths.entry((register, *length)).or_default() += 1;
+        }
+        *prose.entry((register, "sentences")).or_default() += shape.len() as i64;
+        *prose.entry((register, "words")).or_default() += word_total;
+        *prose.entry((register, "syllables")).or_default() += syllables;
+        *prose.entry((register, "documents")).or_default() += 1;
+    }
+
+    let mut report = UnlearnReport {
+        texts: texts.len(),
+        ..Default::default()
+    };
+    let mut lost: HashMap<String, i64> = HashMap::new();
+    for ((gram, register), by) in &grams {
+        let before = store.ngram_count(gram)?;
+        let taken = store.unlearn(Unlearn::Gram(gram, *register), *by, apply)?;
+        if taken > 0 {
+            report.phrase_counts += taken;
+            *lost.entry(gram.clone()).or_default() += taken;
+            if before == taken {
+                report.phrases_emptied += 1;
+            }
+        }
+    }
+    for ((word, register), by) in &words {
+        report.word_counts += store.unlearn(Unlearn::WordIn(word, *register), *by, apply)?;
+        store.unlearn(Unlearn::Word(word), *by, apply)?;
+    }
+    for (register, line) in &exemplars {
+        report.exemplars += store.unlearn_exemplar(*register, line, apply)?;
+    }
+    for ((register, length), by) in &lengths {
+        store.unlearn(Unlearn::SentenceLength(*register, *length), *by, apply)?;
+    }
+    for ((register, metric), by) in &prose {
+        store.unlearn(Unlearn::Prose(*register, metric), *by, apply)?;
+    }
+
+    let mut sample: Vec<(String, i64)> = lost.into_iter().collect();
+    sample.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    sample.truncate(15);
+    report.sample = sample;
+    Ok(report)
 }
 
 #[cfg(test)]

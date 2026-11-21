@@ -107,7 +107,7 @@ impl Kind {
 /// Which voice a piece of text was written in. A single "writing style" is a
 /// fiction — prompts, commits, and email are different registers, and
 /// conflating them produces parody. The capture channel labels this for free.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Register {
     Prompt,

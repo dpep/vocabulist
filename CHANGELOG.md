@@ -24,6 +24,13 @@
   borne by one American in ten thousand now passes; rare ones (`Thai`,
   `Tess`, `Mott`) are still flagged.
 <!-- /lane: names -->
+- **A message another session sent is no longer learned as yours.** A
+  plugin's notification (`inkling: … checks pending → success`) arrives as a
+  prompt with nothing in it to say a person did not type it, and its status
+  text topped `vocab phrases`. The end-of-turn hook now checks the session
+  transcript, which records who sent each turn, and keeps a peer's text out
+  of your voice. To take back what one already taught, feed it to
+  `vocab prune --unlearn`.
 
 ### Changed
 

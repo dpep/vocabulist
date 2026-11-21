@@ -294,6 +294,13 @@ pub enum Command {
         /// read `--dry-run` first.
         #[arg(long)]
         strict: bool,
+        /// Take back what these texts taught, read as JSON on stdin in
+        /// `vocab ingest`'s shape (`{body, register?}`). For a capture leak
+        /// found after the fact: subtracts exactly their phrase and word
+        /// counts, never below zero, where `rm --phrase` deletes a phrase
+        /// you also use.
+        #[arg(long, conflicts_with = "strict")]
+        unlearn: bool,
     },
 
     /// Find boilerplate learned as prose — a repeated verbatim run of words
@@ -881,7 +888,40 @@ fn dispatch_inner(
             })
         }
 
-        Some(Command::Prune { dry_run, strict }) => {
+        Some(Command::Prune {
+            dry_run,
+            unlearn: true,
+            ..
+        }) => {
+            let mut seen = std::collections::HashSet::new();
+            let texts: Vec<(crate::types::Register, String)> =
+                crate::ingest::parse(&read_stdin()?)?
+                    .into_iter()
+                    .filter(|r| !r.body.trim().is_empty())
+                    .map(|r| {
+                        let register = r
+                            .register
+                            .as_deref()
+                            .and_then(crate::types::Register::parse)
+                            .unwrap_or(crate::types::Register::Prompt);
+                        (register, r.body)
+                    })
+                    // Capture counted each distinct text once; so does this.
+                    .filter(|(register, body)| {
+                        seen.insert(crate::hook::content_key(*register, body))
+                    })
+                    .collect();
+            let report =
+                store.transaction(|| crate::process::unlearn(&store, &texts, !*dry_run))?;
+            if !cli.quiet {
+                output::render_unlearn(&mut out, &report, *dry_run, format)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Some(Command::Prune {
+            dry_run, strict, ..
+        }) => {
             let report = crate::prune::run(&store, *dry_run, *strict)?;
             if !cli.quiet {
                 output::render_prune(&mut out, &report, *dry_run, format)?;
