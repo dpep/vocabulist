@@ -324,74 +324,9 @@ pub fn measure(message: &str) -> Counts {
         for sentence in crate::complexity::split_sentences(line) {
             let s = sentence.trim();
             let words = words_of(s);
-            if words.len() < 2 {
-                continue;
-            }
-            first_sentence.get_or_insert_with(|| words.clone());
-            bump(&mut c, "sentences", 1);
+            // A one-word sentence ("Thanks!") still carries its word, but
+            // no sentence shape worth counting.
             bump(&mut c, "words", words.len() as i64);
-
-            bump(
-                &mut c,
-                "lowercase_start",
-                i64::from(
-                    s.chars()
-                        .find(|ch| ch.is_alphabetic())
-                        .is_some_and(char::is_lowercase),
-                ),
-            );
-            bump(&mut c, "question", i64::from(s.ends_with('?')));
-            bump(&mut c, "comma", s.matches(',').count() as i64);
-            bump(&mut c, "semicolon", s.matches(';').count() as i64);
-            bump(
-                &mut c,
-                "colon",
-                s.match_indices(':')
-                    .filter(|(i, _)| s[i + 1..].chars().next().is_none_or(char::is_whitespace))
-                    .count() as i64,
-            );
-            bump(
-                &mut c,
-                "em_dash",
-                (s.matches('\u{2014}').count()
-                    + s.matches(" \u{2013} ").count()
-                    + s.matches(" -- ").count()) as i64,
-            );
-            bump(&mut c, "spaced_hyphen", s.matches(" - ").count() as i64);
-            bump(
-                &mut c,
-                "parenthesis",
-                s.split('(')
-                    .skip(1)
-                    .filter(|after| {
-                        after
-                            .split(')')
-                            .next()
-                            .is_some_and(|inner| inner.chars().any(char::is_alphabetic))
-                    })
-                    .count() as i64,
-            );
-            bump(
-                &mut c,
-                "ellipsis",
-                (s.matches("...").count() + s.matches('\u{2026}').count()) as i64,
-            );
-            bump(
-                &mut c,
-                "passive",
-                words
-                    .windows(2)
-                    .filter(|w| BE.contains(&w[0].as_str()) && participle(&w[1]))
-                    .count() as i64
-                    + words
-                        .windows(3)
-                        .filter(|w| {
-                            BE.contains(&w[0].as_str()) && w[1].ends_with("ly") && participle(&w[2])
-                        })
-                        .count() as i64,
-            );
-            bump(&mut c, "long_sentence", i64::from(words.len() >= 20));
-
             let has = |list: &[&str], w: &String| list.contains(&w.as_str());
             bump(
                 &mut c,
@@ -454,6 +389,72 @@ pub fn measure(message: &str) -> Counts {
                     })
                     .count() as i64,
             );
+            if words.len() < 2 {
+                continue;
+            }
+            first_sentence.get_or_insert_with(|| words.clone());
+            bump(&mut c, "sentences", 1);
+
+            bump(
+                &mut c,
+                "lowercase_start",
+                i64::from(
+                    s.chars()
+                        .find(|ch| ch.is_alphabetic())
+                        .is_some_and(char::is_lowercase),
+                ),
+            );
+            bump(&mut c, "question", i64::from(s.ends_with('?')));
+            bump(&mut c, "comma", s.matches(',').count() as i64);
+            bump(&mut c, "semicolon", s.matches(';').count() as i64);
+            bump(
+                &mut c,
+                "colon",
+                s.match_indices(':')
+                    .filter(|(i, _)| s[i + 1..].chars().next().is_none_or(char::is_whitespace))
+                    .count() as i64,
+            );
+            bump(
+                &mut c,
+                "em_dash",
+                (s.matches('\u{2014}').count()
+                    + s.matches(" \u{2013} ").count()
+                    + s.matches(" -- ").count()) as i64,
+            );
+            bump(&mut c, "spaced_hyphen", s.matches(" - ").count() as i64);
+            bump(
+                &mut c,
+                "parenthesis",
+                s.split('(')
+                    .skip(1)
+                    .filter(|after| {
+                        after
+                            .split(')')
+                            .next()
+                            .is_some_and(|inner| inner.chars().any(char::is_alphabetic))
+                    })
+                    .count() as i64,
+            );
+            bump(
+                &mut c,
+                "ellipsis",
+                (s.matches("...").count() + s.matches('\u{2026}').count()) as i64,
+            );
+            bump(
+                &mut c,
+                "passive",
+                words
+                    .windows(2)
+                    .filter(|w| BE.contains(&w[0].as_str()) && participle(&w[1]))
+                    .count() as i64
+                    + words
+                        .windows(3)
+                        .filter(|w| {
+                            BE.contains(&w[0].as_str()) && w[1].ends_with("ly") && participle(&w[2])
+                        })
+                        .count() as i64,
+            );
+            bump(&mut c, "long_sentence", i64::from(words.len() >= 20));
         }
     }
 
@@ -730,6 +731,14 @@ mod tests {
         assert_eq!(get(&c, "comma"), 0);
         // The bullet's colon is the writer's, not the markdown's.
         assert_eq!(get(&c, "colon"), 1);
+    }
+
+    #[test]
+    fn a_one_word_sign_off_keeps_its_word_but_not_a_sentence() {
+        let c = measure("Looks good to me.\nThanks!");
+        assert_eq!(get(&c, "sentences"), 1);
+        assert_eq!(get(&c, "words"), 5);
+        assert_eq!(get(&c, "courtesy"), 1);
     }
 
     #[test]

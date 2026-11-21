@@ -386,7 +386,8 @@ pub enum Command {
     /// With no text, shows your profile for a register beside the assistant
     /// baseline, if one has been learned. With text, `--file` or `--check`
     /// (stdin), scores the draft against them and exits 1 on any marker
-    /// that departs from yours.
+    /// that departs from yours. `--describe` measures anyone's text instead,
+    /// with no verdict.
     Voice {
         /// A draft to check.
         text: Option<String>,
@@ -396,6 +397,11 @@ pub enum Command {
         /// Check text piped on stdin.
         #[arg(long)]
         check: bool,
+        /// Measure a text by anyone (an email, a colleague's message) beside
+        /// your profile and the assistant's, without scoring or keeping it.
+        /// Reads stdin when no text or file is given.
+        #[arg(long, conflicts_with = "check")]
+        describe: bool,
         /// The register to show, or the one the draft is written for.
         #[arg(short, long, default_value = "prompt")]
         register: Register,
@@ -403,7 +409,7 @@ pub enum Command {
         /// (`{body, register?}`): `user` for your own writing, `assistant`
         /// for the baseline a draft is scored against. Replaces each register
         /// the input names, so feed the whole corpus, not an increment.
-        #[arg(long, value_name = "AUTHOR", conflicts_with_all = ["text", "file", "check"])]
+        #[arg(long, value_name = "AUTHOR", conflicts_with_all = ["text", "file", "check", "describe"])]
         load: Option<VoiceAuthor>,
     },
     /// Bulk-load text from JSON on stdin — NDJSON or an array of
@@ -524,7 +530,13 @@ impl Command {
                 }
             }
             // Sync writes the spell checkers' files, never the lexicon.
-            Command::Names { .. } => Access::ReadIfAny,
+            // Describing needs no profile, so no lexicon need exist.
+            Command::Names { .. }
+            | Command::Voice {
+                describe: true,
+                load: None,
+                ..
+            } => Access::ReadIfAny,
             Command::List { .. }
             | Command::Status
             | Command::Phrases { .. }
@@ -1150,17 +1162,33 @@ fn dispatch_inner(
             text,
             file,
             check,
+            describe,
             register,
             load: None,
         }) => {
             let yours = store.voice(*register, "user")?;
             let baseline = store.voice(*register, "assistant")?;
-            let draft = match (text, file.as_ref().or(cli.file.as_ref()), check) {
-                (Some(t), _, _) => Some(t.clone()),
-                (None, Some(path), _) => Some(read_file(path)?),
-                (None, None, true) => Some(read_stdin()?),
-                (None, None, false) => None,
+            let draft = match (text, file.as_ref().or(cli.file.as_ref())) {
+                (Some(t), _) => Some(t.clone()),
+                (None, Some(path)) => Some(read_file(path)?),
+                (None, None) if *check || *describe => Some(read_stdin()?),
+                (None, None) => None,
             };
+            if *describe {
+                let measured = crate::voice::measure(draft.as_deref().unwrap_or_default());
+                if !cli.quiet {
+                    output::render_voice_describe(
+                        &mut out, *register, &measured, &yours, &baseline, format,
+                    )?;
+                }
+                // A query: a text with no prose to measure is an empty result.
+                let empty = measured.get("sentences").copied().unwrap_or(0) == 0;
+                return Ok(if empty {
+                    ExitCode::from(1)
+                } else {
+                    ExitCode::SUCCESS
+                });
+            }
             let Some(draft) = draft else {
                 if !cli.quiet {
                     output::render_voice_profile(&mut out, *register, &yours, &baseline, format)?;

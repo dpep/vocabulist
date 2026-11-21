@@ -42,7 +42,9 @@
   scores each marker against your profile and an assistant baseline, and
   exits 1 when a habit in the draft is unusual for you and typical of the
   assistant. `--load user|assistant` replaces a profile from a corpus on
-  stdin. The lexicon schema moves to version 9, so an older `vocab` will
+  stdin. `--describe` measures anyone's text (an email, a colleague's
+  message) beside your profile and the assistant's, with counts and no
+  verdict, and keeps nothing. The lexicon schema moves to version 9, so an older `vocab` will
   refuse it once this one has opened it: upgrade every copy you run.
 
 ### Changed

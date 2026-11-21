@@ -1072,6 +1072,56 @@ fn voice_learns_from_your_text_and_checks_a_draft_against_it() {
 }
 
 #[test]
+fn describe_measures_anyones_text_without_keeping_it() {
+    let db = scratch_db("voice-describe");
+    let email = "Could we revisit the widget plan? I think the timeline was set too early. \
+                 Maybe we can talk Friday.";
+
+    // Nobody's profile is needed, and describing creates no lexicon.
+    let out = run(&db, &["voice", "--describe", "-j"], Some(email));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(!db.exists(), "describing must not create a lexicon");
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(v["sentences"], 3, "{}", out.stdout);
+    let marker = |name: &str| {
+        v["markers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["marker"] == name)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(marker("question")["count"], 1);
+    assert_eq!(marker("question")["opportunities"], 3);
+    assert_eq!(marker("request")["count"], 1);
+    assert!(marker("question")["your_rate"].is_null());
+
+    // With a profile, the same text sits beside yours, still with no verdict.
+    let corpus = "{\"body\":\"should we ship it? maybe\"}\n".repeat(5);
+    run(&db, &["voice", "--load", "user", "-q"], Some(&corpus));
+    let out = vocab(&db, &["voice", "--describe", "-j", email]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert!(v.get("departures").is_none());
+    let question = v["markers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["marker"] == "question")
+        .unwrap();
+    assert_eq!(question["your_rate"], 1.0, "{question}");
+
+    // Nothing measurable is an empty result.
+    let empty = run(
+        &db,
+        &["voice", "--describe"],
+        Some("```\nfn main() {}\n```"),
+    );
+    assert_eq!(empty.code, 1, "{}", empty.stdout);
+}
+
+#[test]
 fn templates_finds_boilerplate_that_shape_cannot() {
     let db = scratch_db("templates");
     // Boilerplate: ordinary words in an ordinary order, so `prune` is blind

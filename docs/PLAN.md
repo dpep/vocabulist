@@ -551,6 +551,19 @@ best signal for a voice check — the user's edits to a draft, which say
 exactly what they changed and why. Backfill adapters live outside the
 binary (§5) and feed `ingest` or `voice --load`.
 
+**Describing other people's text.** `--describe` measures any text — an
+email, a colleague's message — and prints each marker as a count over its
+opportunities beside the user's and the assistant's rates, with no verdict.
+It reads the profiles and writes nothing, so it needs no lexicon at all.
+This is how vocab serves "how does this person come across" without
+becoming a store of other people: tone labels (avoidant, collaborative,
+angry) are judgements for whoever reads the numbers, and named profiles of
+colleagues are declined — they would keep a lasting fingerprint of people
+who never opted in, against "only the user's own text shapes voice", and
+attribution from short messages has too little evidence to be honest.
+A one-word sentence ("Thanks!") counts toward the word markers but not the
+sentence ones, so a sign-off's courtesy is not lost.
+
 **Not yet.** Diction tells (`leverage`, `robust`, `ensure`) — a log-odds
 word list of user versus assistant would catch what punctuation cannot, but
 it needs the assistant's word counts, which the store deliberately never

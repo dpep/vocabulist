@@ -491,6 +491,83 @@ pub fn render_voice_check(
     }
 }
 
+pub fn render_voice_describe(
+    out: &mut impl Write,
+    register: crate::types::Register,
+    text: &crate::voice::Counts,
+    yours: &crate::voice::Counts,
+    baseline: &crate::voice::Counts,
+    format: Format,
+) -> std::io::Result<()> {
+    use crate::voice::{MARKERS, Rate};
+    let total = |c: &crate::voice::Counts, k: &str| c.get(k).copied().unwrap_or(0);
+    // A marker the text gave no chance to show (no sentences) says nothing.
+    let rows: Vec<_> = MARKERS
+        .iter()
+        .map(|m| (m, Rate::of(text, m)))
+        .filter(|(_, r)| r.opportunities > 0)
+        .map(|(m, r)| {
+            let (y, b) = (Rate::of(yours, m), Rate::of(baseline, m));
+            (m, r, voice_rate(y, m.per), voice_rate(b, m.per))
+        })
+        .collect();
+    let row = |(m, r, y, b): &(&crate::voice::Marker, Rate, Option<f64>, Option<f64>)| {
+        json!({
+            "marker": m.name,
+            "per": m.per.denominator(),
+            "count": r.count,
+            "opportunities": r.opportunities,
+            "rate": voice_rate(*r, m.per),
+            "your_rate": y,
+            "baseline_rate": b,
+        })
+    };
+    match format {
+        Format::Human => {
+            writeln!(
+                out,
+                "{} sentences, {} words",
+                total(text, "sentences"),
+                total(text, "words")
+            )?;
+            for (m, r, y, b) in &rows {
+                let rate = voice_rate(*r, m.per).unwrap_or(0.0);
+                let counted = format!("({}/{})", r.count, r.opportunities);
+                let mut line = format!(
+                    "  {:<50} {rate:>7.3} {:<15} {counted:<9}",
+                    m.gloss,
+                    per_label(m.per)
+                );
+                if let Some(y) = y {
+                    line += &format!("  your {} {y:.3}", register.as_str());
+                }
+                if let Some(b) = b {
+                    line += &format!("  assistant {b:.3}");
+                }
+                writeln!(out, "{}", line.trim_end())?;
+            }
+            Ok(())
+        }
+        Format::Ndjson => {
+            for r in &rows {
+                emit(out, &row(r), format)?;
+            }
+            Ok(())
+        }
+        _ => emit(
+            out,
+            &json!({
+                "register": register.as_str(),
+                "messages": total(text, "messages"),
+                "sentences": total(text, "sentences"),
+                "words": total(text, "words"),
+                "markers": rows.iter().map(row).collect::<Vec<_>>(),
+            }),
+            format,
+        ),
+    }
+}
+
 pub fn render_voice_load(
     out: &mut impl Write,
     profiles: &std::collections::BTreeMap<&str, crate::voice::Counts>,
