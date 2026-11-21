@@ -955,6 +955,9 @@ whatever its provenance, and its count is the user's own.
 - **Edges are where vocabulary grows.** Real near misses mostly change the
   first or last letter: `jsonl`, `readmes`. Slips mostly don't.
 - **Hyphenation is spelling variance**, so a hyphenated word is never vetoed.
+- **A name beside a name is someone else** (`Karin`/`Karen`), judged by the
+  Census table as the checker's `misspelled_name` is. Seen in the wild: a
+  first name withdrawn from every export as a slip of a commoner one.
 
 ### Why not more recurrence
 

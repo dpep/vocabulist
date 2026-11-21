@@ -16,7 +16,9 @@
 - **A real name is no longer called a misspelling of someone you know.**
   Once vocab had seen `Sarah` on two days, `Sara`, `Joan` (beside `John`)
   or `Roberta` read as a typo of them. A name people bear is now someone
-  else, judged by bundled US Census name counts and a nickname table.
+  else, judged by bundled US Census name counts and a nickname table. The
+  same rule now keeps such a name in `vocab sync`'s export, which had
+  withdrawn it as a typo.
 - **A common first name opening a sentence is a name.** `Mary`, `Owen`,
   `Luke` and `Seth` were flagged as `Marry`, `Own`, `Like` and `Set`. A name
   borne by one American in ten thousand now passes; rare ones (`Thai`,

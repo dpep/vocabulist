@@ -160,10 +160,14 @@ impl Trust {
         if self.shorthands.contains(word, &in_dictionary) {
             return None;
         }
+        // A name people bear is someone else, not a slip for a name written
+        // more: `Karin` beside `Karen`. The checker's rule (`misspelled_name`).
+        let a_name = crate::people::is_known(word);
         let (intended, edit) = typo_shaped_neighbours(word)
             .into_iter()
             .map(|(c, e)| (ratio(&c), c, e))
             .filter(|(r, _, _)| *r >= DOMINANCE)
+            .filter(|(_, c, _)| !(a_name && crate::people::is_known(c)))
             .max_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, c, e)| (c, e))?;
         // Last, because it may load a dictionary and is rarely reached.
@@ -408,6 +412,16 @@ mod tests {
         let t = trust(&[("from", DEP, 900, 500), ("form", OBS, 3, 3)]);
         assert!(t.typo_of("form", |w| w == "form").is_none());
         assert!(t.trusts("form", |w| w == "form"));
+    }
+
+    #[test]
+    fn a_name_beside_a_commoner_name_is_someone_else() {
+        let t = trust(&[("karen", DEP, 900, 500), ("karin", OBS, 3, 3)]);
+        assert!(t.typo_of("karin", nowhere).is_none());
+        assert!(t.trusts("karin", nowhere));
+        // Only a name beside a name: a slip of a name is still a slip.
+        let t = trust(&[("karen", DEP, 900, 500), ("kaern", OBS, 3, 3)]);
+        assert!(t.typo_of("kaern", nowhere).is_some());
     }
 
     #[test]
