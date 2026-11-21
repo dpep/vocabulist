@@ -34,6 +34,10 @@
   reads as a typo of, with how to keep a real one (`vocab add`, `vocab
   shorthand`). A real word caught by the typo veto was otherwise noticed only
   when a spell checker began flagging it. `-J` carries them as `withdrawn`.
+- **`vocab status` says when an export has gone stale**: per target, when it
+  was last synced and how many exported words no longer qualify (a typo the
+  veto has since caught), and for an export nothing reads, the settings to
+  paste.
 
 ## 0.6.2 — 2026-11-12
 

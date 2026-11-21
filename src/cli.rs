@@ -893,7 +893,7 @@ fn dispatch_inner(
             let mut status = store.status()?;
             // Filled here rather than in the store: what a spell checker has
             // on disk is a fact about the filesystem, not about the lexicon.
-            status.integrations = crate::sync::status();
+            status.integrations = crate::sync::status(&store)?;
             if !cli.quiet {
                 output::render_status(&mut out, &status, format)?;
             }

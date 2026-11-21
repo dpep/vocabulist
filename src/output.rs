@@ -322,9 +322,30 @@ pub fn render_status(
                     };
                     // "present" answers whether we wrote the file, which is
                     // the question people mistake for whether it works.
-                    let reach = if i.live { "" } else { "  (not in effect)" };
-                    writeln!(out, "  {:<14} {state}{reach}", i.name)?;
+                    let reach = match i.activation.as_str() {
+                        _ if i.live => "",
+                        // Flow imports from the cloud: unknowable, not broken.
+                        "manual" => "  (imported by hand)",
+                        _ => "  (not in effect)",
+                    };
+                    let synced = match i.synced_secs_ago {
+                        Some(_) => format!(", synced {}", age(i.synced_secs_ago)),
+                        None => String::new(),
+                    };
+                    writeln!(out, "  {:<14} {state}{synced}{reach}", i.name)?;
                     writeln!(out, "  {:<14} {}", "", tilde(&i.path))?;
+                    if i.withdrawn > 0 {
+                        writeln!(
+                            out,
+                            "  {:<14} stale: {} exported words no longer qualify — run `vocab sync`",
+                            "", i.withdrawn
+                        )?;
+                    }
+                    if let Some(hint) = &i.hint {
+                        for line in hint.lines() {
+                            writeln!(out, "  {:<14} {line}", "")?;
+                        }
+                    }
                 }
             }
             Ok(())

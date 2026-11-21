@@ -479,6 +479,17 @@ pub struct IntegrationStatus {
     /// Whether the export reaches its consumer at all. The question `present`
     /// looks like it answers and doesn't.
     pub live: bool,
+    /// How long ago this target was last synced; `None` if never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_secs_ago: Option<i64>,
+    /// Words this tool exported that no longer earn export — a typo the veto
+    /// has since caught, a word removed. Nonzero means the target is stale
+    /// and `vocab sync` would take them back.
+    #[serde(default)]
+    pub withdrawn: usize,
+    /// For an export nothing reads, how to wire it up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// Round to `places` decimals, for numbers that cross the output boundary.

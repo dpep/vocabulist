@@ -1829,10 +1829,26 @@ fn sync_names_the_words_it_withdraws_and_why() {
         vocab_home(&home, &["--db", db, "typos", "zblorgish=zblorgy"]).code,
         0
     );
+    // Before the next sync, status says the export is stale.
+    let macos = |home: &std::path::Path| -> serde_json::Value {
+        let out = vocab_home(home, &["--db", db, "status", "-J"]);
+        let status: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+        status["integrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == "macos")
+            .unwrap()
+            .clone()
+    };
+    let before = macos(&home);
+    assert_eq!(before["withdrawn"], 1, "{before}");
+    assert!(before["synced_secs_ago"].is_i64(), "{before}");
     let out = vocab_home(&home, &["--db", db, "sync", "-t", "macos", "-J"]);
     let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
     assert_eq!(
         report["withdrawn"],
         serde_json::json!([{"word": "zblorgish", "typo_of": "zblorgy"}])
     );
+    assert_eq!(macos(&home)["withdrawn"], 0);
 }

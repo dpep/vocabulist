@@ -511,6 +511,16 @@ back a word it wrote that no longer exports (a name dropped by
 export instead of keeping every word ever written; a word the user had
 there first was never in the manifest and is never touched.
 
+**A take-back is never silent.** Rules tighten between syncs — a typo veto
+that didn't exist when `teh` was exported — so an export goes stale without
+anything on disk changing. `sync` names each word it withdraws and the slip
+the veto reads it as, so a real word caught by mistake (`repro`) is seen when
+it leaves rather than when a checker flags it. `status` reports per target
+when it last synced (the manifest's mtime, rewritten every sync) and how many
+exported words no longer qualify, and repeats an inert target's wiring hint.
+Wispr Flow imports from the cloud, so when it last *imported* is unknowable
+here; the last sync is the honest stand-in.
+
 The targets and their manifests belong to the user, not to a lexicon, so
 `sync` and `unsync` refuse a `--db`/`VOCAB_DB` that isn't the default
 lexicon unless given `--any-db`: a scratch lexicon would otherwise take back

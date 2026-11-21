@@ -208,23 +208,47 @@ pub fn targets() -> Vec<Target> {
 ///
 /// Read-only and tolerant of a missing file: a target that was never synced is
 /// a normal state to report, not an error.
-pub fn status() -> Vec<crate::types::IntegrationStatus> {
-    targets()
+///
+/// `withdrawn` is what makes a stale export visible: words we wrote that
+/// today's rules would take back. An export that taught macOS `teh` sat
+/// unnoticed until something forced a sync.
+pub fn status(
+    store: &Store,
+) -> Result<Vec<crate::types::IntegrationStatus>, Box<dyn std::error::Error>> {
+    let exportable: BTreeSet<String> = exportable(store)?.into_iter().collect();
+    Ok(targets()
         .into_iter()
         .map(|t| {
-            let total = read_lines(&t.path).len();
+            let ours = read_lines(&t.manifest);
             let wiring = t.wiring();
+            let live = wiring.state.live();
             crate::types::IntegrationStatus {
                 name: t.name.to_string(),
                 path: t.path.display().to_string(),
                 present: t.path.exists(),
-                ours: read_lines(&t.manifest).len(),
-                total,
+                synced_secs_ago: secs_since_modified(&t.manifest),
+                withdrawn: ours.iter().filter(|w| !exportable.contains(*w)).count(),
+                ours: ours.len(),
+                total: read_lines(&t.path).len(),
                 activation: wiring.state.as_str().to_string(),
-                live: wiring.state.live(),
+                // Only a broken wiring's hint: a manual step's is the note,
+                // which `sync --list` already says.
+                hint: (wiring.state == Activation::Inert)
+                    .then_some(wiring.hint)
+                    .flatten(),
+                live,
             }
         })
-        .collect()
+        .collect())
+}
+
+/// How long ago `path` was last written, if it exists.
+fn secs_since_modified(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    Some(age.as_secs() as i64)
 }
 
 /// Editors that consume a cSpell dictionary, and where each keeps its user
@@ -569,16 +593,19 @@ pub fn install(
     let all: BTreeSet<&str> = all.iter().map(String::as_str).collect();
     report.withdrawn = withdrawn(store, removed.into_iter(), &all)?;
 
-    if !dry_run && (!fresh.is_empty() || !stale.is_empty()) {
-        let mut merged: Vec<String> = existing
-            .into_iter()
-            .filter(|w| !stale.contains(w))
-            .collect();
-        merged.extend(fresh.iter().cloned());
-        write_all(&target.path, &merged)?;
+    if !dry_run {
+        if !fresh.is_empty() || !stale.is_empty() {
+            let mut merged: Vec<String> = existing
+                .into_iter()
+                .filter(|w| !stale.contains(w))
+                .collect();
+            merged.extend(fresh.iter().cloned());
+            write_all(&target.path, &merged)?;
+        }
 
         // The manifest is cumulative: a word we wrote last run is still ours
-        // to remove, even if this run had nothing new to add.
+        // to remove, even if this run had nothing new to add. Rewritten even
+        // unchanged, since its mtime is what `status` reports as the last sync.
         ours.retain(|w| !stale.contains(w));
         ours.extend(fresh);
         let ours: Vec<String> = ours.into_iter().collect();
