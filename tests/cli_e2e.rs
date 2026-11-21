@@ -296,7 +296,16 @@ fn typos_confirms_several_pairs_and_a_file_name() {
     let out = run(&db, &["--fix"], Some("edit claudmd taht way\n"));
     assert_eq!(out.stdout, "edit claude.md that way\n");
 
-    assert_eq!(vocab(&db, &["typos", "--rm", "shoudl", "taht"]).code, 0);
+    // A bare word pairs only with its neighbour.
+    assert_eq!(vocab(&db, &["typos", "zblorg", "zbx=zby", "zbq"]).code, 2);
+    assert_eq!(vocab(&db, &["typos", "zbqq=README.md"]).code, 0);
+    let out = run(&db, &["--fix"], Some("see zbqq\n"));
+    assert_eq!(out.stdout, "see README.md\n", "the meaning keeps its case");
+
+    assert_eq!(
+        vocab(&db, &["typos", "--rm", "shoudl", "taht=that", "zbqq"]).code,
+        0
+    );
     assert_eq!(vocab(&db, &["typos", "-J"]).stdout.lines().count(), 1);
 }
 
@@ -493,6 +502,7 @@ fn a_typo_confirmation_that_could_never_apply_is_refused() {
         ("teh", ".md"),
         ("teh", "claude..md"),
         ("te.h", "the"),
+        ("teh", "the=x"),
     ] {
         assert_eq!(
             vocab(&db, &["typos", typo, intended]).code,
@@ -1198,6 +1208,8 @@ fn a_usage_error_never_opens_the_lexicon() {
     for args in [
         &["typos", "teh"][..],
         &["typos", "teh", "the", "then"],
+        &["typos", "zz=a=b"],
+        &["typos", "teh", "x=y", "the"],
         &["typos", "--rm"],
         &["shorthand", "--rm"],
         &["rm"],

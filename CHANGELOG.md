@@ -29,7 +29,9 @@
 
 - **`vocab typos` confirms several pairs at once**, as pairs or as
   `TYPO=INTENDED` the way `vocab shorthand` takes them, and `--rm` forgets
-  several. The word meant may be a file name: `vocab typos claudmd=claude.md`.
+  several, reporting `removed N` where it said `removed`/`not found`. The
+  word meant keeps its case and may be a file name:
+  `vocab typos claudmd=CLAUDE.md`.
 - **`vocab sync` names the words it withdraws**, and the word each now
   reads as a typo of, with how to keep a real one (`vocab add`, `vocab
   shorthand`). A real word caught by the typo veto was otherwise noticed only

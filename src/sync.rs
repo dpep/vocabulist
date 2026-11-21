@@ -215,8 +215,14 @@ pub fn targets() -> Vec<Target> {
 pub fn status(
     store: &Store,
 ) -> Result<Vec<crate::types::IntegrationStatus>, Box<dyn std::error::Error>> {
-    let exportable: BTreeSet<String> = exportable(store)?.into_iter().collect();
-    Ok(targets()
+    let targets = targets();
+    // Only a target we wrote can be stale, and the export rule is not cheap.
+    let exportable: BTreeSet<String> = if targets.iter().any(|t| t.manifest.exists()) {
+        exportable(store)?.into_iter().collect()
+    } else {
+        BTreeSet::new()
+    };
+    Ok(targets
         .into_iter()
         .map(|t| {
             let ours = read_lines(&t.manifest);
