@@ -30,6 +30,10 @@
 - **`vocab typos` confirms several pairs at once**, as pairs or as
   `TYPO=INTENDED` the way `vocab shorthand` takes them, and `--rm` forgets
   several. The word meant may be a file name: `vocab typos claudmd=claude.md`.
+- **`vocab sync` names the words it withdraws**, and the word each now
+  reads as a typo of, with how to keep a real one (`vocab add`, `vocab
+  shorthand`). A real word caught by the typo veto was otherwise noticed only
+  when a spell checker began flagging it. `-J` carries them as `withdrawn`.
 
 ## 0.6.2 — 2026-11-12
 

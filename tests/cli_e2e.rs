@@ -1802,3 +1802,37 @@ fn names_exits_1_when_none_is_a_name() {
     let out = vocab(&db, &["names", "Zblorg"]);
     assert_eq!(out.code, 1, "{}", out.stdout);
 }
+
+#[test]
+fn sync_names_the_words_it_withdraws_and_why() {
+    let home = scratch_db("sync-withdrawn").parent().unwrap().to_path_buf();
+    let db = home.join(".local/share/vocabulist/lexicon.db");
+    let db = db.to_str().unwrap();
+    for source in ["one", "two"] {
+        let body = "the zblorgish widget and the zblorgish gadget";
+        let captured = vocab_home(
+            &home,
+            &[
+                "--db", db, "capture", "-r", "slack", body, "--source", source,
+            ],
+        );
+        assert_eq!(captured.code, 0, "{}", captured.stderr);
+        assert_eq!(vocab_home(&home, &["--db", db, "process"]).code, 0);
+    }
+    let out = vocab_home(&home, &["--db", db, "sync", "-t", "macos", "-J"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(report["added"], 1, "{report}");
+    assert_eq!(report["withdrawn"], serde_json::json!([]));
+
+    assert_eq!(
+        vocab_home(&home, &["--db", db, "typos", "zblorgish=zblorgy"]).code,
+        0
+    );
+    let out = vocab_home(&home, &["--db", db, "sync", "-t", "macos", "-J"]);
+    let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(
+        report["withdrawn"],
+        serde_json::json!([{"word": "zblorgish", "typo_of": "zblorgy"}])
+    );
+}

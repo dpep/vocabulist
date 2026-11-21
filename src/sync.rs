@@ -105,6 +105,45 @@ pub struct SyncReport {
     pub hint: Option<String>,
     /// The consumer config the verdict came from — and where a hint goes.
     pub config: Option<String>,
+    /// Words taken back because they no longer earn export, by name: a real
+    /// word the typo veto caught is otherwise noticed only when a spell
+    /// checker starts flagging it.
+    pub withdrawn: Vec<Withdrawn>,
+}
+
+/// A word a sync took back, and the typo verdict that cost it, if any.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct Withdrawn {
+    pub word: String,
+    /// The word it now reads as a slip of.
+    pub typo_of: Option<String>,
+}
+
+/// Name the removed words that no longer export at all, as opposed to those
+/// a target's cap merely crowded out.
+fn withdrawn<'a>(
+    store: &Store,
+    removed: impl Iterator<Item = &'a str>,
+    exportable: &BTreeSet<&str>,
+) -> Result<Vec<Withdrawn>, Box<dyn std::error::Error>> {
+    let gone: Vec<&str> = removed.filter(|w| !exportable.contains(w)).collect();
+    if gone.is_empty() {
+        return Ok(Vec::new());
+    }
+    let trust = store.trust()?;
+    let dictionary = crate::dict::load();
+    let in_dictionary = |w: &str| {
+        dictionary
+            .as_ref()
+            .is_some_and(|d| crate::dict::contains(d, w))
+    };
+    Ok(gone
+        .into_iter()
+        .map(|word| Withdrawn {
+            word: word.to_string(),
+            typo_of: trust.typo_of(word, in_dictionary).map(|p| p.intended),
+        })
+        .collect())
 }
 
 /// Every target we know how to write, resolved for this machine.
@@ -461,7 +500,8 @@ pub fn install(
     target: &Target,
     dry_run: bool,
 ) -> Result<SyncReport, Box<dyn std::error::Error>> {
-    let mut words = exportable(store)?;
+    let all = exportable(store)?;
+    let mut words = all.clone();
     if let Some(limit) = target.limit
         && words.len() > limit
     {
@@ -485,10 +525,14 @@ pub fn install(
         let before: BTreeSet<String> = read_lines(&target.path).into_iter().collect();
         let after: BTreeSet<&str> = words.iter().map(String::as_str).collect();
         report.added = after.iter().filter(|w| !before.contains(**w)).count();
-        report.removed = before
+        let removed: Vec<&str> = before
             .iter()
-            .filter(|w| !after.contains(w.as_str()))
-            .count();
+            .map(String::as_str)
+            .filter(|w| !after.contains(w))
+            .collect();
+        report.removed = removed.len();
+        let all: BTreeSet<&str> = all.iter().map(String::as_str).collect();
+        report.withdrawn = withdrawn(store, removed.into_iter(), &all)?;
         if !dry_run {
             write_all(&target.path, &words)?;
             write_all(&target.manifest, &words)?;
@@ -516,7 +560,14 @@ pub fn install(
         .filter(|w| !exported.contains(w.as_str()))
         .cloned()
         .collect();
-    report.removed = existing.iter().filter(|w| stale.contains(*w)).count();
+    let removed: Vec<&str> = existing
+        .iter()
+        .map(String::as_str)
+        .filter(|w| stale.contains(*w))
+        .collect();
+    report.removed = removed.len();
+    let all: BTreeSet<&str> = all.iter().map(String::as_str).collect();
+    report.withdrawn = withdrawn(store, removed.into_iter(), &all)?;
 
     if !dry_run && (!fresh.is_empty() || !stale.is_empty()) {
         let mut merged: Vec<String> = existing

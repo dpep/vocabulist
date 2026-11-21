@@ -401,6 +401,23 @@ pub fn render_sync(
                         tilde(&r.path)
                     )?,
                 }
+                if !r.withdrawn.is_empty() {
+                    let named: Vec<String> = r
+                        .withdrawn
+                        .iter()
+                        .map(|w| match &w.typo_of {
+                            Some(intended) => format!("{} (a typo of {intended}?)", w.word),
+                            None => w.word.clone(),
+                        })
+                        .collect();
+                    writeln!(out, "{:<10} withdrawn: {}", "", named.join(", "))?;
+                    writeln!(
+                        out,
+                        "{:<10} a real word among them stays with `vocab add`, a \
+                         shorthand with `vocab shorthand`",
+                        ""
+                    )?;
+                }
                 // Written is not the same as in effect, and the difference
                 // used to be invisible: a correct file nothing was pointed at
                 // reported exactly like one that worked.
@@ -448,6 +465,7 @@ pub fn render_sync(
                         "live": r.activation.map(crate::sync::Activation::live),
                         "hint": r.hint,
                         "config": r.config,
+                        "withdrawn": r.withdrawn,
                         "dry_run": dry_run,
                     })
                 })
