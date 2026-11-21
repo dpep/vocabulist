@@ -230,10 +230,7 @@ pub fn is_checkable(token: &str) -> bool {
     {
         return false;
     }
-    if is_camel_case(&alpha) {
-        return false;
-    }
-    true
+    !is_camel_case(&alpha)
 }
 
 /// Is this token capitalized in a position where that marks a proper noun?
