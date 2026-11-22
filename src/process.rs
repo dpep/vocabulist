@@ -264,6 +264,9 @@ pub struct UnlearnReport {
     /// Texts that matched nothing learned, so took nothing: never learned,
     /// already taken back, or fed under the wrong register.
     pub unmatched: usize,
+    /// Of those, texts that match a captured one only up to case, digits or
+    /// spacing: capture kept that copy, and it is the one to feed.
+    pub near_copies: usize,
     /// Phrase counts taken back, summed over phrases.
     pub phrase_counts: i64,
     /// Phrases whose count reached zero, so they are gone.
@@ -280,6 +283,7 @@ pub struct UnlearnReport {
 }
 
 /// One text to take back, attributed as processing attributed it.
+#[derive(Clone)]
 pub struct Learned {
     pub register: Register,
     /// `user`, `assistant` or `other`, as [`crate::ingest::Record::authored_by`].
@@ -455,44 +459,73 @@ pub fn unlearn(
     apply: bool,
 ) -> Result<UnlearnReport, Box<dyn std::error::Error>> {
     let mut all = Tally::default();
-    let mut unmatched = 0;
-    let mut seen = HashSet::new();
+    let (mut unmatched, mut near) = (0, 0);
+    // Copies taken so far, so a dry run counts as the real one would.
+    let mut used: HashMap<String, i64> = HashMap::new();
     for text in texts {
-        // Keyed as processing keyed it, from the text capture would have
-        // spooled, so a transcript's copy of a leak finds it.
-        let captured = crate::hook::as_captured(text.register, &text.body);
-        // A long capture was spooled cut short, and learned as cut.
-        let mut forms = vec![captured.as_str()];
-        let cut = crate::hook::bounded(&captured);
-        if cut.len() < captured.len() {
-            forms.push(cut);
-        }
-        // Someone else's text was never recorded, which documents it gave
-        // its words was never recorded either: taking one could take yours.
-        let mut found = None;
-        if text.authored_by == "user" {
-            for form in forms {
-                let key = crate::hook::learned_key(text.register, form);
-                if seen.insert(key.clone()) && store.take_learned(&key, apply)? {
-                    found = Some(form.to_string());
-                    break;
-                }
-            }
-        }
-        if let Some(body) = found {
-            all.add(&Learned {
+        // Someone else's text was never recorded, and which documents it
+        // gave its words was never recorded either: taking one could take
+        // yours.
+        let found = if text.authored_by == "user" {
+            take_one(store, text, &mut used, apply)?
+        } else {
+            None
+        };
+        match found {
+            Some(body) => all.add(&Learned {
                 register: text.register,
                 authored_by: text.authored_by,
                 body,
-            });
-        } else {
-            unmatched += 1;
+            }),
+            None => {
+                unmatched += 1;
+                let captured = crate::hook::as_captured(text.register, &text.body);
+                near += usize::from(
+                    text.authored_by == "user"
+                        && store
+                            .is_captured(&crate::hook::content_key(text.register, &captured))?,
+                );
+            }
         }
     }
     let mut report = all.take(store, apply)?;
     report.texts = texts.len();
     report.unmatched = unmatched;
+    report.near_copies = near;
     Ok(report)
+}
+
+/// Find one learned copy of this text and take it, returning the form it
+/// was learned as. Tried as capture would have spooled it (a transcript's
+/// copy of a prompt carries a frame and envelopes the hook strips) and as
+/// given (`vocab capture` spools it untouched), each also cut short as a
+/// long capture was.
+fn take_one(
+    store: &Store,
+    text: &Learned,
+    used: &mut HashMap<String, i64>,
+    apply: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let captured = crate::hook::as_captured(text.register, &text.body);
+    let mut forms = vec![captured.as_str(), text.body.as_str()];
+    forms.extend([
+        crate::hook::bounded(&captured),
+        crate::hook::bounded(&text.body),
+    ]);
+    let mut tried = HashSet::new();
+    for form in forms {
+        let key = crate::hook::learned_key(text.register, form);
+        if !tried.insert(key.clone()) {
+            continue;
+        }
+        let taken = used.entry(key.clone()).or_default();
+        if store.take_learned(&key, i64::MAX, false)? > *taken {
+            *taken += 1;
+            store.take_learned(&key, 1, apply)?;
+            return Ok(Some(form.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -884,6 +917,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!((report.unmatched, report.exemplars), (0, 1));
+    }
+
+    #[test]
+    fn a_text_learned_twice_is_taken_back_twice() {
+        let store = Store::open(":memory:").unwrap();
+        let text = "the zblorg gadget leaked into my notes twice today";
+        for _ in 0..2 {
+            store.spool(Register::Prompt, None, text, "user").unwrap();
+        }
+        // `vocab capture` spools untouched, leading space and all.
+        let spaced = " the quux sprocket needs oiling before the demo";
+        store.spool(Register::Prompt, None, spaced, "user").unwrap();
+        process_spool(&store, 10).unwrap();
+        assert_eq!(store.ngram_count("zblorg gadget").unwrap(), 2);
+
+        let once = unlearn(&store, &[learned(Register::Prompt, "user", text)], true).unwrap();
+        assert_eq!((once.unmatched, once.exemplars), (0, 1));
+        assert_eq!(store.ngram_count("zblorg gadget").unwrap(), 1);
+        let twice = vec![learned(Register::Prompt, "user", text); 2];
+        // The dry run counts as the real one would: one copy is left.
+        let dry = unlearn(&store, &twice, false).unwrap();
+        assert_eq!(dry.unmatched, 1);
+        unlearn(&store, &twice, true).unwrap();
+        assert_eq!(store.ngram_count("zblorg gadget").unwrap(), 0);
+
+        let report = unlearn(&store, &[learned(Register::Prompt, "user", spaced)], true).unwrap();
+        assert_eq!(report.unmatched, 0);
+    }
+
+    #[test]
+    fn a_near_copy_of_a_captured_text_is_named() {
+        let store = Store::open(":memory:").unwrap();
+        let kept = "inkling: build 1234 finished on the widget branch";
+        store
+            .claim_source(&crate::hook::content_key(Register::Prompt, kept))
+            .unwrap();
+        store
+            .spool(Register::Prompt, Some("s"), kept, "user")
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        let other = "inkling: build 1235 finished on the widget branch";
+        let report = unlearn(&store, &[learned(Register::Prompt, "user", other)], false).unwrap();
+        assert_eq!((report.unmatched, report.near_copies), (1, 1));
     }
 
     #[test]

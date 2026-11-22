@@ -492,15 +492,11 @@ pub(crate) fn content_key(register: Register, body: &str) -> String {
 /// The exact text a text's counts came from, for `prune --unlearn`. Unlike
 /// [`content_key`], case and digits count: two notifications differing by a
 /// number taught different lines, and taking one back must not subtract the
-/// other's. Only line endings and trailing spaces are ignored.
+/// other's. Only line endings and surrounding whitespace are ignored.
 pub(crate) fn learned_key(register: Register, body: &str) -> String {
     let lines: Vec<&str> = body.lines().map(str::trim_end).collect();
     let text = lines.join("\n");
-    format!(
-        "{}:{:016x}",
-        register.as_str(),
-        fnv1a(text.trim_matches('\n'))
-    )
+    format!("{}:{:016x}", register.as_str(), fnv1a(text.trim()))
 }
 
 fn fnv1a(text: &str) -> u64 {

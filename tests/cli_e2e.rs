@@ -1076,9 +1076,10 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
         Some(&stdin),
     );
     assert_eq!(dry.code, 0, "{}", dry.stderr);
+    // The leak was captured once, so its second copy finds nothing left.
     assert!(
-        dry.stdout.contains("\"texts\": 2"),
-        "a repeat counts once: {}",
+        dry.stdout.contains("\"texts\": 3") && dry.stdout.contains("\"unmatched\": 1"),
+        "a repeat takes back once: {}",
         dry.stdout
     );
     assert_eq!(count("checks pending"), 2, "a dry run changes nothing");
@@ -1100,7 +1101,7 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
         Some(&stdin),
     );
     assert!(
-        again.stdout.contains("\"unmatched\": 2"),
+        again.stdout.contains("\"unmatched\": 3"),
         "{}",
         again.stdout
     );

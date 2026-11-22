@@ -317,6 +317,7 @@ pub fn render_unlearn(
             &json!({
                 "texts": report.texts,
                 "unmatched": report.unmatched,
+                "near_copies": report.near_copies,
                 "phrase_counts": report.phrase_counts,
                 "phrases_emptied": report.phrases_emptied,
                 "word_counts": report.word_counts,

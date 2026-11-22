@@ -179,11 +179,13 @@ CREATE TABLE IF NOT EXISTS captured (
     captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Content keys of your own texts as they were processed into counts. Nothing
--- else records which counts a text added, so this is how `prune --unlearn`
--- knows a text was learned at all, and takes it back once. A hash, no prose.
+-- Hashes of your own texts as they were processed into counts, with how
+-- many times each was. Nothing else records which counts a text added, so
+-- this is how `prune --unlearn` knows a text was learned, and how often. No
+-- prose.
 CREATE TABLE IF NOT EXISTS learned (
-    key TEXT PRIMARY KEY
+    key TEXT PRIMARY KEY,
+    times INTEGER NOT NULL DEFAULT 1
 );
 
 -- Typos the user confirmed by hand, and the word each one means. Only the
@@ -1062,28 +1064,53 @@ impl Store {
     }
 
     /// Note that a text of yours, by content key, was processed into counts.
+    /// Counted, not just noted: `capture` and `ingest` don't dedupe, so a
+    /// text can be learned twice and must be taken back twice.
     pub fn record_learned(&self, key: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO learned (key) VALUES (?1)",
+            "INSERT INTO learned (key) VALUES (?1)
+             ON CONFLICT(key) DO UPDATE SET times = times + 1",
             params![key],
         )?;
         Ok(())
     }
 
-    /// Whether a text was learned and not yet taken back; with `apply`, also
-    /// forget it, so the same text cannot be taken back twice.
-    pub fn take_learned(&self, key: &str, apply: bool) -> Result<bool> {
-        if apply {
-            return Ok(self
-                .conn
-                .execute("DELETE FROM learned WHERE key = ?1", params![key])?
-                > 0);
+    /// How many times a text was learned and not yet taken back; with
+    /// `apply`, take back up to `by` of them. Returns how many were (or
+    /// would be) taken.
+    pub fn take_learned(&self, key: &str, by: i64, apply: bool) -> Result<i64> {
+        let have: i64 = self
+            .conn
+            .query_row(
+                "SELECT times FROM learned WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let taken = have.min(by.max(0));
+        if apply && taken > 0 {
+            self.conn.execute(
+                "UPDATE learned SET times = times - ?2 WHERE key = ?1",
+                params![key, taken],
+            )?;
+            self.conn.execute(
+                "DELETE FROM learned WHERE key = ?1 AND times <= 0",
+                params![key],
+            )?;
         }
+        Ok(taken)
+    }
+
+    /// Whether text was captured under this key.
+    pub fn is_captured(&self, key: &str) -> Result<bool> {
         Ok(self
             .conn
-            .query_row("SELECT 1 FROM learned WHERE key = ?1", params![key], |_| {
-                Ok(())
-            })
+            .query_row(
+                "SELECT 1 FROM captured WHERE source_key = ?1",
+                params![key],
+                |_| Ok(()),
+            )
             .optional()?
             .is_some())
     }
@@ -1283,15 +1310,17 @@ impl Store {
 
     /// Drop an exemplar that is exactly this text.
     pub fn unlearn_exemplar(&self, register: Register, text: &str, apply: bool) -> Result<usize> {
+        // One row per call: each learned copy of a line added its own.
         if !apply {
             return self.conn.query_row(
-                "SELECT COUNT(*) FROM exemplars WHERE register = ?1 AND text = ?2",
+                "SELECT MIN(COUNT(*), 1) FROM exemplars WHERE register = ?1 AND text = ?2",
                 params![register.as_str(), text],
                 |r| r.get(0),
             );
         }
         self.conn.execute(
-            "DELETE FROM exemplars WHERE register = ?1 AND text = ?2",
+            "DELETE FROM exemplars WHERE rowid IN (
+                 SELECT rowid FROM exemplars WHERE register = ?1 AND text = ?2 LIMIT 1)",
             params![register.as_str(), text],
         )
     }

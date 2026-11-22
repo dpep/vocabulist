@@ -59,9 +59,9 @@
   the assistant's, which wrote it. Text already learned before this
   version can't be taken back by content, only phrase by phrase with `vocab
   rm --phrase`. From this version on, vocab records which of your texts it
-  learned, and `vocab prune --unlearn -r prompt` takes one back exactly,
-  once: its phrase, word and style counts, and trust in a word only it
-  vouched for. `vocab process` warns when it finds
+  learned, and `vocab prune --unlearn -r prompt` takes one back exactly:
+  each copy you feed takes back one learned copy — its phrase, word and
+  style counts, and trust in a word only it vouched for. `vocab process` warns when it finds
   no transcript for a session, which happens when `CLAUDE_CONFIG_DIR`
   differs from the session's.
 - **Two drains at once no longer count the same text twice.** A `vocab

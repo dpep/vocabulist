@@ -208,7 +208,14 @@ capture dedupe key, which folds case and digits so a template counts once.
 Under that folding, feeding "build 1235" took back "build 1234"'s key while
 subtracting counts computed from the text fed, leaving the learned
 sentence's exemplar behind with no way to retry. A long capture is learned
-cut short, so unlearn also tries the input cut the same way. That makes a never-learned text, a wrong register, and a second
+cut short, so unlearn also tries the input cut the same way, and it tries
+the input both as given (`vocab capture` spools text untouched) and as the
+hook would have spooled it. Each hash carries how many times its text was
+learned — `capture` and `ingest` don't dedupe — and each copy fed takes one
+back, so a text learned twice is taken back by feeding it twice. A copy the
+capture dedupe dropped (it differs from the kept one only by case, digits or
+spacing) is not found, and the report says a near copy was captured so the
+user can feed that one. That makes a never-learned text, a wrong register, and a second
 feeding all exact no-ops, and it does not depend on the text's phrases still
 being present after `rm --phrase` or `templates --apply`. Two inference rules
 came first and each was broken by the next hunt: "some count matched" (a

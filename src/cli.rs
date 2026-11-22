@@ -803,7 +803,6 @@ fn open_store(cli: &Cli, access: Access) -> Result<Store, Box<dyn std::error::Er
         Access::Read => Store::open_read_only(path),
         Access::ReadIfAny | Access::WriteIfAny if !path.exists() => Store::open(":memory:"),
         Access::ReadIfAny => Store::open_read_only(path),
-        Access::WriteIfAny => Store::open(path),
         // Read-only unless this is the run that seeds: a check that writes
         // can wait seconds on a capture hook's lock.
         Access::Check if !seeds => {
@@ -824,7 +823,7 @@ fn open_store(cli: &Cli, access: Access) -> Result<Store, Box<dyn std::error::Er
             ensure_seeded(&store, cli.quiet)?;
             Ok(store)
         }
-        Access::Write => {
+        Access::Write | Access::WriteIfAny => {
             let store = Store::open(&path)?;
             // `seed` does its own.
             if seeds && !matches!(cli.command, Some(Command::Seed { .. })) {
@@ -1048,7 +1047,6 @@ fn dispatch_inner(
         }) => {
             let selves: std::collections::HashSet<String> =
                 selves.iter().map(|s| s.to_lowercase()).collect();
-            let mut seen = std::collections::HashSet::new();
             let texts: Vec<crate::process::Learned> = crate::ingest::parse(&read_stdin()?)?
                 .into_iter()
                 .filter(|r| !r.body.trim().is_empty())
@@ -1057,20 +1055,25 @@ fn dispatch_inner(
                     authored_by: r.authored_by(&selves),
                     body: r.body,
                 })
-                // Capture counted each distinct text once; so does this.
-                .filter(|t| seen.insert(crate::hook::content_key(t.register, &t.body)))
                 .collect();
             let report =
                 store.transaction(|| crate::process::unlearn(&store, &texts, !*dry_run))?;
             if report.unmatched > 0 && format == Format::Human && !cli.quiet {
                 eprintln!(
                     "vocab: {} of {} texts were not found as learned and took nothing — \
-                     under another register (-r, default {}), already taken back, someone \
-                     else's, or learned before vocab recorded what it learned?",
+                     learned under a register other than {} (-r), already taken back, \
+                     someone else's, or learned before vocab recorded what it learned?",
                     report.unmatched,
                     report.texts,
                     register.as_str()
                 );
+                if report.near_copies > 0 {
+                    eprintln!(
+                        "vocab: {} of them match a captured text only up to case, digits or \
+                         spacing; capture kept the first copy, so feed that one",
+                        report.near_copies
+                    );
+                }
             }
             if !cli.quiet {
                 output::render_unlearn(&mut out, &report, *dry_run, format)?;
