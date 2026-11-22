@@ -999,14 +999,25 @@ impl Store {
     }
 
     /// Record a handle the user named themselves. Naming one explicitly
-    /// overrides an earlier rejection.
+    /// overrides an earlier rejection. True only if it was not already
+    /// believed: the upsert touches a row either way.
     pub fn add_identity(&self, handle: &str) -> Result<bool> {
-        let changed = self.conn.execute(
+        let handle = handle.to_lowercase();
+        let believed = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM identities WHERE handle = ?1 AND denied = 0",
+                params![handle],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        self.conn.execute(
             "INSERT INTO identities (handle, source, denied) VALUES (?1, 'manual', 0)
              ON CONFLICT(handle) DO UPDATE SET denied = 0, source = 'manual'",
-            params![handle.to_lowercase()],
+            params![handle],
         )?;
-        Ok(changed > 0)
+        Ok(!believed)
     }
 
     /// Handles with the reason each is believed, for display.
@@ -1635,8 +1646,15 @@ mod tests {
     fn naming_a_handle_explicitly_overrides_an_earlier_rejection() {
         let s = store();
         s.remove_identity("dpep").unwrap();
-        s.add_identity("dpep").unwrap();
+        assert!(
+            s.add_identity("dpep").unwrap(),
+            "a rejected handle is added back"
+        );
         assert!(s.identities().unwrap().contains("dpep"));
+        // One already believed, detected or named, adds nothing.
+        s.add_identity_from("widgetdev", "git").unwrap();
+        assert!(!s.add_identity("WidgetDev").unwrap());
+        assert!(!s.add_identity("dpep").unwrap());
     }
 
     #[test]

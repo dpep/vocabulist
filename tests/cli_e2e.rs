@@ -731,6 +731,14 @@ fn self_rm_reports_only_handles_that_were_believed() {
     let one = vocab(&db, &["self", "--rm", "ghuser"]);
     assert_eq!(one.code, 0);
     assert!(one.stdout.contains("removed 1"), "{}", one.stdout);
+
+    // Adding reports only handles that were not already yours; naming a
+    // rejected one again believes it.
+    let back = vocab(&db, &["self", "ghuser", "otheruser"]);
+    assert!(back.stdout.contains("added 2"), "{}", back.stdout);
+    let again = vocab(&db, &["self", "GHUser"]);
+    assert_eq!(again.code, 0);
+    assert!(again.stdout.contains("added 0"), "{}", again.stdout);
 }
 
 #[test]

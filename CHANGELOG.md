@@ -29,8 +29,9 @@
   most given names out. Any name borne by one American in ten thousand,
   by the bundled US Census counts, now passes.
 <!-- /lane: names -->
-- `vocab self --rm` reports only handles that were believed, and exits 1
-  when it removed none, as `vocab rm` does.
+- `vocab self` and `vocab self --rm` report only handles they actually
+  added or removed (each said 1 regardless), and `--rm` exits 1 when it
+  removed none, as `vocab rm` does.
 - `vocab rm a b` removes each word; it had looked for the phrase `a b`.
   `--phrase` still joins its words into one phrase.
 - `vocab add` refuses an empty word or one with a space in it, and `vocab
