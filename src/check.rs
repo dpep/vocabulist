@@ -469,6 +469,18 @@ impl Checker {
         crate::dict::contains(names, word)
     }
 
+    /// Is `word`, typed capitalized, a name rather than a slip?
+    fn is_name_as_typed(&self, word: &str, starts_sentence: bool) -> bool {
+        // A name one American in ten thousand bears (`Owen`, `Barbara`) is
+        // meant, wherever it sits. Measured in PLAN §12j: the slips worth
+        // catching (`Mott`, `Thai`, `Tess`) all sit under 60 per million.
+        const COMMON_PERSON_SHARE: f64 = 100.0;
+        if crate::people::share(word).is_some_and(|s| s.people() >= COMMON_PERSON_SHARE) {
+            return true;
+        }
+        self.is_proper_name(word) && !(starts_sentence && self.name_shadows_a_common_word(word))
+    }
+
     /// Is this name one edit from a core word that's more common than it?
     ///
     /// Opening a sentence, capitals carry no evidence, so `Thai is here`
@@ -485,7 +497,6 @@ impl Checker {
         // SCOWL ranks almost every name 50; this keeps its few hundred
         // commonest out of the gate.
         const COMMON_NAME_LEVEL: u8 = 40;
-        const COMMON_PERSON_SHARE: f64 = 100.0;
         const MIN_LEN: usize = 4;
         let names = self.proper_names.get().expect("is_proper_name loaded it");
         let Some(name_level) = crate::dict::level(names, name) else {
@@ -493,12 +504,6 @@ impl Checker {
         };
         let query: Vec<char> = name.chars().collect();
         if name_level <= COMMON_NAME_LEVEL || query.len() < MIN_LEN {
-            return false;
-        }
-        // A name one American in ten thousand bears (`Owen`, `Mary`) is
-        // meant. Measured in PLAN §12j: the slips worth catching (`Mott`,
-        // `Thai`, `Tess`) all sit under 60 per million.
-        if crate::people::share(name).is_some_and(|s| s.people() >= COMMON_PERSON_SHARE) {
             return false;
         }
         let Some(dictionary) = self.dictionary() else {
@@ -650,8 +655,7 @@ impl Checker {
                 // A name, typed as one: `Latino` opening a sentence. Only
                 // capitalized, so a lowercase slip cannot hide behind a name.
                 if token.text.starts_with(|c: char| c.is_ascii_uppercase())
-                    && self.is_proper_name(word)
-                    && !(starts_sentence && self.name_shadows_a_common_word(word))
+                    && self.is_name_as_typed(word, starts_sentence)
                 {
                     self.profile.count("proper_names_accepted", 1);
                     continue;
@@ -1544,6 +1548,21 @@ mod tests {
         );
         let f = c.check_line_alone("Mott we ship it", 1, &mut no_evidence);
         assert_eq!(words(&f[0].suggestions), vec!["most"], "{f:?}");
+    }
+
+    #[test]
+    fn a_name_many_people_bear_is_a_name_though_no_word_list_holds_it() {
+        // SCOWL's given names sit beside product names, so the bundled list
+        // leaves them out; the Census is what knows `Barbara`.
+        let c = Checker::new(HashSet::new(), Some(common(&["barbarian", "is", "here"])))
+            .with_proper_names(crate::dict::from_words(["zblorgia"]));
+        assert!(
+            c.check_line_alone("Barbara is here", 1, &mut no_evidence)
+                .is_empty()
+        );
+        // Only typed as a name.
+        let f = c.check_line_alone("here is barbara", 1, &mut no_evidence);
+        assert_eq!(f.len(), 1, "{f:?}");
     }
 
     #[test]

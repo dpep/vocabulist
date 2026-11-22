@@ -103,6 +103,9 @@ Capture stages text in a `spool` table. Processing derives counts from it, and
 the row is then **deleted** — body and all. Nothing reads a processed row, so
 a tombstone would be unbounded growth for nothing; dedup of re-read messages
 lives in a separate `captured` table keyed by each message's own identifier.
+The delete is also the claim: it runs first, in the same transaction that
+applies the row's counts, and a row another drainer already took is skipped,
+so a Stop hook and a `vocab process` running together count each row once.
 
 This is a deliberate divergence from a general-purpose firehose, which retains
 blobs precisely so it can re-extract when parsers improve. That trade is right
@@ -157,8 +160,12 @@ they are trusted to know:
    transcript turn has a non-`human` origin before processing it. A prompt
    suggestion the user accepted with tab is recorded as `human` with
    `promptSource: suggestion_accepted`; the assistant wrote it, so it is
-   re-attributed to `assistant`. That reads an undocumented schema and fails
-   open, and it leaves a race: the Stop hook drains every session's spool,
+   re-attributed to `assistant`. It reads every transcript with the
+   session's id, under any project. That reads an undocumented schema and
+   fails open per line, so a bad byte costs one turn, not the session. It
+   needs the session's `CLAUDE_CONFIG_DIR` to find the transcript, so
+   `vocab process` warns (the hook stays silent) when a session has none.
+   It leaves a race: the Stop hook drains every session's spool,
    so another session's Stop can process a peer prompt in the moment
    between its capture and its transcript line being written.
 3. **Identical text counts once.** Every capture claims a key — a message id
@@ -190,10 +197,17 @@ When a leak is found, the text that leaked usually still exists — a
 notification is still in the transcript — even though the prose the store
 learned it from is gone. `prune --unlearn` takes that text on stdin and
 subtracts exactly what processing would have added, never below zero, where
-`rm --phrase` deletes a phrase the user also says. Nothing records which
-counts a given text added, so text that was never learned, or is fed twice,
-still takes from the phrases it shares with the user's: feed only what
-leaked, once, and read the dry run.
+`rm --phrase` deletes a phrase the user also says. It reads records as
+`ingest` does (register default, `author`, `--self`, the assistant marker),
+so each takes back only what its authorship let it teach — someone else's
+text just the documents its words appeared in. Documents are taken back
+too, newest first, since trust counts them: a word only the leak vouched for
+stops being trusted. A text that matches none of the per-register counts is
+reported and takes nothing, so a wrong register is a no-op rather than a
+partial subtraction. Nothing records which counts a given text added, so
+text that was never learned, or is fed twice, still takes from the phrases
+it shares with the user's: feed only what leaked, once, and read the dry
+run.
 
 ## 6. Registers
 
@@ -506,10 +520,15 @@ assistant's replies in the same sessions (~22k sentences):
 | sentence is a bare command | 0.065 | 0.010 |
 
 A bare command is recognized without a tagger: an imperative verb from a
-closed list, followed by a determiner, pronoun or particle (or nothing), so
-"fix the widget" counts and "test failures are down" does not. A question,
-a `Label:` and "let me check" (an announcement, unlike "let me know") are
-not commands. Requests and commands are the two halves of directness: one
+closed list, followed by a determiner or pronoun, or by a particle that is
+itself followed by one or by nothing, so "fix the widget" and "clean up the
+cache" count and "test failures are down", "push to main failed" and "set
+up is broken" do not. Prepositions are not followers: after a noun they are
+the norm. A question, a `Label:`, a quotation, "do" before anything but
+`it`/`this`/`that` (a question missing its mark), "let me check" (an
+announcement, unlike "let me know"), and a verb whose object is masked code
+or a URL are not commands, and neither is a one-word one: `Fix.` is a
+one-word sentence, which no sentence marker counts. Requests and commands are the two halves of directness: one
 asks, the other tells.
 
 Markers that came out level (contraction rate, first person singular,
@@ -941,12 +960,25 @@ where that closeness is evidence:
 
 SCOWL ranks nearly every name 50, so the level cut cannot tell `Turin` or
 `Owen` from `Kant`; the Census shares below now do. On the hunt's
-measure (`X is here.` for each bundled name) the gate flags 58 of 6,430
+measure (`X is here.` for each bundled name) the gate flags 53 of 6,416
 names, down from 105; it still catches `Thai`, `Tess`, `Quito`, `Principe`,
 `Hals`, `Mott` and `Tyre`, and gave up `Kant`, `Las` (first letter), `Hus`,
 `Ara` and `Ats` (short) to stay quiet on `Rome`, `Chile`, `Ali` and `Jill`.
 A name the document also uses mid-sentence, or one in the lexicon, still
 passes.
+
+That measure only ever covered the bundled names, and the bundled list
+holds almost no given names: SCOWL files them in `*-proper-names` beside
+`github` and `redis`, which `script/build-wordlist.sh` leaves out on purpose.
+So `Barbara`, `Kevin` and `Alice` never reached the gate; opening a sentence
+they were plain unknowns, and 438 of the 892 Census names borne by 300 or
+more per million were flagged as `X is here.`. The Census share now
+accepts a name on its own, before the bundled list is asked: at 100 per
+million and up a name passes wherever it sits, which flags 0 of those 892
+and leaves the bundled-name measure at 53 of 6,416 with every catch above
+intact. The cost is 28 Census names one edit from a commoner core word
+(`Witt`/`with`, `Tran`/`than`, `Shea`/`she`), the same trade the share
+already made for bundled names like `Owen`.
 
 ### Names people bear **[measured]**
 

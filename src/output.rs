@@ -287,8 +287,12 @@ pub fn render_unlearn(
             };
             writeln!(
                 out,
-                "{verb} {} phrase counts, {} word counts and {} style counts from {} texts",
-                report.phrase_counts, report.word_counts, report.voice_counts, report.texts
+                "{verb} {} phrase counts, {} word counts, {} word documents and {} style counts from {} texts",
+                report.phrase_counts,
+                report.word_counts,
+                report.word_sources,
+                report.voice_counts,
+                report.texts
             )?;
             if report.phrases_emptied > 0 || report.exemplars > 0 {
                 writeln!(
@@ -312,9 +316,11 @@ pub fn render_unlearn(
             out,
             &json!({
                 "texts": report.texts,
+                "unmatched": report.unmatched,
                 "phrase_counts": report.phrase_counts,
                 "phrases_emptied": report.phrases_emptied,
                 "word_counts": report.word_counts,
+                "word_sources": report.word_sources,
                 "voice_counts": report.voice_counts,
                 "exemplars": report.exemplars,
                 "sample": report.sample.iter().map(|(g, n)| json!({"phrase": g, "taken": n})).collect::<Vec<_>>(),
@@ -325,13 +331,8 @@ pub fn render_unlearn(
     }
 }
 
-/// A rate as shown: per sentence or message as a fraction, per word per
-/// thousand. Rounded where it is built, to what the counts support.
 fn voice_rate(rate: crate::voice::Rate, per: crate::voice::Per) -> Option<f64> {
-    (rate.opportunities > 0).then(|| {
-        let r = rate.count as f64 / rate.opportunities as f64 * per.scale();
-        (r * 1000.0).round() / 1000.0
-    })
+    rate.shown(per)
 }
 
 fn per_label(per: crate::voice::Per) -> &'static str {
@@ -359,7 +360,7 @@ pub fn render_voice_profile(
             // How many times the baseline's rate yours is, smoothed so a
             // marker one side never used is a large ratio, not infinity.
             let ratio = (b.opportunities > 0 && y.opportunities > 0)
-                .then(|| (y.smoothed() / b.smoothed() * 100.0).round() / 100.0);
+                .then(|| crate::voice::significant(y.smoothed() / b.smoothed(), 2));
             (m, y, b, ratio)
         })
         .collect();
@@ -389,9 +390,9 @@ pub fn render_voice_profile(
                 let Some(rate) = voice_rate(*y, m.per) else {
                     continue;
                 };
-                write!(out, "  {:<48} {rate:>7.3} {}", m.gloss, per_label(m.per))?;
+                write!(out, "  {:<48} {rate:>7} {}", m.gloss, per_label(m.per))?;
                 if let (Some(br), Some(ratio)) = (voice_rate(*b, m.per), ratio) {
-                    write!(out, "   assistant {br:.3}  x{ratio}")?;
+                    write!(out, "   assistant {br}  x{ratio}")?;
                 }
                 writeln!(out)?;
             }
@@ -428,8 +429,15 @@ pub fn render_voice_check(
     format: Format,
 ) -> std::io::Result<()> {
     let flagged: Vec<_> = scored.iter().filter(|d| crate::voice::departs(d)).collect();
+    // Every marker has words, sentences or messages as its denominator, so a
+    // draft with none of them was not checked at all.
+    let checked = !scored.is_empty();
     match format {
         Format::Human => {
+            if !checked {
+                writeln!(out, "no prose to check")?;
+                return Ok(());
+            }
             if flagged.is_empty() {
                 writeln!(out, "reads like your {} writing", register.as_str())?;
                 return Ok(());
@@ -448,9 +456,9 @@ pub fn render_voice_check(
             for d in flagged {
                 let draft = voice_rate(d.draft, d.per).unwrap_or(0.0);
                 let yours = voice_rate(d.yours, d.per).unwrap_or(0.0);
-                write!(out, "  {:<48} draft {draft:.3}  you {yours:.3}", d.gloss)?;
+                write!(out, "  {:<48} draft {draft}  you {yours}", d.gloss)?;
                 if let Some(b) = d.baseline.and_then(|b| voice_rate(b, d.per)) {
-                    write!(out, "  assistant {b:.3}")?;
+                    write!(out, "  assistant {b}")?;
                 }
                 writeln!(out, "   {} (evidence {})", per_label(d.per), d.evidence)?;
             }
@@ -482,6 +490,7 @@ pub fn render_voice_check(
                 &json!({
                     "register": register.as_str(),
                     "against": if against_baseline { "baseline" } else { "you" },
+                    "checked": checked,
                     "departures": flagged.len(),
                     "markers": scored.iter().map(row).collect::<Vec<_>>(),
                 }),
@@ -530,19 +539,22 @@ pub fn render_voice_describe(
                 total(text, "sentences"),
                 total(text, "words")
             )?;
+            if !rows.is_empty() && total(yours, "messages") == 0 {
+                writeln!(out, "no {} profile of yours yet", register.as_str())?;
+            }
             for (m, r, y, b) in &rows {
                 let rate = voice_rate(*r, m.per).unwrap_or(0.0);
                 let counted = format!("({}/{})", r.count, r.opportunities);
                 let mut line = format!(
-                    "  {:<50} {rate:>7.3} {:<15} {counted:<9}",
+                    "  {:<50} {rate:>7} {:<15} {counted:<9}",
                     m.gloss,
                     per_label(m.per)
                 );
                 if let Some(y) = y {
-                    line += &format!("  your {} {y:.3}", register.as_str());
+                    line += &format!("  your {} {y}", register.as_str());
                 }
                 if let Some(b) = b {
-                    line += &format!("  assistant {b:.3}");
+                    line += &format!("  assistant {b}");
                 }
                 writeln!(out, "{}", line.trim_end())?;
             }
@@ -573,6 +585,7 @@ pub fn render_voice_load(
     profiles: &std::collections::BTreeMap<&str, crate::voice::Counts>,
     author: &str,
     skipped: usize,
+    empty: usize,
     format: Format,
 ) -> std::io::Result<()> {
     let sentences = |c: &crate::voice::Counts| c.get("sentences").copied().unwrap_or(0);
@@ -588,6 +601,9 @@ pub fn render_voice_load(
             if skipped > 0 {
                 writeln!(out, "skipped {skipped} not written by you")?;
             }
+            if empty > 0 {
+                writeln!(out, "skipped {empty} with no prose")?;
+            }
             Ok(())
         }
         _ => emit(
@@ -595,6 +611,7 @@ pub fn render_voice_load(
             &json!({
                 "author": author,
                 "skipped": skipped,
+                "empty": empty,
                 "registers": profiles.iter().map(|(r, c)| json!({
                     "register": r,
                     "messages": c.get("messages").copied().unwrap_or(0),

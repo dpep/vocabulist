@@ -110,7 +110,8 @@ Text comes as an argument or on stdin. `-s` names the document it came
 from, and a source is captured once, so re-sending a document is harmless.
 
 `vocab ingest` bulk-loads JSON from stdin (NDJSON or an array of `{body,
-author?, register?, source?}`), for backfilling sent mail or old commits.
+author?, register?, source?}`), for backfilling sent mail or old commits. Like
+`capture`, it only stages text: run `vocab process` after it.
 
 Text is tracked per **register** — `prompt`, `slack`, `email`, `commit`, `pr`,
 `doc`, `code`, `speech`, `other` — the voice you write in for a given audience. Prompts
@@ -399,6 +400,12 @@ vocab analyze --lexicon        # vocabulary and readability of your corpus
 vocab templates                # boilerplate that got learned as your prose
 vocab prune --dry-run          # what an older, looser capture rule let in
 ```
+
+Text that should never have been learned — a colleague's message pasted as
+yours, a notification that arrived as a prompt — can be taken back:
+`vocab prune --unlearn` reads it in `ingest`'s shape and subtracts what it
+taught. Give the register it was captured under (`-r prompt`), and read
+`--dry-run` first.
 
 `status` reports what has actually been *read* and which spell checkers the
 lexicon is exported into, including how much of a shared file is ours:

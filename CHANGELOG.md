@@ -23,6 +23,11 @@
   `Luke` and `Seth` were flagged as `Marry`, `Own`, `Like` and `Set`. A name
   borne by one American in ten thousand now passes; rare ones (`Thai`,
   `Tess`, `Mott`) are still flagged.
+- **`Barbara`, `Kevin` and `Alice` opening a sentence are names too.**
+  Half of common first names were flagged there (`Barbara` as `barbarian`,
+  `Kevin` as `kelvin`), because the bundled list of proper names leaves
+  most given names out. Any name borne by one American in ten thousand,
+  by the bundled US Census counts, now passes.
 <!-- /lane: names -->
 - **A message another session sent is no longer learned as yours.** A
   plugin's notification (`inkling: … checks pending → success`) arrives as a
@@ -31,7 +36,16 @@
   transcript, which records who sent each turn, and keeps a peer's text out
   of your voice, and a prompt suggestion you accepted with tab counts as
   the assistant's, which wrote it. To take back what one already taught,
-  feed it to `vocab prune --unlearn`.
+  feed it to `vocab prune --unlearn -r prompt`, which subtracts its phrase,
+  word and style counts and the documents that vouched for its words. `vocab process` warns when it finds
+  no transcript for a session, which happens when `CLAUDE_CONFIG_DIR`
+  differs from the session's.
+- **Two drains at once no longer count the same text twice.** A `vocab
+  process` that overlapped the end-of-turn hook (or another `vocab
+  process`) counted every staged row in both, inflating word, phrase and
+  voice counts. Each row is now counted once. Counts already inflated this
+  way can't be told apart from real ones, so there is nothing to repair;
+  they dilute as new text arrives.
 
 ### Added
 

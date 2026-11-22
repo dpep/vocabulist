@@ -260,7 +260,7 @@ const IMPERATIVE_VERBS: &[&str] = &[
 ];
 /// What follows a verb used as a command. Without a tagger, "fix" before
 /// "the" is a verb and before "failures" may be a noun, so a command needs
-/// one of these, or nothing, after the verb.
+/// one of these after the verb.
 const COMMAND_OBJECTS: &[&str] = &[
     "the",
     "a",
@@ -288,20 +288,48 @@ const COMMAND_OBJECTS: &[&str] = &[
     "everything",
     "something",
     "again",
-    "up",
-    "out",
-    "down",
-    "back",
-    "off",
-    "on",
-    "in",
-    "over",
-    "away",
-    "to",
 ];
+/// Particles that make a phrasal command ("clean up the cache"), but also
+/// follow a noun spelled as two words ("set up is broken"), so they count
+/// only before an object or at the end. Prepositions (`on`, `in`, `to`) are
+/// left out: after a noun they are the norm ("update on the widget").
+const COMMAND_PARTICLES: &[&str] = &["up", "out", "down", "back", "off", "away"];
 /// Lead-ins a command can carry ("so just run it") without being softened.
 const COMMAND_FILLERS: &[&str] = &["so", "just", "and", "then", "now", "ok", "okay", "also"];
-const CONTRACTION_SUFFIXES: &[&str] = &["n't", "'s", "'re", "'ve", "'ll", "'d", "'m"];
+const CONTRACTION_SUFFIXES: &[&str] = &["n't", "'re", "'ve", "'ll", "'d", "'m"];
+/// What `'s` contracts after. Anywhere else it is a possessive: `widget's`.
+const S_CONTRACTS: &[&str] = &[
+    "it",
+    "that",
+    "what",
+    "there",
+    "here",
+    "he",
+    "she",
+    "who",
+    "where",
+    "how",
+    "let",
+    "when",
+    "why",
+    "everything",
+    "nothing",
+    "something",
+];
+/// What stands in for a span masked as non-prose (code, a URL, a path): a
+/// character no word contains, so a sentence led by code does not read as
+/// lowercase and the words either side of it are not adjacent.
+const MASKED: char = '\u{FFFC}';
+
+fn is_contraction(word: &str) -> bool {
+    if let Some(stem) = word.strip_suffix("'s") {
+        return S_CONTRACTS.contains(&stem);
+    }
+    CONTRACTION_SUFFIXES
+        .iter()
+        .filter_map(|s| word.strip_suffix(s))
+        .any(|stem| stem.chars().any(char::is_alphabetic))
+}
 
 fn starts_with_seq(words: &[String], seq: &[&str]) -> bool {
     words.len() >= seq.len() && words.iter().zip(seq).all(|(w, s)| w == s)
@@ -309,33 +337,46 @@ fn starts_with_seq(words: &[String], seq: &[&str]) -> bool {
 
 /// Whether a sentence is a bare command: an imperative verb, or `don't` and
 /// one, not asked as a question. "Please" or "can you" makes it a request.
-fn is_command(sentence: &str, words: &[String]) -> bool {
-    // A question asks; "Fix: the rename…" is a label.
-    if sentence.trim_end().ends_with('?')
-        || sentence
-            .split_whitespace()
+///
+/// Read only up to the first masked span: "see <url>, it works" has no
+/// object we can read, and joining across the gap would invent "see it".
+fn is_command(sentence: &str) -> bool {
+    let s = sentence.trim();
+    // A question asks; "Fix: the rename…" is a label; a quotation is
+    // someone's speech.
+    if s.ends_with('?')
+        || s.starts_with(['"', '\u{201C}', '\'', '\u{2018}'])
+        || s.split_whitespace()
             .next()
             .is_some_and(|w| w.ends_with(':'))
     {
         return false;
     }
-    let mut rest = words;
+    let words = words_of(s.split(MASKED).next().unwrap_or_default());
+    let mut rest = words.as_slice();
     while let [first, tail @ ..] = rest
         && COMMAND_FILLERS.contains(&first.as_str())
     {
         rest = tail;
     }
+    let object = |w: &String| COMMAND_OBJECTS.contains(&w.as_str());
     match rest {
         [neg, verb, ..] if neg == "don't" || neg == "never" => {
             IMPERATIVE_VERBS.contains(&verb.as_str())
         }
         // "Let me check" announces; only "let me know" asks something of you.
-        [verb, me, after, ..] if verb == "let" && me == "me" => after == "know",
-        [verb] => IMPERATIVE_VERBS.contains(&verb.as_str()),
-        [verb, next, ..] => {
-            IMPERATIVE_VERBS.contains(&verb.as_str()) && COMMAND_OBJECTS.contains(&next.as_str())
+        [verb, me, after @ ..] if verb == "let" && me == "me" => {
+            after.first().is_some_and(|w| w == "know")
         }
-        [] => false,
+        // "Do the tests pass" is a question without its mark.
+        [verb, next, ..] if verb == "do" => matches!(next.as_str(), "it" | "this" | "that"),
+        [verb, particle, after @ ..] if COMMAND_PARTICLES.contains(&particle.as_str()) => {
+            IMPERATIVE_VERBS.contains(&verb.as_str()) && after.first().is_none_or(object)
+        }
+        [verb, next, ..] => IMPERATIVE_VERBS.contains(&verb.as_str()) && object(next),
+        // One word after the fillers is a one-word sentence, which counts
+        // toward no sentence marker: "Just fix." no more than "Fix.".
+        _ => false,
     }
 }
 
@@ -380,7 +421,46 @@ fn prose_lines(text: &str) -> Vec<String> {
             Some((n, rest)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => rest,
             _ => t,
         };
-        out.push(text::mask_non_prose(&t.replace("**", "")));
+        out.push(join_initialisms(&masked(&t.replace("**", ""))));
+    }
+    out
+}
+
+/// `line` with each span [`text::mask_non_prose`] removes replaced by one
+/// [`MASKED`].
+fn masked(line: &str) -> String {
+    let mask = text::mask_non_prose(line);
+    let mut out = String::with_capacity(line.len());
+    for (orig, kept) in line.chars().zip(mask.chars()) {
+        if orig == kept {
+            out.push(orig);
+        } else if !out.ends_with(MASKED) {
+            out.push(MASKED);
+        }
+    }
+    out
+}
+
+/// `i.e.` and `e.g.` as one word each (`ie`, `eg`), so neither splits into
+/// sentences nor reads as a first-person `i`.
+fn join_initialisms(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let starts_word = i == 0 || !chars[i - 1].is_alphanumeric();
+        let mut j = i;
+        while chars.get(j).is_some_and(|c| c.is_alphabetic()) && chars.get(j + 1) == Some(&'.') {
+            j += 2;
+        }
+        let letters = (j - i) / 2;
+        if starts_word && letters >= 2 && chars.get(j).is_none_or(|c| !c.is_alphanumeric()) {
+            out.extend(chars[i..j].iter().step_by(2));
+            i = j;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
     }
     out
 }
@@ -420,10 +500,7 @@ pub fn measure(message: &str) -> Counts {
             bump(
                 &mut c,
                 "contraction",
-                words
-                    .iter()
-                    .filter(|w| CONTRACTION_SUFFIXES.iter().any(|s| w.ends_with(s)) && w.len() > 3)
-                    .count() as i64,
+                words.iter().filter(|w| is_contraction(w)).count() as i64,
             );
             bump(&mut c, "expanded", count_seqs(&words, EXPANDED));
             bump(
@@ -487,11 +564,8 @@ pub fn measure(message: &str) -> Counts {
             bump(
                 &mut c,
                 "lowercase_start",
-                i64::from(
-                    s.chars()
-                        .find(|ch| ch.is_alphabetic())
-                        .is_some_and(char::is_lowercase),
-                ),
+                // Led by code, a digit or a mark is not a lowercase start.
+                i64::from(s.chars().next().is_some_and(char::is_lowercase)),
             );
             bump(&mut c, "question", i64::from(s.ends_with('?')));
             bump(&mut c, "comma", s.matches(',').count() as i64);
@@ -544,7 +618,7 @@ pub fn measure(message: &str) -> Counts {
                         .count() as i64,
             );
             bump(&mut c, "long_sentence", i64::from(words.len() >= 20));
-            bump(&mut c, "command", i64::from(is_command(s, &words)));
+            bump(&mut c, "command", i64::from(is_command(s)));
         }
     }
 
@@ -583,6 +657,25 @@ impl Rate {
             count: counts.get(m.name).copied().unwrap_or(0),
             opportunities: counts.get(m.per.denominator()).copied().unwrap_or(0),
         }
+    }
+
+    /// The rate as shown: per sentence or message as a fraction, per word
+    /// per thousand. Rounded where it is built to the step one count moves
+    /// it, since a finer digit says nothing the counts do (2 in 11 is 180
+    /// per thousand, not 181.818), and to three significant figures.
+    pub fn shown(self, per: Per) -> Option<f64> {
+        (self.opportunities > 0).then(|| {
+            let n = self.opportunities as f64;
+            let rate = self.count as f64 / n * per.scale();
+            let place = (per.scale() / n).log10().floor() as i32;
+            let unit = 10f64.powi(place.abs());
+            let stepped = if place < 0 {
+                (rate * unit).round() / unit
+            } else {
+                (rate / unit).round() * unit
+            };
+            significant(stepped, 3)
+        })
     }
 
     /// The rate this profile expects (the posterior mean under the prior
@@ -706,8 +799,20 @@ pub struct Departure {
     pub toward_assistant: Option<f64>,
 }
 
-fn round2(x: f64) -> f64 {
-    (x * 100.0).round() / 100.0
+/// `x` to `digits` significant figures, and never `-0.0`, which reads as a
+/// direction where there is none.
+pub fn significant(x: f64, digits: i32) -> f64 {
+    if x == 0.0 || !x.is_finite() {
+        return if x.is_finite() { 0.0 } else { x };
+    }
+    let place = digits - 1 - x.abs().log10().floor() as i32;
+    let unit = 10f64.powi(place.abs());
+    let r = if place < 0 {
+        (x / unit).round() * unit
+    } else {
+        (x * unit).round() / unit
+    };
+    r + 0.0
 }
 
 /// Score a draft marker by marker against your profile, and the assistant
@@ -733,9 +838,12 @@ pub fn compare(draft: &Counts, yours: &Counts, baseline: Option<&Counts>) -> Vec
                 draft: d,
                 yours: y,
                 baseline: b,
-                evidence: round2(mine.surprise(d.count)),
+                evidence: significant(mine.surprise(d.count), 3),
                 toward_assistant: b.map(|b| {
-                    round2(b.predictive(d.opportunities).ln_pmf(d.count) - mine.ln_pmf(d.count))
+                    significant(
+                        b.predictive(d.opportunities).ln_pmf(d.count) - mine.ln_pmf(d.count),
+                        3,
+                    )
                 }),
             })
         })
@@ -839,6 +947,58 @@ mod tests {
         );
         assert_eq!(get(&not, "command"), 0);
         assert_eq!(get(&not, "request"), 1);
+
+        // A noun and a preposition, a question missing its mark, a quotation,
+        // an announcement, a verb whose object was masked, a one-word command.
+        for not in [
+            "Update on the widget is good.",
+            "Push to main failed.",
+            "Test in production fails.",
+            "Set up is broken again.",
+            "Do the tests pass",
+            "ok let me",
+            "see https://example.com/a, it works",
+            "\u{201C}Fix the widget,\u{201D} he said.",
+            "Just fix.",
+        ] {
+            assert_eq!(get(&measure(not), "command"), 0, "{not}");
+        }
+        for command in [
+            "Clean up the cache.",
+            "Do it again.",
+            "Check out the branch.",
+        ] {
+            assert_eq!(get(&measure(command), "command"), 1, "{command}");
+        }
+    }
+
+    #[test]
+    fn a_contraction_is_one_and_a_possessive_is_not() {
+        assert_eq!(
+            get(&measure("I'm sure I'd go, it's late"), "contraction"),
+            3
+        );
+        assert_eq!(
+            get(
+                &measure("the widget's color and the zblorg's"),
+                "contraction"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn a_sentence_led_by_code_or_a_digit_is_not_a_lowercase_start() {
+        let c = measure("`foo` is broken in the widget. 2 widgets are broken today.");
+        assert_eq!(get(&c, "sentences"), 2);
+        assert_eq!(get(&c, "lowercase_start"), 0);
+    }
+
+    #[test]
+    fn an_abbreviation_is_not_first_person() {
+        let c = measure("e.g. fix the widget. i.e. run it.");
+        assert_eq!(get(&c, "first_singular"), 0);
+        assert_eq!(get(&c, "sentences"), 2);
     }
 
     #[test]
@@ -919,6 +1079,24 @@ mod tests {
             colon(&thin),
             colon(&thick)
         );
+    }
+
+    #[test]
+    fn a_rate_shows_only_the_digits_its_counts_hold() {
+        let shown = |count, opportunities, per| {
+            Rate {
+                count,
+                opportunities,
+            }
+            .shown(per)
+        };
+        assert_eq!(shown(2, 11, Per::Word), Some(180.0));
+        assert_eq!(shown(40, 446, Per::Word), Some(90.0));
+        assert_eq!(shown(1, 3, Per::Sentence), Some(0.3));
+        assert_eq!(shown(1234, 5000, Per::Sentence), Some(0.247));
+        assert_eq!(shown(0, 0, Per::Sentence), None);
+        assert_eq!(significant(-0.0001, 3), -0.0001);
+        assert!(significant(-0.0, 3).is_sign_positive());
     }
 
     #[test]

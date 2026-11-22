@@ -950,7 +950,7 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
     );
     let dry = run(
         &db,
-        &["prune", "--unlearn", "--dry-run", "-j"],
+        &["prune", "--unlearn", "-r", "prompt", "--dry-run", "-j"],
         Some(&stdin),
     );
     assert_eq!(dry.code, 0, "{}", dry.stderr);
@@ -961,7 +961,11 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
     );
     assert_eq!(count("checks pending"), 2, "a dry run changes nothing");
 
-    run(&db, &["prune", "--unlearn", "-q"], Some(&stdin));
+    run(
+        &db,
+        &["prune", "--unlearn", "-r", "prompt", "-q"],
+        Some(&stdin),
+    );
     assert_eq!(count("checks pending"), 0);
     // The user's own use of a phrase the leak shared survives.
     assert_eq!(count("merged by"), 2);
@@ -969,7 +973,7 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
     // Asking for more than is there empties it, and goes no further.
     run(
         &db,
-        &["prune", "--unlearn", "-q"],
+        &["prune", "--unlearn", "-r", "prompt", "-q"],
         Some("{\"body\":\"merged by merged by merged by\"}"),
     );
     assert_eq!(count("merged by"), 0);
@@ -979,6 +983,57 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
         "no negative counts: {}",
         all.stdout
     );
+}
+
+#[test]
+fn unlearn_reads_records_as_ingest_does() {
+    let db = scratch_db("unlearn-ingest");
+    let mine = "{\"body\":\"run the widget suite again\",\"register\":\"prompt\"}\n";
+    let leak = "{\"body\":\"run the widget suite now\"}\n";
+    let bob = "{\"body\":\"run the widget suite later\",\"author\":\"bob\"}\n";
+    for input in [mine, leak, bob] {
+        run(&db, &["ingest", "-q"], Some(input));
+    }
+    vocab(&db, &["process", "-q"]);
+    let prompt_words = || {
+        let v: serde_json::Value =
+            serde_json::from_str(&vocab(&db, &["voice", "-r", "prompt", "-j"]).stdout).unwrap();
+        v["words"].as_i64().unwrap()
+    };
+    assert_eq!(prompt_words(), 5);
+
+    // No register means `other`, as ingest read it; bob's record, as ingest
+    // read it, taught your voice nothing to take back.
+    let out = run(
+        &db,
+        &["prune", "--unlearn", "-j"],
+        Some(&format!("{leak}{bob}")),
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(v["unmatched"], 0, "{}", out.stdout);
+    assert_eq!(prompt_words(), 5, "your prompts are untouched");
+    assert_eq!(
+        vocab(&db, &["voice", "-r", "other"]).code,
+        1,
+        "the leak's profile is gone"
+    );
+
+    // Under the wrong register nothing matches, and that is said.
+    let out = run(
+        &db,
+        &["prune", "--unlearn", "-j"],
+        Some("{\"body\":\"run the widget suite again\"}"),
+    );
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(v["unmatched"], 1, "{}", out.stdout);
+    let out = run(
+        &db,
+        &["prune", "--unlearn", "--dry-run"],
+        Some("{\"body\":\"run the widget suite again\"}"),
+    );
+    assert!(out.stderr.contains("matched nothing"), "{}", out.stderr);
+    assert_eq!(prompt_words(), 5);
 }
 
 #[test]
@@ -1112,13 +1167,56 @@ fn describe_measures_anyones_text_without_keeping_it() {
         .unwrap();
     assert_eq!(question["your_rate"], 1.0, "{question}");
 
-    // Nothing measurable is an empty result.
+    // Nothing measurable is an empty result; one word is not nothing.
     let empty = run(
         &db,
         &["voice", "--describe"],
         Some("```\nfn main() {}\n```"),
     );
     assert_eq!(empty.code, 1, "{}", empty.stdout);
+    assert_eq!(vocab(&db, &["voice", "--describe", "Thanks!"]).code, 0);
+
+    // A register with no profile says so rather than dropping the column.
+    let out = vocab(&db, &["voice", "--describe", "-r", "email", email]);
+    assert!(out.stdout.contains("no email profile"), "{}", out.stdout);
+}
+
+#[test]
+fn voice_says_when_there_was_nothing_to_check_or_load() {
+    let db = scratch_db("voice-empty");
+    let corpus = "{\"body\":\"should we ship it? maybe\"}\n".repeat(5);
+    run(&db, &["voice", "--load", "user", "-q"], Some(&corpus));
+
+    let code_only = "```\nfn main() {}\n```";
+    let out = vocab(&db, &["voice", code_only]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stdout.contains("no prose to check"), "{}", out.stdout);
+    let out = run(&db, &["voice", "--check", "-j"], Some(""));
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(v["checked"], false, "{}", out.stdout);
+
+    // A record with no prose leaves the profile it would have replaced.
+    let out = run(
+        &db,
+        &["voice", "--load", "user", "-j"],
+        Some(&format!(
+            "{{\"body\":\"{}\"}}",
+            code_only.replace('\n', "\\n")
+        )),
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(vocab(&db, &["voice"]).code, 0, "profile kept");
+    assert_eq!(run(&db, &["voice", "--load", "user"], Some("")).code, 2);
+
+    // `--file` names no input for a load, so it is refused, not ignored.
+    let file = db.with_file_name("draft.txt");
+    std::fs::write(&file, "should we").unwrap();
+    let out = run(
+        &db,
+        &["--file", file.to_str().unwrap(), "voice", "--load", "user"],
+        Some(&corpus),
+    );
+    assert_eq!(out.code, 2, "{}", out.stdout);
 }
 
 #[test]
@@ -2068,4 +2166,37 @@ fn sync_names_the_words_it_withdraws_and_why() {
         serde_json::json!([{"word": "zblorgish", "typo_of": "zblorgy"}])
     );
     assert_eq!(macos(&home)["withdrawn"], 0);
+}
+
+#[test]
+fn process_says_when_it_cannot_check_who_sent_a_prompt() {
+    let db = scratch_db("process_no_transcript");
+    let config = db.with_file_name("claude");
+    let vocab_in_config = |args: &[&str], stdin: Option<&str>| {
+        use std::io::Write;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_vocab"))
+            .arg("--db")
+            .arg(&db)
+            .args(args)
+            .env("CLAUDE_CONFIG_DIR", &config)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap_or("").as_bytes())
+            .unwrap();
+        String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned()
+    };
+    for prompt in ["we shipped the widget", "the widget is done"] {
+        let input = serde_json::json!({"prompt": prompt, "session_id": "gone"}).to_string();
+        vocab_in_config(&["hook", "user-prompt-submit"], Some(&input));
+    }
+
+    let stderr = vocab_in_config(&["process", "-q"], None);
+    assert_eq!(stderr.matches("no transcript").count(), 1, "{stderr}");
 }

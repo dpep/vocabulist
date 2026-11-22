@@ -41,6 +41,35 @@ pub struct Record {
     pub source: Option<String>,
 }
 
+impl Record {
+    /// The record's own register, else `default`. A name that is no register
+    /// falls back to `default` too.
+    pub fn register_or(&self, default: Register) -> Register {
+        self.register
+            .as_deref()
+            .and_then(Register::parse)
+            .unwrap_or(default)
+    }
+
+    /// Who wrote it, as the spool records it: `assistant` when it carries an
+    /// assistant's marker, else `user` when it has no author or one of
+    /// `selves`, else `other`. An absent author means the user, since that's
+    /// what unattributed capture has always meant.
+    pub fn authored_by(&self, selves: &HashSet<String>) -> &'static str {
+        if watermark::is_assistant_authored(&self.body) {
+            "assistant"
+        } else if self
+            .author
+            .as_ref()
+            .is_none_or(|a| selves.contains(&a.to_lowercase()))
+        {
+            "user"
+        } else {
+            "other"
+        }
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct IngestReport {
     pub ingested: usize,
@@ -85,29 +114,13 @@ pub fn run(
             report.skipped += 1;
             continue;
         }
-        let register = record
-            .register
-            .as_deref()
-            .and_then(Register::parse)
-            .unwrap_or(default_register);
-
-        // An author we don't recognize as the user is someone else's voice.
-        // An absent author means the user, since that's what unattributed
-        // capture has always meant.
-        let is_self = match &record.author {
-            None => true,
-            Some(a) => selves.contains(&a.to_lowercase()),
-        };
-
-        let authored_by = if watermark::is_assistant_authored(&record.body) {
-            report.assistant += 1;
-            "assistant"
-        } else if is_self {
-            "user"
-        } else {
-            report.others += 1;
-            "other"
-        };
+        let register = record.register_or(default_register);
+        let authored_by = record.authored_by(selves);
+        match authored_by {
+            "assistant" => report.assistant += 1,
+            "other" => report.others += 1,
+            _ => {}
+        }
 
         store.spool_with_author(
             register,

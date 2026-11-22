@@ -115,7 +115,8 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
             // uses the plugin — never the CLI — still gets a seeded lexicon
             // and, with it, the detected identities that read-capture needs.
             maybe_seed(store);
-            reconcile_spool(store);
+            // Silent: a hook's stderr reaches nobody, and the CLI says it.
+            let _ = reconcile_spool(store);
             let _ = crate::process::process_spool(store, STOP_PROCESS_LIMIT);
         }
         _ => {}
@@ -153,11 +154,12 @@ fn projects_root() -> Option<std::path::PathBuf> {
 }
 
 /// Re-attribute staged prompts nobody typed, against the transcripts in the
-/// usual place. Every path that drains the spool calls this first.
-pub fn reconcile_spool(store: &Store) {
-    if let Some(root) = projects_root() {
-        reconcile_origins(store, &root);
-    }
+/// usual place. Every path that drains the spool calls this first. Returns
+/// how many sessions had no transcript to check, whose prompts will be
+/// learned as typed.
+pub fn reconcile_spool(store: &Store) -> usize {
+    let root = projects_root().unwrap_or_default();
+    reconcile_origins(store, &root)
 }
 
 /// Re-attribute staged prompts that another session submitted.
@@ -168,10 +170,11 @@ pub fn reconcile_spool(store: &Store) {
 /// say: the turn is recorded with an `origin` whose kind is not `human`. That
 /// record is not there yet when the prompt hook runs, but it is by `Stop`, so
 /// this runs then, before the spool is processed. Undocumented schema, so it
-/// fails open: a transcript it cannot find or read changes nothing.
-fn reconcile_origins(store: &Store, projects: &std::path::Path) {
+/// fails open: a transcript it cannot find or read changes nothing. Returns
+/// how many sessions had no transcript.
+fn reconcile_origins(store: &Store, projects: &std::path::Path) -> usize {
     let Ok(pending) = store.pending_spool(STOP_PROCESS_LIMIT) else {
-        return;
+        return 0;
     };
     let mut by_session: std::collections::HashMap<&str, Vec<&crate::store::SpoolRow>> =
         std::collections::HashMap::new();
@@ -183,46 +186,57 @@ fn reconcile_origins(store: &Store, projects: &std::path::Path) {
             by_session.entry(session).or_default().push(row);
         }
     }
+    let mut missing = 0;
     for (session, rows) in by_session {
-        let foreign = foreign_prompts(projects, session);
+        let found = transcripts(projects, session);
+        missing += usize::from(found.is_empty());
+        let foreign = foreign_prompts(&found);
         for row in rows {
             if let Some(author) = foreign.get(&content_key(Register::Prompt, &row.body)) {
                 let _ = store.set_spool_author(row.id, author);
             }
         }
     }
+    missing
 }
 
-/// Content keys of every turn in a session's transcript that a person did
-/// not type, each with who wrote it: `assistant` for a suggestion the person
-/// accepted, `other` for anything another session sent.
-fn foreign_prompts(
-    projects: &std::path::Path,
-    session: &str,
-) -> std::collections::HashMap<String, &'static str> {
-    let mut keys = std::collections::HashMap::new();
-    // A session id names a file; anything else is not one of ours.
-    if session.is_empty()
-        || !session
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
-        return keys;
+/// Every transcript for a session. Usually one, but the id is all the spool
+/// recorded, and the same session can appear under more than one project.
+fn transcripts(projects: &std::path::Path, session: &str) -> Vec<std::path::PathBuf> {
+    // Any id that names a file directly inside a project dir, and nothing that
+    // could climb out of one.
+    if matches!(session, "" | "." | "..") || session.contains(['/', '\\']) {
+        return Vec::new();
     }
     let name = format!("{session}.jsonl");
     let Ok(dirs) = std::fs::read_dir(projects) else {
-        return keys;
+        return Vec::new();
     };
-    let Some(transcript) = dirs
-        .flatten()
+    dirs.flatten()
         .map(|d| d.path().join(&name))
-        .find(|p| p.is_file())
-    else {
-        return keys;
-    };
-    let Ok(text) = std::fs::read_to_string(transcript) else {
-        return keys;
-    };
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+/// Content keys of every turn in a session's transcripts that a person did
+/// not type, each with who wrote it: `assistant` for a suggestion the person
+/// accepted, `other` for anything another session sent.
+fn foreign_prompts(
+    transcripts: &[std::path::PathBuf],
+) -> std::collections::HashMap<String, &'static str> {
+    let mut keys = std::collections::HashMap::new();
+    for transcript in transcripts {
+        // Lossy, so a bad byte (say, a read that caught Claude mid-append)
+        // costs the line it is on rather than the whole session.
+        let Ok(bytes) = std::fs::read(transcript) else {
+            continue;
+        };
+        foreign_lines(&String::from_utf8_lossy(&bytes), &mut keys);
+    }
+    keys
+}
+
+fn foreign_lines(text: &str, keys: &mut std::collections::HashMap<String, &'static str>) {
     for line in text.lines() {
         // Most lines have no origin, and a typed prompt's is `human`; skip
         // parsing both. An accepted prompt suggestion is `human` too, but the
@@ -257,7 +271,6 @@ fn foreign_prompts(
             author,
         );
     }
-    keys
 }
 
 /// Envelope tags whose contents the harness injects into a prompt.
@@ -710,7 +723,77 @@ mod tests {
             ]
         );
         // A session id that is not a file name reads nothing.
-        assert!(foreign_prompts(&projects, "../etc").is_empty());
+        assert!(transcripts(&projects, "../etc").is_empty());
+        std::fs::remove_dir_all(&projects).unwrap();
+    }
+
+    fn peer_line(body: &str) -> String {
+        json!({"type": "user", "origin": {"kind": "peer"}, "message": {"content": body}})
+            .to_string()
+    }
+
+    fn projects_dir(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("vocab-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        p
+    }
+
+    #[test]
+    fn a_bad_byte_in_a_transcript_spoils_only_its_own_line() {
+        // A transcript read while Claude is mid-append can end in half a
+        // character; that must not hide the peer turns before it.
+        let projects = projects_dir("badutf");
+        std::fs::create_dir_all(projects.join("-repo")).unwrap();
+        let mut bytes = peer_line("the zblorg report").into_bytes();
+        bytes.extend_from_slice(b"\n\xff\xfe");
+        std::fs::write(projects.join("-repo/sess.jsonl"), bytes).unwrap();
+        let keys = foreign_prompts(&transcripts(&projects, "sess"));
+        assert!(keys.contains_key(&content_key(Register::Prompt, "the zblorg report")));
+        std::fs::remove_dir_all(&projects).unwrap();
+    }
+
+    #[test]
+    fn a_session_in_two_project_dirs_reads_both() {
+        let projects = projects_dir("twodirs");
+        for (dir, body) in [("-a", "first widget note"), ("-b", "second widget note")] {
+            std::fs::create_dir_all(projects.join(dir)).unwrap();
+            std::fs::write(projects.join(dir).join("sess.jsonl"), peer_line(body)).unwrap();
+        }
+        let keys = foreign_prompts(&transcripts(&projects, "sess"));
+        assert_eq!(keys.len(), 2);
+        std::fs::remove_dir_all(&projects).unwrap();
+    }
+
+    #[test]
+    fn any_session_id_that_stays_in_the_projects_dir_is_read() {
+        let projects = projects_dir("ids");
+        std::fs::create_dir_all(projects.join("-repo")).unwrap();
+        std::fs::write(projects.join("-repo/sess_1.a.jsonl"), peer_line("a widget")).unwrap();
+        assert_eq!(
+            foreign_prompts(&transcripts(&projects, "sess_1.a")).len(),
+            1
+        );
+        for id in ["", ".", "..", "../x", "a/b", "a\\b"] {
+            assert!(transcripts(&projects, id).is_empty(), "{id:?}");
+        }
+        std::fs::remove_dir_all(&projects).unwrap();
+    }
+
+    #[test]
+    fn reconcile_counts_the_sessions_it_could_not_check() {
+        let s = store();
+        let projects = projects_dir("missing");
+        std::fs::create_dir_all(projects.join("-repo")).unwrap();
+        std::fs::write(projects.join("-repo/here.jsonl"), peer_line("x")).unwrap();
+        for (session, prompt) in [
+            ("here", "a widget"),
+            ("gone", "b widget"),
+            ("gone", "c widget"),
+        ] {
+            s.spool(Register::Prompt, Some(session), prompt, "user")
+                .unwrap();
+        }
+        assert_eq!(reconcile_origins(&s, &projects), 1);
         std::fs::remove_dir_all(&projects).unwrap();
     }
 

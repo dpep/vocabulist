@@ -43,8 +43,8 @@ pub enum Unlearn<'a> {
     Word(&'a str),
     Prose(Register, &'a str),
     SentenceLength(Register, i64),
-    /// A style marker of the user's (voice.rs).
-    Voice(Register, &'a str),
+    /// A style marker, by register and author (voice.rs).
+    Voice(Register, &'a str, &'a str),
 }
 
 /// Per-connection settings, run on every writing open. WAL persists in the
@@ -923,14 +923,20 @@ impl Store {
         Ok(())
     }
 
-    /// Delete a spool row once its counts have landed. The counts survive; the
-    /// prose does not, and neither does the row — nothing ever reads a
-    /// processed row, so keeping a tombstone would be unbounded growth in
-    /// exchange for nothing.
-    pub fn retire_spool(&self, id: i64) -> Result<()> {
+    /// Delete a spool row so its counts can land, returning who wrote it as of
+    /// now, or `None` if another drainer already took it. Call it inside the
+    /// transaction that applies the counts. The counts survive; the prose
+    /// does not, and neither does the row — nothing ever reads a processed
+    /// row, so keeping a tombstone would be unbounded growth in exchange for
+    /// nothing.
+    pub fn claim_spool(&self, id: i64) -> Result<Option<String>> {
         self.conn
-            .execute("DELETE FROM spool WHERE id = ?1", params![id])?;
-        Ok(())
+            .query_row(
+                "DELETE FROM spool WHERE id = ?1 AND processed_at IS NULL RETURNING authored_by",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
     }
 
     /// Record an exemplar, evicting the weakest if the register is at cap.
@@ -1135,55 +1141,58 @@ impl Store {
     /// `table` and `key` are this module's own literals, never input. An
     /// n-gram row that reaches zero is deleted, since `ngrams` means seen.
     pub fn unlearn(&self, target: Unlearn<'_>, by: i64, apply: bool) -> Result<(i64, bool)> {
-        let (table, column, filter, a, b): (&str, &str, &str, String, String) = match target {
+        // `?1` is the amount; each target's own keys bind from `?2`.
+        let (table, column, filter, keys): (&str, &str, &str, Vec<String>) = match target {
             Unlearn::Gram(gram, register) => (
                 "ngrams",
                 "count",
                 "gram = ?2 AND register = ?3",
-                gram.to_string(),
-                register.as_str().to_string(),
+                vec![gram.to_string(), register.as_str().to_string()],
             ),
             Unlearn::WordIn(word, register) => (
                 "word_registers",
                 "count",
                 "word = ?2 AND register = ?3",
-                word.to_string(),
-                register.as_str().to_string(),
+                vec![word.to_string(), register.as_str().to_string()],
             ),
-            Unlearn::Word(word) => (
-                "lexicon",
-                "count",
-                "word = ?2 AND ?3 = ?3",
-                word.to_string(),
-                String::new(),
-            ),
+            Unlearn::Word(word) => ("lexicon", "count", "word = ?2", vec![word.to_string()]),
             Unlearn::Prose(register, metric) => (
                 "prose_stats",
                 "value",
-                "register = ?3 AND metric = ?2",
-                metric.to_string(),
-                register.as_str().to_string(),
+                "metric = ?2 AND register = ?3",
+                vec![metric.to_string(), register.as_str().to_string()],
             ),
-            Unlearn::Voice(register, marker) => (
+            Unlearn::Voice(register, author, marker) => (
                 "voice",
                 "count",
-                "register = ?3 AND marker = ?2 AND author = 'user'",
-                marker.to_string(),
-                register.as_str().to_string(),
+                "marker = ?2 AND register = ?3 AND author = ?4",
+                vec![
+                    marker.to_string(),
+                    register.as_str().to_string(),
+                    author.to_string(),
+                ],
             ),
             Unlearn::SentenceLength(register, length) => (
                 "sentence_lengths",
                 "count",
-                "register = ?3 AND length = ?2",
-                length.min(MAX_SENTENCE_BUCKET).to_string(),
-                register.as_str().to_string(),
+                "length = ?2 AND register = ?3",
+                vec![
+                    length.min(MAX_SENTENCE_BUCKET).to_string(),
+                    register.as_str().to_string(),
+                ],
             ),
         };
+        let bind = |by: i64| {
+            std::iter::once(rusqlite::types::Value::Integer(by))
+                .chain(keys.iter().cloned().map(rusqlite::types::Value::Text))
+                .collect::<Vec<_>>()
+        };
+        // The select binds `?1` too, so every target shares one parameter list.
         let have: i64 = self
             .conn
             .query_row(
                 &format!("SELECT {column} FROM {table} WHERE {filter} AND ?1 = ?1"),
-                params![by, a, b],
+                rusqlite::params_from_iter(bind(by)),
                 |r| r.get(0),
             )
             .optional()?
@@ -1192,16 +1201,33 @@ impl Store {
         if apply && taken > 0 {
             self.conn.execute(
                 &format!("UPDATE {table} SET {column} = {column} - ?1 WHERE {filter}"),
-                params![taken, a, b],
+                rusqlite::params_from_iter(bind(taken)),
             )?;
             if table == "ngrams" {
                 self.conn.execute(
                     "DELETE FROM ngrams WHERE count <= 0 AND gram = ?1 AND register = ?2",
-                    params![a, b],
+                    params![keys[0], keys[1]],
                 )?;
             }
         }
         Ok((taken, taken > 0 && taken == have))
+    }
+
+    /// Take up to `by` documents off a word's sources, newest first: which
+    /// rows a text added was never recorded, but trust reads only how many
+    /// there are. Returns how many were (or would be) taken.
+    pub fn unlearn_sources(&self, word: &str, by: i64, apply: bool) -> Result<i64> {
+        let have = self.source_count(word)?;
+        let taken = have.clamp(0, by.max(0));
+        if apply && taken > 0 {
+            self.conn.execute(
+                "DELETE FROM word_sources WHERE rowid IN (
+                     SELECT rowid FROM word_sources WHERE word = ?1
+                      ORDER BY first_seen DESC, rowid DESC LIMIT ?2)",
+                params![word, taken],
+            )?;
+        }
+        Ok(taken)
     }
 
     /// Drop an exemplar that is exactly this text.
@@ -1571,8 +1597,9 @@ mod tests {
             .spool(Register::Slack, Some("test"), "some private text", "user")
             .unwrap();
         assert_eq!(s.pending_spool(10).unwrap().len(), 1);
-        s.retire_spool(id).unwrap();
+        assert_eq!(s.claim_spool(id).unwrap().as_deref(), Some("user"));
         assert!(s.pending_spool(10).unwrap().is_empty());
+        assert_eq!(s.claim_spool(id).unwrap(), None);
 
         let remaining: i64 = s
             .conn

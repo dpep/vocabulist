@@ -6,6 +6,8 @@
 //! you — is applied here, once, so a new capture path cannot bypass it by
 //! forgetting to.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::ngram;
 use crate::store::Store;
 use crate::text;
@@ -15,32 +17,34 @@ use crate::watermark;
 /// Drain the spool into counts. Words, per-register frequencies, n-grams, and
 /// a bounded exemplar sample survive; the prose itself does not.
 pub fn process_spool(store: &Store, limit: usize) -> Result<usize, Box<dyn std::error::Error>> {
-    let pending = store.pending_spool(limit)?;
-    let mut processed = 0;
+    process_rows(store, store.pending_spool(limit)?)
+}
 
+fn process_rows(
+    store: &Store,
+    pending: Vec<crate::store::SpoolRow>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut processed = 0;
     for row in pending {
         // One transaction per row: the counts and the retirement land together
         // or not at all, so an interrupted run can't re-apply a row it already
-        // half-counted.
-        store.transaction(|| -> Result<(), Box<dyn std::error::Error>> {
-            process_one(
-                store,
-                row.id,
-                row.register,
-                &row.body,
-                &row.authored_by,
-                &row.doc,
-            )
+        // half-counted. The row is claimed inside it, because another drainer
+        // may have taken it, or re-attributed it, since the snapshot.
+        let counted = store.transaction(|| -> Result<bool, Box<dyn std::error::Error>> {
+            let Some(authored_by) = store.claim_spool(row.id)? else {
+                return Ok(false);
+            };
+            process_one(store, row.register, &row.body, &authored_by, &row.doc)?;
+            Ok(true)
         })?;
-        processed += 1;
+        processed += usize::from(counted);
     }
     Ok(processed)
 }
 
-/// Fold one spool row into counts and retire it. Called inside a transaction.
+/// Fold one claimed spool row into counts. Called inside a transaction.
 fn process_one(
     store: &Store,
-    id: i64,
     register: Register,
     body: &str,
     authored_by: &str,
@@ -85,7 +89,6 @@ fn process_one(
                 store.bump_register(&word, register, 1)?;
             }
         }
-        store.retire_spool(id)?;
         return Ok(());
     }
 
@@ -101,7 +104,6 @@ fn process_one(
             store.upsert_word(&word, &word, Provenance::Observed, 0)?;
             store.record_word_source(&word, doc)?;
         }
-        store.retire_spool(id)?;
         return Ok(());
     }
 
@@ -143,7 +145,6 @@ fn process_one(
     // deleted and none of this can be derived from word counts later.
     record_prose_shape(store, register, body)?;
     store.bump_voice(register, "user", &crate::voice::measure(body))?;
-    store.retire_spool(id)?;
     Ok(())
 }
 
@@ -257,11 +258,17 @@ fn record_prose_shape(
 #[derive(Debug, Default, PartialEq)]
 pub struct UnlearnReport {
     pub texts: usize,
+    /// Texts that matched nothing learned, so took nothing: never learned,
+    /// already taken back, or fed under the wrong register.
+    pub unmatched: usize,
     /// Phrase counts taken back, summed over phrases.
     pub phrase_counts: i64,
     /// Phrases whose count reached zero, so they are gone.
     pub phrases_emptied: usize,
     pub word_counts: i64,
+    /// Documents taken off the words they appeared in, which is what trust
+    /// counts.
+    pub word_sources: i64,
     /// Style marker counts taken back, including their denominators.
     pub voice_counts: i64,
     pub exemplars: usize,
@@ -269,118 +276,200 @@ pub struct UnlearnReport {
     pub sample: Vec<(String, i64)>,
 }
 
-/// Take back what processing learned from these texts, as if they had been
-/// written by someone else.
-///
-/// For a capture leak found after the fact: the prose is gone, but the text
-/// that leaked usually is not — a relayed notification is still in the
-/// transcript — so feeding it back here subtracts exactly its counts, where
-/// `rm --phrase` deletes a shared phrase like `merged by` outright.
-///
-/// Counts never go below zero, but nothing records which counts a text
-/// added, so text that was never learned — or is fed twice — still takes from
-/// the phrases it shares with yours. Feed only what leaked, once. Every
-/// phrase length is taken back, though longer ones were counted only once
-/// their prefix recurred; the floor absorbs that. Words
-/// stay in the lexicon (a word in a leaked line is still a word), as does the
-/// record of which documents a word appeared in.
-pub fn unlearn(
-    store: &Store,
-    texts: &[(Register, String)],
-    apply: bool,
-) -> Result<UnlearnReport, Box<dyn std::error::Error>> {
-    use crate::store::Unlearn;
-    use std::collections::HashMap;
+/// One text to take back, attributed as processing attributed it.
+pub struct Learned {
+    pub register: Register,
+    /// `user`, `assistant` or `other`, as [`crate::ingest::Record::authored_by`].
+    pub authored_by: &'static str,
+    pub body: String,
+}
 
-    let mut grams: HashMap<(String, Register), i64> = HashMap::new();
-    let mut words: HashMap<(String, Register), i64> = HashMap::new();
-    let mut exemplars = Vec::new();
-    let mut lengths: HashMap<(Register, i64), i64> = HashMap::new();
-    let mut prose: HashMap<(Register, &str), i64> = HashMap::new();
-    let mut voice: HashMap<Register, crate::voice::Counts> = HashMap::new();
+/// What processing added for some texts, keyed as the store keys it.
+#[derive(Default)]
+struct Tally {
+    grams: HashMap<(String, Register), i64>,
+    /// `word_registers`.
+    registers: HashMap<(String, Register), i64>,
+    /// `lexicon.count`, the written total.
+    counts: HashMap<String, i64>,
+    /// `word_sources` rows: one per document a word appeared in.
+    sources: HashMap<String, i64>,
+    exemplars: Vec<(Register, String)>,
+    lengths: HashMap<(Register, i64), i64>,
+    prose: HashMap<(Register, &'static str), i64>,
+    voice: HashMap<(Register, &'static str), crate::voice::Counts>,
+}
 
-    for (register, body) in texts {
-        let register = *register;
+impl Tally {
+    /// Mirrors [`process_one`], branch for branch.
+    fn add(&mut self, text: &Learned) {
+        let register = text.register;
+        let body = text.body.as_str();
+        *self.prose.entry((register, "documents")).or_default() += 1;
+        let distinct = |words: Vec<String>| words.into_iter().collect::<HashSet<_>>();
+
+        if register == Register::Speech {
+            if text.authored_by == "user" {
+                for word in body.lines().flat_map(text::prose_words) {
+                    *self.registers.entry((word, register)).or_default() += 1;
+                }
+            }
+            return;
+        }
+
+        if text.authored_by != "user" {
+            if text.authored_by == "assistant" {
+                let writing = watermark::without_markers(body);
+                crate::voice::add(
+                    self.voice.entry((register, "assistant")).or_default(),
+                    &crate::voice::measure(&writing),
+                );
+            }
+            for word in distinct(body.lines().flat_map(text::prose_words).collect()) {
+                *self.sources.entry(word).or_default() += 1;
+            }
+            return;
+        }
+
         let body = watermark::strip_trailer(body);
+        let mut seen = HashSet::new();
         for line in body.lines() {
             let Some(tokens) = text::prose_tokens(line) else {
                 continue;
             };
             for word in tokens.iter().filter(|w| text::is_lexical(w)) {
-                *words.entry((word.clone(), register)).or_default() += 1;
+                *self.registers.entry((word.clone(), register)).or_default() += 1;
+                *self.counts.entry(word.clone()).or_default() += 1;
+                seen.insert(word.clone());
             }
             for run in tokens.split(|t| !text::is_lexical(t)) {
                 for n in 2..=MAX_PHRASE.min(run.len()) {
                     for gram in ngram::ngrams(run, n) {
-                        *grams.entry((gram, register)).or_default() += 1;
+                        *self.grams.entry((gram, register)).or_default() += 1;
                     }
                 }
             }
             if tokens.len() >= 6 {
-                exemplars.push((
+                self.exemplars.push((
                     register,
                     text::normalize_typography(line).trim().to_string(),
                 ));
             }
         }
+        for word in seen {
+            *self.sources.entry(word).or_default() += 1;
+        }
         let (shape, word_total, syllables) = prose_shape(body);
         for length in &shape {
-            *lengths.entry((register, *length)).or_default() += 1;
+            *self.lengths.entry((register, *length)).or_default() += 1;
         }
-        *prose.entry((register, "sentences")).or_default() += shape.len() as i64;
-        *prose.entry((register, "words")).or_default() += word_total;
-        *prose.entry((register, "syllables")).or_default() += syllables;
-        *prose.entry((register, "documents")).or_default() += 1;
+        *self.prose.entry((register, "sentences")).or_default() += shape.len() as i64;
+        *self.prose.entry((register, "words")).or_default() += word_total;
+        *self.prose.entry((register, "syllables")).or_default() += syllables;
         crate::voice::add(
-            voice.entry(register).or_default(),
+            self.voice.entry((register, "user")).or_default(),
             &crate::voice::measure(body),
         );
     }
 
-    let mut report = UnlearnReport {
-        texts: texts.len(),
-        ..Default::default()
-    };
-    let mut lost: HashMap<String, i64> = HashMap::new();
-    for ((gram, register), by) in &grams {
-        let (taken, emptied) = store.unlearn(Unlearn::Gram(gram, *register), *by, apply)?;
-        if taken > 0 {
-            report.phrase_counts += taken;
-            *lost.entry(gram.clone()).or_default() += taken;
-            report.phrases_emptied += usize::from(emptied);
-        }
-    }
-    for ((word, register), by) in &words {
-        report.word_counts += store
-            .unlearn(Unlearn::WordIn(word, *register), *by, apply)?
-            .0;
-        // Speech never adds to the written total the veto weighs.
-        if *register != Register::Speech {
-            store.unlearn(Unlearn::Word(word), *by, apply)?;
-        }
-    }
-    for (register, line) in &exemplars {
-        report.exemplars += store.unlearn_exemplar(*register, line, apply)?;
-    }
-    for ((register, length), by) in &lengths {
-        store.unlearn(Unlearn::SentenceLength(*register, *length), *by, apply)?;
-    }
-    for ((register, metric), by) in &prose {
-        store.unlearn(Unlearn::Prose(*register, metric), *by, apply)?;
-    }
+    /// Take these counts back from the store, or only measure what would
+    /// go. Document counts are taken but not reported: every text has one.
+    fn take(
+        &self,
+        store: &Store,
+        apply: bool,
+    ) -> Result<UnlearnReport, Box<dyn std::error::Error>> {
+        use crate::store::Unlearn;
 
-    for (register, counts) in &voice {
-        for (marker, by) in counts {
-            report.voice_counts += store
-                .unlearn(Unlearn::Voice(*register, marker), *by, apply)?
+        let mut report = UnlearnReport::default();
+        let mut lost: HashMap<String, i64> = HashMap::new();
+        for ((gram, register), by) in &self.grams {
+            let (taken, emptied) = store.unlearn(Unlearn::Gram(gram, *register), *by, apply)?;
+            if taken > 0 {
+                report.phrase_counts += taken;
+                *lost.entry(gram.clone()).or_default() += taken;
+                report.phrases_emptied += usize::from(emptied);
+            }
+        }
+        for ((word, register), by) in &self.registers {
+            report.word_counts += store
+                .unlearn(Unlearn::WordIn(word, *register), *by, apply)?
                 .0;
         }
-    }
+        for (word, by) in &self.counts {
+            store.unlearn(Unlearn::Word(word), *by, apply)?;
+        }
+        for (word, by) in &self.sources {
+            report.word_sources += store.unlearn_sources(word, *by, apply)?;
+        }
+        for (register, line) in &self.exemplars {
+            report.exemplars += store.unlearn_exemplar(*register, line, apply)?;
+        }
+        for ((register, length), by) in &self.lengths {
+            store.unlearn(Unlearn::SentenceLength(*register, *length), *by, apply)?;
+        }
+        for ((register, metric), by) in &self.prose {
+            store.unlearn(Unlearn::Prose(*register, metric), *by, apply)?;
+        }
+        for ((register, author), counts) in &self.voice {
+            for (marker, by) in counts {
+                report.voice_counts += store
+                    .unlearn(Unlearn::Voice(*register, author, marker), *by, apply)?
+                    .0;
+            }
+        }
 
-    let mut sample: Vec<(String, i64)> = lost.into_iter().collect();
-    sample.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    sample.truncate(15);
-    report.sample = sample;
+        let mut sample: Vec<(String, i64)> = lost.into_iter().collect();
+        sample.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        sample.truncate(15);
+        report.sample = sample;
+        Ok(report)
+    }
+}
+
+/// Take back what processing learned from these texts.
+///
+/// For a capture leak found after the fact: the prose is gone, but the text
+/// that leaked usually is not — a relayed notification is still in the
+/// transcript — so feeding it back here subtracts exactly its counts, where
+/// `rm --phrase` deletes a shared phrase like `merged by` outright. Each text
+/// takes back what its authorship let it teach: your own text its voice and
+/// phrases, someone else's only the documents its words appeared in.
+///
+/// Counts never go below zero, but nothing records which counts a text
+/// added, so text that was never learned — or is fed twice — still takes from
+/// the phrases it shares with yours. Feed only what leaked, once. Every
+/// phrase length is taken back, though longer ones were counted only once
+/// their prefix recurred; the floor absorbs that. Words stay in the lexicon
+/// (a word in a leaked line is still a word), but lose the documents the
+/// text gave them, so a word only the leak vouched for is no longer trusted.
+pub fn unlearn(
+    store: &Store,
+    texts: &[Learned],
+    apply: bool,
+) -> Result<UnlearnReport, Box<dyn std::error::Error>> {
+    let mut all = Tally::default();
+    let mut unmatched = 0;
+    for text in texts {
+        let mut one = Tally::default();
+        one.add(text);
+        let would = one.take(store, false)?;
+        // Judged by the counts kept per register, since the usual miss is
+        // the wrong one. Someone else's text kept none to judge by.
+        let matched = text.authored_by == "other"
+            || would.phrase_counts + would.word_counts + would.voice_counts > 0;
+        // A text that matched nothing takes nothing, not even the counts
+        // kept across registers, so feeding it again under the right
+        // register is safe.
+        if matched {
+            all.add(text);
+        } else {
+            unmatched += 1;
+        }
+    }
+    let mut report = all.take(store, apply)?;
+    report.texts = texts.len();
+    report.unmatched = unmatched;
     Ok(report)
 }
 
@@ -414,6 +503,37 @@ mod tests {
                 .unwrap_or(0),
             0
         );
+    }
+
+    #[test]
+    fn a_row_another_drainer_took_is_not_counted_twice() {
+        // Two drainers (a Stop hook and `vocab process`) snapshot the same
+        // pending rows; only the first to reach a row may count it, and it
+        // counts it as attributed *now*, not as the stale snapshot says.
+        let path = std::env::temp_dir().join(format!("vocab-drain-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (a, b) = (Store::open(&path).unwrap(), Store::open(&path).unwrap());
+        a.spool(
+            Register::Slack,
+            None,
+            "ship the small focused change",
+            "user",
+        )
+        .unwrap();
+        let peer = a
+            .spool(Register::Prompt, Some("s"), "the zblorg widget", "user")
+            .unwrap();
+        let stale = a.pending_spool(10).unwrap();
+
+        b.set_spool_author(peer, "other").unwrap();
+        assert_eq!(process_spool(&b, 1).unwrap(), 1);
+        assert_eq!(process_rows(&a, stale).unwrap(), 1);
+
+        assert_eq!(a.ngram_count("small focused").unwrap(), 1);
+        assert_eq!(a.ngram_count("zblorg widget").unwrap(), 0);
+        assert!(a.pending_spool(10).unwrap().is_empty());
+        drop((a, b));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -629,7 +749,7 @@ mod tests {
         process_spool(&store, 10).unwrap();
         unlearn(
             &store,
-            &[(Register::Speech, "the widget works".into())],
+            &[learned(Register::Speech, "user", "the widget works")],
             true,
         )
         .unwrap();
@@ -641,5 +761,71 @@ mod tests {
             .map(|e| e.count)
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    fn learned(register: Register, authored_by: &'static str, body: &str) -> Learned {
+        Learned {
+            register,
+            authored_by,
+            body: body.into(),
+        }
+    }
+
+    fn trusted(store: &Store, word: &str) -> bool {
+        store.trust().unwrap().trusts(word, |_| false)
+    }
+
+    #[test]
+    fn unlearning_someone_elses_text_takes_back_only_what_it_corroborated() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .spool(Register::Prompt, None, "run the zblorg widget", "user")
+            .unwrap();
+        for _ in 0..2 {
+            store
+                .spool(Register::Prompt, None, "run the zblorg widget", "other")
+                .unwrap();
+        }
+        process_spool(&store, 10).unwrap();
+        assert!(trusted(&store, "zblorg"));
+        let before = store.voice(Register::Prompt, "user").unwrap();
+
+        let report = unlearn(
+            &store,
+            &[
+                learned(Register::Prompt, "other", "run the zblorg widget"),
+                learned(Register::Prompt, "other", "run the zblorg widget"),
+            ],
+            true,
+        )
+        .unwrap();
+        assert_eq!(report.phrase_counts, 0);
+        assert_eq!(report.word_counts, 0);
+        assert_eq!(report.voice_counts, 0);
+        assert_eq!(store.voice(Register::Prompt, "user").unwrap(), before);
+        assert_eq!(store.ngram_count("zblorg widget").unwrap(), 1);
+        // Your one document is all that vouches for it now.
+        assert_eq!(store.source_count("zblorg").unwrap(), 1);
+        assert!(!trusted(&store, "zblorg"));
+    }
+
+    #[test]
+    fn a_word_only_a_leak_taught_is_no_longer_trusted() {
+        let store = Store::open(":memory:").unwrap();
+        for body in ["widgetbot says zblorg", "widgetbot says quux"] {
+            store.spool(Register::Prompt, None, body, "user").unwrap();
+        }
+        process_spool(&store, 10).unwrap();
+        assert!(trusted(&store, "widgetbot"));
+
+        let texts = [
+            learned(Register::Prompt, "user", "widgetbot says zblorg"),
+            learned(Register::Prompt, "user", "widgetbot says quux"),
+        ];
+        let report = unlearn(&store, &texts, true).unwrap();
+        assert_eq!(report.unmatched, 0);
+        assert!(!trusted(&store, "widgetbot"));
+        // Taken back already, so a second pass matches nothing.
+        assert_eq!(unlearn(&store, &texts, false).unwrap().unmatched, 2);
     }
 }

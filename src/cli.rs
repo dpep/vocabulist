@@ -295,12 +295,20 @@ pub enum Command {
         #[arg(long)]
         strict: bool,
         /// Take back what these texts taught, read as JSON on stdin in
-        /// `vocab ingest`'s shape (`{body, register?}`). For a capture leak
-        /// found after the fact: subtracts exactly their phrase and word
-        /// counts, never below zero, where `rm --phrase` deletes a phrase
-        /// you also use.
+        /// `vocab ingest`'s shape (`{body, author?, register?}`) and
+        /// attributed as ingest attributes them. For a capture leak found
+        /// after the fact: subtracts exactly their counts, never below zero,
+        /// where `rm --phrase` deletes a phrase you also use. A prompt that
+        /// leaked needs `-r prompt`.
         #[arg(long, conflicts_with = "strict")]
         unlearn: bool,
+        /// With `--unlearn`: the register for records that don't name one,
+        /// as `vocab ingest` defaults it.
+        #[arg(short, long, default_value = "other", requires = "unlearn")]
+        register: Register,
+        /// With `--unlearn`: a handle that is you, as `vocab ingest --self`.
+        #[arg(long = "self", value_name = "HANDLE", requires = "unlearn")]
+        selves: Vec<String>,
     },
 
     /// Find boilerplate learned as prose — a repeated verbatim run of words
@@ -388,6 +396,19 @@ pub enum Command {
     /// (stdin), scores the draft against them and exits 1 on any marker
     /// that departs from yours. `--describe` measures anyone's text instead,
     /// with no verdict.
+    ///
+    /// The baseline is what the assistant drafted in that register: text
+    /// captured with an assistant's marker (a `Co-Authored-By` trailer) is
+    /// counted toward it automatically, and `--load assistant` replaces it
+    /// from a corpus. A marker's `evidence` is how surprising the draft's
+    /// count is for you, as -ln of its chance given your profile: it
+    /// departs at 4.6 (rarer than one in a hundred), and with a baseline
+    /// only when the assistant's profile explains it ten times better
+    /// (`toward_assistant` 2.3). So a draft that is merely more courteous
+    /// than you, but no more like the assistant, is not flagged.
+    ///
+    /// Words here are every word written, `I` and `a` included; `vocab
+    /// status` counts the words the lexicon learned, so it reads lower.
     Voice {
         /// A draft to check.
         text: Option<String>,
@@ -418,8 +439,9 @@ pub enum Command {
     /// Text attributed to someone else corroborates that a word is real but
     /// never shapes your voice.
     Ingest {
-        /// A handle that is you. Repeatable; matched case-insensitively.
-        /// Records with no author are treated as yours.
+        /// A handle that is you, for records whose `author` is you.
+        /// Repeatable; matched case-insensitively. Not needed for records
+        /// with no author: those are already yours.
         #[arg(long = "self", value_name = "HANDLE")]
         selves: Vec<String>,
         /// Register for records that don't name one.
@@ -621,7 +643,7 @@ impl Cli {
     fn reads_file(&self) -> bool {
         matches!(
             self.command,
-            None | Some(Command::Analyze { .. } | Command::Voice { .. })
+            None | Some(Command::Analyze { .. } | Command::Voice { load: None, .. })
         )
     }
 
@@ -951,28 +973,35 @@ fn dispatch_inner(
         Some(Command::Prune {
             dry_run,
             unlearn: true,
+            register,
+            selves,
             ..
         }) => {
+            let selves: std::collections::HashSet<String> =
+                selves.iter().map(|s| s.to_lowercase()).collect();
             let mut seen = std::collections::HashSet::new();
-            let texts: Vec<(crate::types::Register, String)> =
-                crate::ingest::parse(&read_stdin()?)?
-                    .into_iter()
-                    .filter(|r| !r.body.trim().is_empty())
-                    .map(|r| {
-                        let register = r
-                            .register
-                            .as_deref()
-                            .and_then(crate::types::Register::parse)
-                            .unwrap_or(crate::types::Register::Prompt);
-                        (register, r.body)
-                    })
-                    // Capture counted each distinct text once; so does this.
-                    .filter(|(register, body)| {
-                        seen.insert(crate::hook::content_key(*register, body))
-                    })
-                    .collect();
+            let texts: Vec<crate::process::Learned> = crate::ingest::parse(&read_stdin()?)?
+                .into_iter()
+                .filter(|r| !r.body.trim().is_empty())
+                .map(|r| crate::process::Learned {
+                    register: r.register_or(*register),
+                    authored_by: r.authored_by(&selves),
+                    body: r.body,
+                })
+                // Capture counted each distinct text once; so does this.
+                .filter(|t| seen.insert(crate::hook::content_key(t.register, &t.body)))
+                .collect();
             let report =
                 store.transaction(|| crate::process::unlearn(&store, &texts, !*dry_run))?;
+            if report.unmatched > 0 && format == Format::Human && !cli.quiet {
+                eprintln!(
+                    "vocab: {} of {} texts matched nothing learned — was it captured \
+                     under another register? (-r, default {})",
+                    report.unmatched,
+                    report.texts,
+                    register.as_str()
+                );
+            }
             if !cli.quiet {
                 output::render_unlearn(&mut out, &report, *dry_run, format)?;
             }
@@ -1040,7 +1069,13 @@ fn dispatch_inner(
         }
 
         Some(Command::Process { limit }) => {
-            crate::hook::reconcile_spool(&store);
+            let missing = crate::hook::reconcile_spool(&store);
+            if missing > 0 {
+                log::warn!(
+                    "no transcript found for {missing} session(s) (is CLAUDE_CONFIG_DIR set as it was \
+                     for them?); their prompts are learned as typed, peer messages included"
+                );
+            }
             let processed =
                 profile.time("process", || crate::process::process_spool(&store, *limit))?;
             if !cli.quiet {
@@ -1122,8 +1157,13 @@ fn dispatch_inner(
         }) => {
             let mut profiles: std::collections::BTreeMap<&str, crate::voice::Counts> =
                 std::collections::BTreeMap::new();
-            let mut skipped = 0;
-            for record in crate::ingest::parse(&read_stdin()?)? {
+            let (mut skipped, mut empty) = (0, 0);
+            let records = crate::ingest::parse(&read_stdin()?)?;
+            if records.is_empty() {
+                return Err("no records on stdin to load".into());
+            }
+            for record in records {
+                let register = record.register_or(*register);
                 // The authorship rule `ingest` applies: a record attributed
                 // to anyone, or carrying an assistant's marker, is not yours.
                 let body = match author {
@@ -1137,13 +1177,14 @@ fn dispatch_inner(
                     VoiceAuthor::User => record.body,
                     VoiceAuthor::Assistant => crate::watermark::without_markers(&record.body),
                 };
-                let register = record
-                    .register
-                    .as_deref()
-                    .and_then(Register::parse)
-                    .unwrap_or(*register);
-                let profile = profiles.entry(register.as_str()).or_default();
-                crate::voice::add(profile, &crate::voice::measure(&body));
+                // Only a register that measured something is replaced: a
+                // record of code alone must not wipe a profile.
+                let measured = crate::voice::measure(&body);
+                if measured.is_empty() {
+                    empty += 1;
+                    continue;
+                }
+                crate::voice::add(profiles.entry(register.as_str()).or_default(), &measured);
             }
             store.transaction(|| -> rusqlite::Result<()> {
                 for (register, counts) in &profiles {
@@ -1153,7 +1194,14 @@ fn dispatch_inner(
                 Ok(())
             })?;
             if !cli.quiet {
-                output::render_voice_load(&mut out, &profiles, author.as_str(), skipped, format)?;
+                output::render_voice_load(
+                    &mut out,
+                    &profiles,
+                    author.as_str(),
+                    skipped,
+                    empty,
+                    format,
+                )?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1182,7 +1230,7 @@ fn dispatch_inner(
                     )?;
                 }
                 // A query: a text with no prose to measure is an empty result.
-                let empty = measured.get("sentences").copied().unwrap_or(0) == 0;
+                let empty = measured.get("words").copied().unwrap_or(0) == 0;
                 return Ok(if empty {
                     ExitCode::from(1)
                 } else {
