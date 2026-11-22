@@ -722,6 +722,34 @@ fn rm_takes_each_word() {
 }
 
 #[test]
+fn rm_of_a_split_name_removes_the_person_not_their_first_name() {
+    let db = scratch_db("rm_person");
+    vocab(&db, &["self", "me@example.com"]);
+    vocab(&db, &["add", "mark"]);
+    let read = r#"{"session_id":"s","tool_name":"mcp__slack__slack_read_channel","tool_input":{},"tool_response":"From: Mark Smith <m@example.com> (ID: U1)\nMessage_ts: 1\nText: hello there widget\n---\n"}"#;
+    run(&db, &["hook", "post-tool-use"], Some(read));
+    assert_eq!(
+        vocab(&db, &["list", "mark smith"]).code,
+        0,
+        "person recorded"
+    );
+
+    let out = vocab(&db, &["rm", "mark", "smith"]);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    assert_eq!(vocab(&db, &["list", "mark smith"]).code, 1);
+    assert_eq!(vocab(&db, &["list", "mark"]).code, 0, "your word stays");
+}
+
+#[test]
+fn removing_from_no_lexicon_creates_none() {
+    let db = scratch_db("rm_missing");
+    let out = vocab(&db, &["rm", "zblorg"]);
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(!db.exists());
+    assert_eq!(vocab(&db, &["process", "--limit", "0"]).code, 2);
+}
+
+#[test]
 fn self_rm_reports_only_handles_that_were_believed() {
     let db = scratch_db("self_rm");
     vocab(&db, &["self", "ghuser"]);

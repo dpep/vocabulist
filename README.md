@@ -405,9 +405,10 @@ Text that should never have been learned — a colleague's message pasted as
 yours, a notification that arrived as a prompt — can be taken back:
 `vocab prune --unlearn` reads it in `ingest`'s shape and subtracts what it
 taught. Give the register it was captured under (`-r prompt`), and read
-`--dry-run` first. A text it can't find as learned takes nothing and is
-reported, and so does someone else's: their words only corroborated
-vocabulary, which can't be traced back to one message.
+`--dry-run` first. vocab records which of your texts it learned, so a text
+it never learned, or already took back, takes nothing and is reported; so
+does someone else's, whose words only corroborated vocabulary. Text learned
+before this version wasn't recorded and can't be taken back this way.
 
 `status` reports what has actually been *read* and which spell checkers the
 lexicon is exported into, including how much of a shared file is ours:

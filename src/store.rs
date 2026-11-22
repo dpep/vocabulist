@@ -24,7 +24,7 @@ pub const MAX_EXEMPLARS_PER_REGISTER: usize = 25;
 
 /// Schema version, stamped into `PRAGMA user_version`. Bump when the schema
 /// changes so an old database is recognizable rather than guessed at.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// How long an ordinary command waits on another process's write lock: long
 /// enough to sit out a seed or a spool run finishing.
@@ -177,6 +177,13 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE TABLE IF NOT EXISTS captured (
     source_key TEXT PRIMARY KEY,
     captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Content keys of your own texts as they were processed into counts. Nothing
+-- else records which counts a text added, so this is how `prune --unlearn`
+-- knows a text was learned at all, and takes it back once. A hash, no prose.
+CREATE TABLE IF NOT EXISTS learned (
+    key TEXT PRIMARY KEY
 );
 
 -- Typos the user confirmed by hand, and the word each one means. Only the
@@ -1052,6 +1059,33 @@ impl Store {
             .prepare("SELECT handle FROM identities WHERE denied = 0")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.collect()
+    }
+
+    /// Note that a text of yours, by content key, was processed into counts.
+    pub fn record_learned(&self, key: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO learned (key) VALUES (?1)",
+            params![key],
+        )?;
+        Ok(())
+    }
+
+    /// Whether a text was learned and not yet taken back; with `apply`, also
+    /// forget it, so the same text cannot be taken back twice.
+    pub fn take_learned(&self, key: &str, apply: bool) -> Result<bool> {
+        if apply {
+            return Ok(self
+                .conn
+                .execute("DELETE FROM learned WHERE key = ?1", params![key])?
+                > 0);
+        }
+        Ok(self
+            .conn
+            .query_row("SELECT 1 FROM learned WHERE key = ?1", params![key], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some())
     }
 
     /// Claim a message key. Returns false if it was already captured, which

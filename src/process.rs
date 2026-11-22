@@ -82,6 +82,9 @@ fn process_one(
     // real-word evidence, and homophones are exactly where a recognizer
     // picks the spelling. Sentence shape and exemplars are its punctuation,
     // not the user's (PLAN §6a).
+    if authored_by == "user" {
+        store.record_learned(&crate::hook::content_key(register, body))?;
+    }
     if register == Register::Speech {
         if authored_by == "user" {
             for word in body.lines().flat_map(text::prose_words) {
@@ -363,41 +366,6 @@ impl Tally {
         );
     }
 
-    /// Whether the store holds every trace this text would have left: each
-    /// of its word pairs (longer phrases were counted only once their prefix
-    /// recurred, so they prove nothing), else each of its words, in its
-    /// register. One shared pair like `the widget` is not evidence that this
-    /// text was learned; all of them is. Someone else's text left no trace
-    /// in any register, so it is never found.
-    fn learned(&self, store: &Store) -> Result<bool, Box<dyn std::error::Error>> {
-        use crate::store::Unlearn;
-        let held = |target: Unlearn<'_>, by: i64| -> rusqlite::Result<bool> {
-            Ok(store.unlearn(target, by, false)?.0 >= by)
-        };
-        let mut pairs = self
-            .grams
-            .iter()
-            .filter(|((gram, _), _)| gram.split(' ').count() == 2)
-            .peekable();
-        if pairs.peek().is_some() {
-            for ((gram, register), by) in pairs {
-                if !held(Unlearn::Gram(gram, *register), *by)? {
-                    return Ok(false);
-                }
-            }
-            return Ok(true);
-        }
-        if !self.registers.is_empty() {
-            for ((word, register), by) in &self.registers {
-                if !held(Unlearn::WordIn(word, *register), *by)? {
-                    return Ok(false);
-                }
-            }
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
     /// Take these counts back from the store, or only measure what would
     /// go. Document counts are taken but not reported: every text has one.
     fn take(
@@ -473,15 +441,14 @@ impl Tally {
 /// transcript — so feeding it back here subtracts exactly its counts, where
 /// `rm --phrase` deletes a shared phrase like `merged by` outright.
 ///
-/// Nothing records which counts a text added, so a text is taken back only
-/// when every trace it would have left is there (`Tally::learned`); one
-/// never learned, or fed under the wrong register, takes nothing. Someone
-/// else's text left no trace to find and is never taken back. A text fed
-/// twice can still take twice from phrases you also wrote: feed only what
-/// leaked, once. Words stay in the lexicon (a word in a leaked line is still
-/// a word); one the text leaves with no count of yours also loses the
-/// documents it gave, so a word only the leak vouched for is no longer
-/// trusted.
+/// Processing records each text of yours by content key, so a text is taken
+/// back only if it was learned, under that register, and only once; one
+/// never learned, fed under the wrong register, or learned before keys were
+/// recorded takes nothing and is reported. Someone else's text is never
+/// recorded and never taken back. Words stay in the lexicon (a word in a
+/// leaked line is still a word); one the text leaves with no count of yours
+/// also loses the documents it gave, so a word only the leak vouched for is
+/// no longer trusted.
 pub fn unlearn(
     store: &Store,
     texts: &[Learned],
@@ -489,13 +456,23 @@ pub fn unlearn(
 ) -> Result<UnlearnReport, Box<dyn std::error::Error>> {
     let mut all = Tally::default();
     let mut unmatched = 0;
+    let mut seen = HashSet::new();
     for text in texts {
-        let mut one = Tally::default();
-        one.add(text);
-        // A text not found takes nothing, not even the counts kept across
-        // registers, so feeding it again under the right register is safe.
-        if one.learned(store)? {
-            all.add(text);
+        // Keyed as processing keyed it, from the text capture would have
+        // spooled, so a transcript's copy of a leak finds it.
+        let body = crate::hook::as_captured(text.register, &text.body);
+        let key = crate::hook::content_key(text.register, &body);
+        // Someone else's text was never recorded, which documents it gave
+        // its words was never recorded either: taking one could take yours.
+        let found = text.authored_by == "user"
+            && seen.insert(key.clone())
+            && store.take_learned(&key, apply)?;
+        if found {
+            all.add(&Learned {
+                register: text.register,
+                authored_by: text.authored_by,
+                body,
+            });
         } else {
             unmatched += 1;
         }
@@ -859,6 +836,55 @@ mod tests {
         }
         assert_eq!(store.ngram_count("merged the").unwrap(), 3);
         assert!(trusted(&store, "zblorg"));
+
+        // Every pair of a short text you never wrote can still be yours:
+        // `merged the` and `the zblorg` are, and `the` alone is a word you use.
+        let before = store.voice(Register::Slack, "user").unwrap();
+        for body in ["merged the zblorg", "the"] {
+            let report = unlearn(&store, &[learned(Register::Slack, "user", body)], true).unwrap();
+            assert_eq!(report.unmatched, 1, "{body}");
+        }
+        assert_eq!(store.voice(Register::Slack, "user").unwrap(), before);
+    }
+
+    #[test]
+    fn a_leak_is_found_however_it_was_trimmed_since() {
+        let store = Store::open(":memory:").unwrap();
+        // What the hook spooled: the envelope stripped, the frame never seen.
+        let spooled = "widgetbot checks pending on the zblorg";
+        store
+            .spool(Register::Prompt, Some("s"), spooled, "user")
+            .unwrap();
+        store
+            .spool(
+                Register::Prompt,
+                Some("s"),
+                "ship the zblorg widget",
+                "user",
+            )
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        // A curation pass took one of its phrases since.
+        store.remove_ngram("checks pending").unwrap();
+
+        // The transcript's copy carries both, and is still the same text.
+        let transcript = format!(
+            "Another Claude session sent a message:\n{spooled}\n\
+             <system-reminder>harness text</system-reminder>"
+        );
+        let report = unlearn(
+            &store,
+            &[learned(Register::Prompt, "user", &transcript)],
+            true,
+        )
+        .unwrap();
+        assert_eq!(report.unmatched, 0);
+        assert_eq!(store.ngram_count("pending on").unwrap(), 0);
+        assert_eq!(store.ngram_count("the zblorg").unwrap(), 1);
+        // And only once.
+        let again = unlearn(&store, &[learned(Register::Prompt, "user", spooled)], true).unwrap();
+        assert_eq!(again.unmatched, 1);
+        assert_eq!(store.ngram_count("the zblorg").unwrap(), 1);
     }
 
     #[test]

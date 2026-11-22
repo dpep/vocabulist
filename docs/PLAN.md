@@ -199,20 +199,26 @@ learned it from is gone. `prune --unlearn` takes that text on stdin and
 subtracts exactly what processing would have added, never below zero, where
 `rm --phrase` deletes a phrase the user also says. It reads records as
 `ingest` does (register default, `author`, `--self`, the assistant marker).
-Nothing records which counts a given text added, so a text is taken back
-only when every trace it would have left is present in its register — each
-word pair, or each word for a text with none. A shared phrase like `the
-widget` is not evidence that this text was learned; all of its pairs are.
-A text not found is reported and takes nothing, so a wrong register or a
-never-learned text is a no-op rather than a partial subtraction from the
-user's phrases. Someone else's text left no per-register trace, only the
-documents its words appeared in, and which documents were never recorded,
-so it is reported and never taken back: taking the newest document could
-take one of the user's. For the user's own text, documents (what trust
-counts) are taken only from words it leaves with no count at all, so a word
-only the leak vouched for stops being trusted and no other word loses one.
-A text fed twice can still take twice from pairs the user also wrote: feed
-only what leaked, once, and read the dry run.
+
+Whether a text was learned is recorded, not inferred: processing writes each
+user text's content key (the capture dedupe hash, no prose) to `learned`
+(schema 10), and unlearn takes a text back only if its key is there, then
+deletes it. That makes a never-learned text, a wrong register, and a second
+feeding all exact no-ops, and it does not depend on the text's phrases still
+being present after `rm --phrase` or `templates --apply`. Two inference rules
+came first and each was broken by the next hunt: "some count matched" (a
+shared `the` matched everything) and "every word pair present" (any short
+text whose pairs the user also wrote passed). The input is keyed as capture
+would have spooled it — for a prompt, without the transcript's "sent a
+message" frame or the harness envelopes — so the transcript's copy of a leak
+finds it. Text learned before schema 10 has no key and cannot be taken back
+this way; `rm --phrase` remains for that.
+
+Someone else's text is never recorded and never taken back: which documents
+it gave its words was not recorded either, and taking the newest could take
+one of the user's. For the user's own text, documents (what trust counts) are
+taken only from words it leaves with no count at all, so a word only the leak
+vouched for stops being trusted and no other word loses one.
 
 ## 6. Registers
 

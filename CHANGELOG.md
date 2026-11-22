@@ -32,7 +32,9 @@
 - `vocab self` and `vocab self --rm` report only handles they actually
   added or removed (each said 1 regardless), and `--rm` exits 1 when it
   removed none, as `vocab rm` does.
-- `vocab rm a b` removes each word; it had looked for the phrase `a b`.
+- `vocab rm a b` removes each word, unless `a b` is one entry (a person's
+  name, which the shell split), and reports `removed N`. `rm` on a lexicon
+  that doesn't exist no longer creates one.
   `--phrase` still joins its words into one phrase.
 - `vocab add` refuses an empty word or one with a space in it, and `vocab
   self` an empty handle (exit 2); neither could ever match.
@@ -56,8 +58,9 @@
   of your voice, and a prompt suggestion you accepted with tab counts as
   the assistant's, which wrote it. To take back what one already taught,
   feed it to `vocab prune --unlearn -r prompt`, which subtracts its phrase,
-  word and style counts, and stops trusting a word only it vouched for. A
-  text it can't find as learned is reported and takes nothing. `vocab process` warns when it finds
+  word and style counts, and stops trusting a word only it vouched for. It
+  takes back only a text it recorded learning, once; text learned before
+  this version can't be taken back this way (use `vocab rm --phrase`). `vocab process` warns when it finds
   no transcript for a session, which happens when `CLAUDE_CONFIG_DIR`
   differs from the session's.
 - **Two drains at once no longer count the same text twice.** A `vocab
@@ -79,7 +82,7 @@
   assistant. `--load user|assistant` replaces a profile from a corpus on
   stdin. `--describe` measures anyone's text (an email, a colleague's
   message) beside your profile and the assistant's, with counts and no
-  verdict, and keeps nothing. The lexicon schema moves to version 9, so an older `vocab` will
+  verdict, and keeps nothing. The lexicon schema moves to version 10, so an older `vocab` will
   refuse it once this one has opened it: upgrade every copy you run.
 
 ### Changed

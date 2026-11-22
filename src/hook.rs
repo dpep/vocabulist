@@ -272,14 +272,9 @@ fn foreign_lines(text: &str, keys: &mut std::collections::HashMap<String, &'stat
         {
             continue;
         }
-        // The transcript frames the text the hook saw with one line of its own.
-        let bare = match body.split_once('\n') {
-            Some((first, rest)) if first.ends_with(':') && first.contains("sent a message") => rest,
-            _ => body,
-        };
         let author = if accepted { "assistant" } else { "other" };
         keys.insert(
-            content_key(Register::Prompt, strip_envelopes(bare).trim()),
+            content_key(Register::Prompt, &as_captured(Register::Prompt, body)),
             author,
         );
     }
@@ -336,6 +331,21 @@ fn strip_envelopes(prompt: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+/// A text as capture would have spooled it, from the copy a transcript
+/// keeps: a prompt loses the framing line the transcript adds to a peer's
+/// message and the harness envelopes the hook strips. Other registers are
+/// spooled as they arrive.
+pub(crate) fn as_captured(register: Register, raw: &str) -> String {
+    if register != Register::Prompt {
+        return raw.to_string();
+    }
+    let bare = match raw.split_once('\n') {
+        Some((first, rest)) if first.ends_with(':') && first.contains("sent a message") => rest,
+        _ => raw,
+    };
+    strip_envelopes(bare).trim().to_string()
 }
 
 /// The purest signal available: text the user typed themselves.

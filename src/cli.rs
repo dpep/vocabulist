@@ -298,10 +298,10 @@ pub enum Command {
         /// `vocab ingest`'s shape (`{body, author?, register?}`) and
         /// attributed as ingest attributes them. For a capture leak found
         /// after the fact: subtracts exactly their counts, never below zero,
-        /// where `rm --phrase` deletes a phrase you also use. A text is taken
-        /// back only if everything it would have taught is there; one not
-        /// found, or written by someone else, is reported and takes nothing.
-        /// A prompt that leaked needs `-r prompt`.
+        /// where `rm --phrase` deletes a phrase you also use. Only a text vocab
+        /// recorded learning is taken back, once; one it never learned, or
+        /// written by someone else, is reported and takes nothing. A prompt
+        /// that leaked needs `-r prompt`.
         #[arg(long, conflicts_with = "strict")]
         unlearn: bool,
         /// With `--unlearn`: the register for records that don't name one,
@@ -354,7 +354,7 @@ pub enum Command {
     },
     /// Fold staged text into counts, then drop the prose.
     Process {
-        #[arg(long, default_value_t = 500)]
+        #[arg(long, default_value_t = 500, value_parser = at_least_one())]
         limit: usize,
     },
     /// Export the lexicon into the spell checkers you already run.
@@ -537,6 +537,9 @@ enum Access {
     /// seeds it.
     Check,
     Write,
+    /// A removal, where a missing lexicon has nothing to remove and must
+    /// not be created to say so.
+    WriteIfAny,
 }
 
 /// A count of 0 would print an empty result that reads as "there are none".
@@ -611,6 +614,9 @@ impl Command {
                 scan_root: Some(root),
             } if !root.is_dir() => Access::None,
             Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
+            // `self --rm` still writes: a denial recorded before any seed is
+            // what keeps the seed from detecting that handle.
+            Command::Rm { .. } => Access::WriteIfAny,
             Command::Typos { words, rm: false } if words.is_empty() => Access::Read,
             Command::Shorthand { words, rm: false } if words.is_empty() => Access::Read,
             Command::Templates { apply: false, .. } => Access::Read,
@@ -622,7 +628,6 @@ impl Command {
             | Command::Prune { .. }
             | Command::Seed { .. }
             | Command::Add { .. }
-            | Command::Rm { .. }
             | Command::Capture { .. }
             | Command::Process { .. }
             | Command::Ingest { .. }
@@ -792,8 +797,9 @@ fn open_store(cli: &Cli, access: Access) -> Result<Store, Box<dyn std::error::Er
         // An empty stand-in, so no arm needs an Option it never reads.
         Access::None => Store::open(":memory:"),
         Access::Read => Store::open_read_only(path),
-        Access::ReadIfAny if path.exists() => Store::open_read_only(path),
-        Access::ReadIfAny => Store::open(":memory:"),
+        Access::ReadIfAny | Access::WriteIfAny if !path.exists() => Store::open(":memory:"),
+        Access::ReadIfAny => Store::open_read_only(path),
+        Access::WriteIfAny => Store::open(path),
         // Read-only unless this is the run that seeds: a check that writes
         // can wait seconds on a capture hook's lock.
         Access::Check if !seeds => {
@@ -904,11 +910,19 @@ fn dispatch_inner(
                     .join(" ");
                 usize::from(store.remove_ngram(&gram)? > 0)
             } else {
-                let mut removed = 0;
-                for w in word {
-                    removed += usize::from(store.remove(&text::normalize(w))?);
+                let words: Vec<String> = word.iter().map(|w| text::normalize(w)).collect();
+                // A person is one entry keyed with a space (`mark smith`), and
+                // the shell split it; taking each word would delete `mark`.
+                let joined = words.join(" ");
+                if words.len() > 1 && store.contains(&joined)? {
+                    usize::from(store.remove(&joined)?)
+                } else {
+                    let mut removed = 0;
+                    for w in &words {
+                        removed += usize::from(store.remove(w)?);
+                    }
+                    removed
                 }
-                removed
             };
             if !cli.quiet {
                 let msg = if removed > 0 {
@@ -1047,7 +1061,8 @@ fn dispatch_inner(
             if report.unmatched > 0 && format == Format::Human && !cli.quiet {
                 eprintln!(
                     "vocab: {} of {} texts were not found as learned and took nothing — \
-                     captured under another register (-r, default {}), or written by someone else?",
+                     under another register (-r, default {}), already taken back, someone \
+                     else's, or learned before vocab recorded what it learned?",
                     report.unmatched,
                     report.texts,
                     register.as_str()
