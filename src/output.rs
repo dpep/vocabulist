@@ -1056,30 +1056,29 @@ pub fn render_eval(
                 "  {:<22} {:>8}",
                 "false positives", report.false_positives
             )?;
-            writeln!(
-                out,
-                "  {:<22} {:>8.2}",
-                "  per 1k words", report.false_positive_rate
-            )?;
+            let per_1k = report
+                .false_positive_rate
+                .map_or("n/a".to_string(), |r| format!("{r:.2}"));
+            writeln!(out, "  {:<22} {:>8}", "  per 1k words", per_1k)?;
             writeln!(out)?;
-            writeln!(out, "  {:<22} {:>8.1}%", "recall", report.recall * 100.0)?;
+            writeln!(out, "  {:<22} {:>9}", "recall", percent(report.recall))?;
             writeln!(
                 out,
-                "  {:<22} {:>8.1}%",
+                "  {:<22} {:>9}",
                 "precision",
-                report.precision * 100.0
+                percent(report.precision)
             )?;
             writeln!(
                 out,
-                "  {:<22} {:>8.1}%",
+                "  {:<22} {:>9}",
                 "correction rate",
-                report.correction_rate * 100.0
+                percent(report.correction_rate)
             )?;
             writeln!(
                 out,
-                "  {:<22} {:>8.1}%",
+                "  {:<22} {:>9}",
                 "  right one first",
-                report.top1_rate * 100.0
+                percent(report.top1_rate)
             )?;
 
             if !report.by_kind.is_empty() {
@@ -1087,24 +1086,24 @@ pub fn render_eval(
                 for k in &report.by_kind {
                     writeln!(
                         out,
-                        "    {:<16} {:>4}/{:<4} {:>4.0}%   {:>4}/{:<4} {:>4.0}%",
+                        "    {:<16} {:>4}/{:<4} {:>4.0}%   {:>4}/{:<4} {:>5}",
                         k.kind,
                         k.caught,
                         k.injected,
                         k.recall * 100.0,
                         k.corrected_top1,
                         k.caught,
-                        k.top1_rate * 100.0
+                        whole_percent(k.top1_rate)
                     )?;
                 }
             }
             writeln!(out, "\n  --fix (fixed/injected, misfixed, false fixes):")?;
             writeln!(
                 out,
-                "    {:>4}/{:<4} {:>4.0}%   {:>4}   {:>4}",
+                "    {:>4}/{:<4} {:>5}   {:>4}   {:>4}",
                 report.fixed,
                 report.injected,
-                report.fix_rate * 100.0,
+                whole_percent(report.fix_rate),
                 report.misfixed,
                 report.false_fixes
             )?;
@@ -1122,6 +1121,15 @@ pub fn render_eval(
         Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(report).unwrap()),
         Format::Ndjson => writeln!(out, "{}", serde_json::to_string(report).unwrap()),
     }
+}
+
+/// A rate as a percentage, or `n/a` when there was nothing to divide by.
+fn percent(rate: Option<f64>) -> String {
+    rate.map_or("n/a".to_string(), |r| format!("{:.1}%", r * 100.0))
+}
+
+fn whole_percent(rate: Option<f64>) -> String {
+    rate.map_or("n/a".to_string(), |r| format!("{:.0}%", r * 100.0))
 }
 
 pub fn render_identities(

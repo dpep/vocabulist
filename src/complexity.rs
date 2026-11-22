@@ -15,6 +15,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::round;
+
 /// Word-level metrics, available from either a text or accumulated counts.
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
 pub struct Vocabulary {
@@ -80,15 +82,16 @@ pub fn from_counts(scope: &str, counts: &HashMap<String, u64>) -> Report {
         vocabulary: Vocabulary {
             tokens,
             types,
-            type_token_ratio: ratio(types, tokens),
+            // Rounded to the places `analyze` shows, so -j claims no more.
+            type_token_ratio: round(ratio(types, tokens), 3),
             guiraud_r: if tokens == 0 {
                 0.0
             } else {
-                types as f64 / (tokens as f64).sqrt()
+                round(types as f64 / (tokens as f64).sqrt(), 2)
             },
-            hapax_ratio: ratio(hapax, types),
-            mean_word_length: ratio(char_total, tokens),
-            long_word_ratio: ratio(long, tokens),
+            hapax_ratio: round(ratio(hapax, types), 3),
+            mean_word_length: round(ratio(char_total, tokens), 2),
+            long_word_ratio: round(ratio(long, tokens), 3),
         },
         readability: None,
     }
@@ -197,10 +200,13 @@ pub fn readability_from_totals(sentences: u64, words: u64, syllables: u64) -> Re
     let syllables_per_word = ratio(syllables, words);
     Readability {
         sentences,
-        mean_sentence_length: words_per_sentence,
+        mean_sentence_length: round(words_per_sentence, 2),
         sentence_length_stddev: 0.0,
-        mean_syllables_per_word: syllables_per_word,
-        flesch_reading_ease: 206.835 - 1.015 * words_per_sentence - 84.6 * syllables_per_word,
+        mean_syllables_per_word: round(syllables_per_word, 2),
+        flesch_reading_ease: round(
+            206.835 - 1.015 * words_per_sentence - 84.6 * syllables_per_word,
+            1,
+        ),
     }
 }
 
@@ -227,7 +233,7 @@ pub fn sentence_length_stddev(histogram: &[(i64, i64)]) -> f64 {
         })
         .sum::<f64>()
         / n as f64;
-    variance.sqrt()
+    round(variance.sqrt(), 2)
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -285,7 +291,7 @@ mod tests {
     fn hapax_ratio_counts_words_used_once() {
         let r = from_counts("test", &counts(&[("ship", 5), ("rare", 1), ("scarce", 1)]));
         // Two of three distinct words appear exactly once.
-        assert!((r.vocabulary.hapax_ratio - 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(r.vocabulary.hapax_ratio, 0.667);
     }
 
     #[test]

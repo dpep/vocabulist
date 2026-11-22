@@ -84,17 +84,32 @@ pub struct IngestReport {
 /// JSON array. Both shapes turn up in the wild — `gh --jq` emits lines,
 /// `gh --json` emits an array — so accepting both saves every adapter a
 /// conversion step.
-pub fn parse(input: &str) -> Result<Vec<Record>, serde_json::Error> {
-    let trimmed = input.trim_start();
-    if trimmed.starts_with('[') {
-        return serde_json::from_str(trimmed);
+///
+/// One bad record fails the whole parse, and the error names it: a partial
+/// load can't be re-run without counting the good records twice.
+pub fn parse(input: &str) -> Result<Vec<Record>, String> {
+    let input = input.strip_prefix('\u{FEFF}').unwrap_or(input);
+    if input.trim_start().starts_with('[') {
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(input).map_err(|e| e.to_string())?;
+        return values
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| serde_json::from_value(v).map_err(|e| format!("record {}: {e}", i + 1)))
+            .collect();
     }
     let mut out = Vec::new();
-    for line in input.lines() {
+    for (i, line) in input.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        out.push(serde_json::from_str(line)?);
+        out.push(serde_json::from_str(line).map_err(|e| {
+            // serde places it within the record, which is always line 1.
+            let message = e.to_string();
+            let within = format!(" at line {} column {}", e.line(), e.column());
+            let message = message.strip_suffix(&within).unwrap_or(&message);
+            format!("line {}, column {}: {message}", i + 1, e.column())
+        })?);
     }
     Ok(out)
 }
@@ -153,6 +168,23 @@ mod tests {
 
         let array = "[{\"body\":\"one\"},{\"body\":\"two\"}]";
         assert_eq!(parse(array).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_bad_record_is_named_by_its_place_in_the_input() {
+        let ndjson = "{\"body\":\"one\"}\n\n{body}\n";
+        let err = parse(ndjson).unwrap_err().to_string();
+        assert!(err.contains("line 3"), "{err}");
+
+        let array = "[{\"body\":\"one\"},{\"text\":\"two\"}]";
+        let err = parse(array).unwrap_err().to_string();
+        assert!(err.contains("record 2"), "{err}");
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_accepted() {
+        assert_eq!(parse("\u{FEFF}{\"body\":\"x\"}\n").unwrap().len(), 1);
+        assert_eq!(parse("\u{FEFF}[{\"body\":\"x\"}]").unwrap().len(), 1);
     }
 
     #[test]

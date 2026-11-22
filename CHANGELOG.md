@@ -29,6 +29,24 @@
   most given names out. Any name borne by one American in ten thousand,
   by the bundled US Census counts, now passes.
 <!-- /lane: names -->
+- `vocab self --rm` reports only handles that were believed, and exits 1
+  when it removed none, as `vocab rm` does.
+- `vocab rm a b` removes each word; it had looked for the phrase `a b`.
+  `--phrase` still joins its words into one phrase.
+- `vocab add` refuses an empty word or one with a space in it, and `vocab
+  self` an empty handle (exit 2); neither could ever match.
+- `vocab ingest` names the bad record (its line, or its place in an array)
+  and accepts input that starts with a byte order mark.
+- `vocab seed --scan-root` on a missing directory is an error (exit 2), not
+  "0 terms".
+- `vocab eval` shows `n/a`, and `null` in JSON, for a rate with nothing to
+  divide by, rather than 0.0%; `--rate 0` is refused.
+- `vocab analyze -j` rounds its numbers to the places the human output shows.
+- A byte order mark at the start of input no longer shifts first-line
+  columns by one.
+- `list --limit 0` and `phrases --limit 0` are refused rather than reporting
+  that there is nothing.
+- `vocab capture ""` says there was nothing to capture.
 - **A message another session sent is no longer learned as yours.** A
   plugin's notification (`inkling: … checks pending → success`) arrives as a
   prompt with nothing in it to say a person did not type it, and its status

@@ -1019,13 +1019,19 @@ impl Store {
     }
 
     /// Reject a handle. Recorded rather than deleted, so the next seed's
-    /// detection doesn't bring it back.
+    /// detection doesn't bring it back. True only if the handle was believed:
+    /// denying one never seen still records the denial, but removed nothing.
     pub fn remove_identity(&self, handle: &str) -> Result<bool> {
-        Ok(self.conn.execute(
-            "INSERT INTO identities (handle, source, denied) VALUES (?1, 'denied', 1)
-             ON CONFLICT(handle) DO UPDATE SET denied = 1",
-            params![handle.to_lowercase()],
-        )? > 0)
+        let handle = handle.to_lowercase();
+        let believed = self.conn.execute(
+            "UPDATE identities SET denied = 1 WHERE handle = ?1 AND denied = 0",
+            params![handle],
+        )? > 0;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO identities (handle, source, denied) VALUES (?1, 'denied', 1)",
+            params![handle],
+        )?;
+        Ok(believed)
     }
 
     /// Every handle that identifies the user, lowercased.

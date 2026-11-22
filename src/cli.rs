@@ -187,7 +187,7 @@ pub enum Command {
     },
     /// Remove a word from the lexicon.
     Rm {
-        /// The word, or with `--phrase`, the whole phrase.
+        /// Words to remove, or with `--phrase`, the words of one phrase.
         word: Vec<String>,
         /// Remove a phrase from the collocation tables instead of a word.
         ///
@@ -202,7 +202,7 @@ pub enum Command {
         filter: Option<String>,
         /// How many to show. Defaults to 50, or to all of them with
         /// `--trusted`.
-        #[arg(long)]
+        #[arg(long, value_parser = at_least_one())]
         limit: Option<usize>,
         /// Only words that have earned trust: a deliberate source, or two
         /// independent documents and not a habitual typo of a word you write
@@ -458,7 +458,7 @@ pub enum Command {
         #[arg(long)]
         corpus: Option<PathBuf>,
         /// Corrupt roughly one prose line in this many.
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 4, value_parser = at_least_one())]
         rate: usize,
         /// Seed, so a run is reproducible and two runs are comparable.
         #[arg(long, default_value_t = 1)]
@@ -483,7 +483,7 @@ pub enum Command {
         #[arg(short = 'n', long, value_name = "N", default_value_t = 2,
               value_parser = clap::value_parser!(u16).range(2..=5))]
         words: u16,
-        #[arg(long, default_value_t = 25)]
+        #[arg(long, default_value_t = 25, value_parser = at_least_one())]
         limit: usize,
     },
     /// Manage the handles that identify you — a GitHub login, a Slack user
@@ -539,6 +539,29 @@ enum Access {
     Write,
 }
 
+/// A count of 0 would print an empty result that reads as "there are none".
+fn at_least_one() -> clap::builder::RangedU64ValueParser<usize> {
+    clap::builder::RangedU64ValueParser::new().range(1..)
+}
+
+/// Why `args` can't be stored as entries, if one is blank.
+fn blank_argument(args: &[String], what: &str) -> Option<String> {
+    args.iter()
+        .any(|a| a.trim().is_empty())
+        .then(|| format!("an empty {what} is not one"))
+}
+
+/// Why `vocab add` can't take `words`: the checker reads one token at a time,
+/// so an entry with a space in it could never match anything.
+fn not_one_word(words: &[String]) -> Option<String> {
+    blank_argument(words, "word").or_else(|| {
+        words
+            .iter()
+            .find(|w| w.contains(char::is_whitespace))
+            .map(|w| format!("`{w}` is not one word: give each word as its own argument"))
+    })
+}
+
 impl Command {
     // Exhaustive on purpose: a new command has to choose.
     fn access(&self) -> Access {
@@ -580,6 +603,13 @@ impl Command {
             {
                 Access::None
             }
+            Command::Add { words } if not_one_word(words).is_some() => Access::None,
+            Command::Identity { handles, .. } if blank_argument(handles, "handle").is_some() => {
+                Access::None
+            }
+            Command::Seed {
+                scan_root: Some(root),
+            } if !root.is_dir() => Access::None,
             Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
             Command::Typos { words, rm: false } if words.is_empty() => Access::Read,
             Command::Shorthand { words, rm: false } if words.is_empty() => Access::Read,
@@ -810,6 +840,14 @@ fn dispatch_inner(
 
     match &cli.command {
         Some(Command::Seed { scan_root }) => {
+            if let Some(root) = scan_root.as_ref().filter(|r| !r.is_dir()) {
+                let why = if root.exists() {
+                    "not a directory"
+                } else {
+                    "no such directory"
+                };
+                return Err(format!("--scan-root {}: {why}", root.display()).into());
+            }
             let opts = match scan_root {
                 Some(root) => seed::SeedOptions {
                     scan_roots: vec![root.clone()],
@@ -825,6 +863,9 @@ fn dispatch_inner(
         }
 
         Some(Command::Add { words }) => {
+            if let Some(err) = not_one_word(words) {
+                return Err(err.into());
+            }
             let (mut added, mut upgraded) = (0, 0);
             for word in words {
                 let normalized = text::normalize(word);
@@ -861,15 +902,23 @@ fn dispatch_inner(
                     .map(|w| text::normalize(w))
                     .collect::<Vec<_>>()
                     .join(" ");
-                store.remove_ngram(&gram)? > 0
+                usize::from(store.remove_ngram(&gram)? > 0)
             } else {
-                store.remove(&text::normalize(&word.join(" ")))?
+                let mut removed = 0;
+                for w in word {
+                    removed += usize::from(store.remove(&text::normalize(w))?);
+                }
+                removed
             };
             if !cli.quiet {
-                let msg = if removed { "removed" } else { "not found" };
-                output::status(&mut out, msg, format)?;
+                let msg = if removed > 0 {
+                    format!("removed {removed}")
+                } else {
+                    "not found".to_string()
+                };
+                output::status(&mut out, &msg, format)?;
             }
-            Ok(if removed {
+            Ok(if removed > 0 {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -1041,7 +1090,12 @@ fn dispatch_inner(
                 Some(t) => t.clone(),
                 None => read_stdin()?,
             };
+            // A no-op like "already captured", not an error: a script feeding
+            // an empty transcript did nothing wrong.
             if body.trim().is_empty() {
+                if !cli.quiet {
+                    output::status(&mut out, "nothing to capture", format)?;
+                }
                 return Ok(ExitCode::SUCCESS);
             }
             // Assistant-authored text is staged with its authorship recorded,
@@ -1336,6 +1390,9 @@ fn dispatch_inner(
                     ExitCode::SUCCESS
                 });
             }
+            if let Some(err) = blank_argument(handles, "handle") {
+                return Err(err.into());
+            }
             let mut changed = 0;
             for handle in handles {
                 let hit = if *rm {
@@ -1349,7 +1406,12 @@ fn dispatch_inner(
                 let verb = if *rm { "removed" } else { "added" };
                 output::status(&mut out, &format!("{verb} {changed}"), format)?;
             }
-            Ok(ExitCode::SUCCESS)
+            // As `vocab rm`: removing nothing is an empty result.
+            Ok(if *rm && changed == 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
         }
 
         Some(Command::Hook { .. }) => unreachable!("hooks return before the store opens"),
@@ -1801,9 +1863,9 @@ fn check_input(
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut found = false;
-    for line in lines {
+    for (i, line) in lines.enumerate() {
         let line = line?;
-        let line = line.trim_end_matches(['\n', '\r']);
+        let line = without_bom(i, line.trim_end_matches(['\n', '\r'])).1;
         let batch = profile.time("check", || scanner.feed(line, &mut evidence));
         found |= !batch.is_empty();
         if streaming {
@@ -1832,6 +1894,15 @@ fn check_input(
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// A leading byte order mark split off the first line, so it is never read
+/// as text or counted as a column.
+fn without_bom(index: usize, line: &str) -> (&str, &str) {
+    match line.strip_prefix('\u{FEFF}') {
+        Some(rest) if index == 0 => (&line[..line.len() - rest.len()], rest),
+        _ => ("", line),
+    }
 }
 
 /// A whole file, or an error that says which one.
@@ -1898,10 +1969,11 @@ fn fix_input(
     let mut rewritten = String::new();
     let mut report: Vec<Rewrite> = Vec::new();
     let mut changed = false;
-    for raw in lines {
+    for (i, raw) in lines.enumerate() {
         let raw = raw?;
-        let body = raw.trim_end_matches(['\n', '\r']);
-        let ending = &raw[body.len()..];
+        let (bom, body) = without_bom(i, &raw);
+        let body = body.trim_end_matches(['\n', '\r']);
+        let ending = &raw[bom.len() + body.len()..];
         let findings = scanner.feed(body, &mut evidence);
         let mut wanted: Vec<Fix> = Vec::new();
         if cli.fix {
@@ -1929,11 +2001,12 @@ fn fix_input(
         }
         report.extend(line_report);
         if cli.in_place {
+            rewritten.push_str(bom);
             rewritten.push_str(&fixed);
             rewritten.push_str(ending);
         } else if !cli.quiet {
             // Written as each line is read, so a pipe sees it straight away.
-            write!(out, "{fixed}{ending}")?;
+            write!(out, "{bom}{fixed}{ending}")?;
             out.flush()?;
         }
     }

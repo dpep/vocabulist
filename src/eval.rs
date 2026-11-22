@@ -347,8 +347,8 @@ pub struct KindScore {
     pub corrected: usize,
     /// Of those caught, how many offered it *first*.
     pub corrected_top1: usize,
-    /// corrected_top1 / caught.
-    pub top1_rate: f64,
+    /// corrected_top1 / caught; null when none were caught.
+    pub top1_rate: Option<f64>,
 }
 
 /// Scores for one run.
@@ -375,15 +375,17 @@ pub struct EvalReport {
     pub false_positives: usize,
     /// False positives per thousand words — comparable across corpora, which
     /// precision is not.
-    pub false_positive_rate: f64,
+    ///
+    /// Each rate is null when its denominator is 0: no evidence is not 0%.
+    pub false_positive_rate: Option<f64>,
     /// caught / injected.
-    pub recall: f64,
+    pub recall: Option<f64>,
     /// caught / findings.
-    pub precision: f64,
+    pub precision: Option<f64>,
     /// corrected / caught — a flag with the wrong fix is only half a catch.
-    pub correction_rate: f64,
+    pub correction_rate: Option<f64>,
     /// corrected_top1 / caught — the fix someone actually applies.
-    pub top1_rate: f64,
+    pub top1_rate: Option<f64>,
     /// Per error kind — which classes of damage the checker actually sees.
     pub by_kind: Vec<KindScore>,
     /// A sample of false positives, for reading rather than counting.
@@ -395,7 +397,7 @@ pub struct EvalReport {
     /// Rewrites of words nobody corrupted: the number `--fix` must keep at 0.
     pub false_fixes: usize,
     /// fixed / injected.
-    pub fix_rate: f64,
+    pub fix_rate: Option<f64>,
     /// Every misfix and false fix, as `line:col from -> to`.
     pub wrong_fixes: Vec<String>,
 }
@@ -492,7 +494,8 @@ pub fn score(
             kind: kind.as_str().to_string(),
             injected: of_kind.len(),
             caught,
-            recall: ratio(caught, of_kind.len()),
+            // Never empty: the kind was skipped above.
+            recall: ratio(caught, of_kind.len()).unwrap_or(0.0),
             corrected: of_kind.iter().filter(|o| o.corrected).count(),
             corrected_top1,
             top1_rate: ratio(corrected_top1, caught),
@@ -502,11 +505,8 @@ pub fn score(
     // Per thousand words rather than per finding, because precision moves
     // with the injection rate and this doesn't. It's also the quantity a user
     // actually feels: interruptions per page of prose.
-    report.false_positive_rate = if words == 0 {
-        0.0
-    } else {
-        report.false_positives as f64 * 1000.0 / words as f64
-    };
+    report.false_positive_rate =
+        (words > 0).then(|| report.false_positives as f64 * 1000.0 / words as f64);
     report.recall = ratio(report.caught, report.injected);
     report.precision = ratio(report.caught, report.findings);
     report.correction_rate = ratio(report.corrected, report.caught);
@@ -539,8 +539,8 @@ pub fn score_fixes(report: &mut EvalReport, fixes: &[Fix], injections: &[Injecti
     report.fix_rate = ratio(report.fixed, report.injected);
 }
 
-fn ratio(a: usize, b: usize) -> f64 {
-    if b == 0 { 0.0 } else { a as f64 / b as f64 }
+fn ratio(a: usize, b: usize) -> Option<f64> {
+    (b > 0).then(|| a as f64 / b as f64)
 }
 
 #[cfg(test)]
@@ -642,8 +642,8 @@ mod tests {
         assert_eq!(report.caught, 1);
         assert_eq!(report.corrected, 1);
         assert_eq!(report.false_positives, 1);
-        assert_eq!(report.recall, 1.0);
-        assert_eq!(report.precision, 0.5);
+        assert_eq!(report.recall, Some(1.0));
+        assert_eq!(report.precision, Some(0.5));
     }
 
     #[test]
@@ -706,8 +706,8 @@ mod tests {
         let report = score(&findings, &injections, 1, 10);
         // The distinction the whole metric exists for: a reranking change
         // moves this one number and leaves correction_rate flat.
-        assert_eq!(report.correction_rate, 1.0);
-        assert_eq!(report.top1_rate, 0.0);
+        assert_eq!(report.correction_rate, Some(1.0));
+        assert_eq!(report.top1_rate, Some(0.0));
         assert_eq!(report.by_kind[0].corrected, 1);
         assert_eq!(report.by_kind[0].corrected_top1, 0);
     }
@@ -734,7 +734,7 @@ mod tests {
         let report = score(&findings, &injections, 1, 10);
         assert_eq!(report.caught, 1);
         assert_eq!(report.corrected, 0);
-        assert_eq!(report.correction_rate, 0.0);
+        assert_eq!(report.correction_rate, Some(0.0));
     }
 
     #[test]
@@ -771,14 +771,15 @@ mod tests {
             (report.fixed, report.misfixed, report.false_fixes),
             (1, 1, 1)
         );
-        assert_eq!(report.fix_rate, 0.5);
+        assert_eq!(report.fix_rate, Some(0.5));
         assert_eq!(report.wrong_fixes.len(), 2);
     }
 
     #[test]
     fn an_empty_run_does_not_divide_by_zero() {
         let report = score(&[], &[], 0, 0);
-        assert_eq!(report.recall, 0.0);
-        assert_eq!(report.precision, 0.0);
+        assert_eq!(report.recall, None);
+        assert_eq!(report.precision, None);
+        assert_eq!(report.top1_rate, None);
     }
 }

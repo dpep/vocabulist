@@ -712,6 +712,88 @@ fn removing_a_missing_word_exits_nonzero() {
 }
 
 #[test]
+fn rm_takes_each_word() {
+    let db = scratch_db("rm_each");
+    vocab(&db, &["add", "zblorg", "widgetry"]);
+    let out = vocab(&db, &["rm", "zblorg", "widgetry"]);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    assert_eq!(vocab(&db, &["list", "zblorg"]).code, 1);
+    assert_eq!(vocab(&db, &["list", "widgetry"]).code, 1);
+}
+
+#[test]
+fn self_rm_reports_only_handles_that_were_believed() {
+    let db = scratch_db("self_rm");
+    vocab(&db, &["self", "ghuser"]);
+    let none = vocab(&db, &["self", "--rm", "nosuch"]);
+    assert_eq!(none.code, 1, "{}", none.stdout);
+    assert!(none.stdout.contains("removed 0"), "{}", none.stdout);
+    let one = vocab(&db, &["self", "--rm", "ghuser"]);
+    assert_eq!(one.code, 0);
+    assert!(one.stdout.contains("removed 1"), "{}", one.stdout);
+}
+
+#[test]
+fn seed_names_a_scan_root_that_is_not_there() {
+    let db = scratch_db("seed_missing_root");
+    let out = vocab(&db, &["seed", "--scan-root", "/nonexistent/vocab-e2e"]);
+    assert_eq!(out.code, 2);
+    assert!(
+        out.stderr.contains("/nonexistent/vocab-e2e"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn capturing_nothing_says_so() {
+    let db = scratch_db("capture_empty");
+    let out = vocab(&db, &["capture", "", "-j"]);
+    assert_eq!(out.code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&out.stdout).expect("json");
+    assert!(
+        parsed["status"].as_str().unwrap().contains("nothing"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_byte_order_mark_is_not_a_column() {
+    let db = scratch_db("bom");
+    let out = run(&db, &["-J"], Some("\u{FEFF}I dont\n"));
+    let finding: serde_json::Value = serde_json::from_str(out.stdout.trim()).unwrap();
+    assert_eq!(finding["col"], 3, "{}", out.stdout);
+
+    // --fix keeps the mark, and reports the same column.
+    let fixed = run(&db, &["--fix", "-J"], Some("\u{FEFF}I dont\n"));
+    assert_eq!(fixed.stdout, "\u{FEFF}I don't\n");
+    let rewrite: serde_json::Value = serde_json::from_str(fixed.stderr.trim()).unwrap();
+    assert_eq!(rewrite["col"], 3, "{}", fixed.stderr);
+}
+
+#[test]
+fn analyze_json_is_rounded_where_built() {
+    let db = scratch_db("analyze_round");
+    let out = vocab(
+        &db,
+        &["analyze", "-j", "The cat sat. A widget ran far away today."],
+    );
+    fn walk(v: &serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => m.values().for_each(walk),
+            serde_json::Value::Number(n) if n.is_f64() => {
+                let text = n.to_string();
+                let decimals = text.split('.').nth(1).map_or(0, str::len);
+                assert!(decimals <= 3, "{text} is unrounded");
+            }
+            _ => {}
+        }
+    }
+    walk(&serde_json::from_str(&out.stdout).unwrap());
+}
+
+#[test]
 fn quiet_suppresses_stdout_but_keeps_the_exit_code() {
     let db = scratch_db("quiet");
     let out = vocab(&db, &["-q", "zzzqxwv"]);
@@ -1526,6 +1608,13 @@ fn a_usage_error_never_opens_the_lexicon() {
         &["typos", "--rm"],
         &["shorthand", "--rm"],
         &["rm"],
+        &["add", ""],
+        &["add", "foo bar"],
+        &["self", " "],
+        &["list", "--limit", "0"],
+        &["phrases", "--limit", "0"],
+        &["eval", "--rate", "0"],
+        &["seed", "--scan-root", "/nonexistent/vocab-e2e"],
     ] {
         assert_eq!(vocab(&db, args).code, 2, "{args:?}");
         assert!(!db.exists(), "{args:?} created the database");
