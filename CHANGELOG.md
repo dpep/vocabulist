@@ -56,11 +56,12 @@
   text topped `vocab phrases`. The end-of-turn hook now checks the session
   transcript, which records who sent each turn, and keeps a peer's text out
   of your voice, and a prompt suggestion you accepted with tab counts as
-  the assistant's, which wrote it. To take back what one already taught,
-  feed it to `vocab prune --unlearn -r prompt`, which subtracts its phrase,
-  word and style counts, and stops trusting a word only it vouched for. It
-  takes back only a text it recorded learning, once; text learned before
-  this version can't be taken back this way (use `vocab rm --phrase`). `vocab process` warns when it finds
+  the assistant's, which wrote it. Text already learned before this
+  version can't be taken back by content, only phrase by phrase with `vocab
+  rm --phrase`. From this version on, vocab records which of your texts it
+  learned, and `vocab prune --unlearn -r prompt` takes one back exactly,
+  once: its phrase, word and style counts, and trust in a word only it
+  vouched for. `vocab process` warns when it finds
   no transcript for a session, which happens when `CLAUDE_CONFIG_DIR`
   differs from the session's.
 - **Two drains at once no longer count the same text twice.** A `vocab

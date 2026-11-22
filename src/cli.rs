@@ -202,7 +202,7 @@ pub enum Command {
         filter: Option<String>,
         /// How many to show. Defaults to 50, or to all of them with
         /// `--trusted`.
-        #[arg(long, value_parser = at_least_one())]
+        #[arg(long, value_parser = at_least_one)]
         limit: Option<usize>,
         /// Only words that have earned trust: a deliberate source, or two
         /// independent documents and not a habitual typo of a word you write
@@ -354,7 +354,7 @@ pub enum Command {
     },
     /// Fold staged text into counts, then drop the prose.
     Process {
-        #[arg(long, default_value_t = 500, value_parser = at_least_one())]
+        #[arg(long, default_value_t = 500, value_parser = at_least_one)]
         limit: usize,
     },
     /// Export the lexicon into the spell checkers you already run.
@@ -458,7 +458,7 @@ pub enum Command {
         #[arg(long)]
         corpus: Option<PathBuf>,
         /// Corrupt roughly one prose line in this many.
-        #[arg(long, default_value_t = 4, value_parser = at_least_one())]
+        #[arg(long, default_value_t = 4, value_parser = at_least_one)]
         rate: usize,
         /// Seed, so a run is reproducible and two runs are comparable.
         #[arg(long, default_value_t = 1)]
@@ -483,7 +483,7 @@ pub enum Command {
         #[arg(short = 'n', long, value_name = "N", default_value_t = 2,
               value_parser = clap::value_parser!(u16).range(2..=5))]
         words: u16,
-        #[arg(long, default_value_t = 25, value_parser = at_least_one())]
+        #[arg(long, default_value_t = 25, value_parser = at_least_one)]
         limit: usize,
     },
     /// Manage the handles that identify you — a GitHub login, a Slack user
@@ -543,8 +543,12 @@ enum Access {
 }
 
 /// A count of 0 would print an empty result that reads as "there are none".
-fn at_least_one() -> clap::builder::RangedU64ValueParser<usize> {
-    clap::builder::RangedU64ValueParser::new().range(1..)
+fn at_least_one(value: &str) -> Result<usize, String> {
+    match value.parse() {
+        Ok(0) => Err("must be at least 1".into()),
+        Ok(n) => Ok(n),
+        Err(_) => Err(format!("`{value}` isn't a whole number")),
+    }
 }
 
 /// Why `args` can't be stored as entries, if one is blank.
@@ -616,7 +620,8 @@ impl Command {
             Command::Identity { handles, .. } if handles.is_empty() => Access::Read,
             // `self --rm` still writes: a denial recorded before any seed is
             // what keeps the seed from detecting that handle.
-            Command::Rm { .. } => Access::WriteIfAny,
+            // A missing lexicon has nothing staged to process either.
+            Command::Rm { .. } | Command::Process { .. } => Access::WriteIfAny,
             Command::Typos { words, rm: false } if words.is_empty() => Access::Read,
             Command::Shorthand { words, rm: false } if words.is_empty() => Access::Read,
             Command::Templates { apply: false, .. } => Access::Read,
@@ -629,7 +634,6 @@ impl Command {
             | Command::Seed { .. }
             | Command::Add { .. }
             | Command::Capture { .. }
-            | Command::Process { .. }
             | Command::Ingest { .. }
             | Command::Voice { load: Some(_), .. }
             | Command::Hook { .. } => Access::Write,

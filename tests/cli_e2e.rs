@@ -746,7 +746,11 @@ fn removing_from_no_lexicon_creates_none() {
     let out = vocab(&db, &["rm", "zblorg"]);
     assert_eq!(out.code, 1, "{}", out.stderr);
     assert!(!db.exists());
-    assert_eq!(vocab(&db, &["process", "--limit", "0"]).code, 2);
+    let zero = vocab(&db, &["process", "--limit", "0"]);
+    assert_eq!(zero.code, 2);
+    assert!(zero.stderr.contains("at least 1"), "{}", zero.stderr);
+    assert_eq!(vocab(&db, &["process"]).code, 0);
+    assert!(!db.exists(), "nothing staged, nothing to create");
 }
 
 #[test]

@@ -83,7 +83,7 @@ fn process_one(
     // picks the spelling. Sentence shape and exemplars are its punctuation,
     // not the user's (PLAN §6a).
     if authored_by == "user" {
-        store.record_learned(&crate::hook::content_key(register, body))?;
+        store.record_learned(&crate::hook::learned_key(register, body))?;
     }
     if register == Register::Speech {
         if authored_by == "user" {
@@ -460,14 +460,26 @@ pub fn unlearn(
     for text in texts {
         // Keyed as processing keyed it, from the text capture would have
         // spooled, so a transcript's copy of a leak finds it.
-        let body = crate::hook::as_captured(text.register, &text.body);
-        let key = crate::hook::content_key(text.register, &body);
+        let captured = crate::hook::as_captured(text.register, &text.body);
+        // A long capture was spooled cut short, and learned as cut.
+        let mut forms = vec![captured.as_str()];
+        let cut = crate::hook::bounded(&captured);
+        if cut.len() < captured.len() {
+            forms.push(cut);
+        }
         // Someone else's text was never recorded, which documents it gave
         // its words was never recorded either: taking one could take yours.
-        let found = text.authored_by == "user"
-            && seen.insert(key.clone())
-            && store.take_learned(&key, apply)?;
-        if found {
+        let mut found = None;
+        if text.authored_by == "user" {
+            for form in forms {
+                let key = crate::hook::learned_key(text.register, form);
+                if seen.insert(key.clone()) && store.take_learned(&key, apply)? {
+                    found = Some(form.to_string());
+                    break;
+                }
+            }
+        }
+        if let Some(body) = found {
             all.add(&Learned {
                 register: text.register,
                 authored_by: text.authored_by,
@@ -845,6 +857,51 @@ mod tests {
             assert_eq!(report.unmatched, 1, "{body}");
         }
         assert_eq!(store.voice(Register::Slack, "user").unwrap(), before);
+    }
+
+    #[test]
+    fn only_the_exact_text_learned_is_taken_back() {
+        // Capture keeps the first of two notifications that differ by a
+        // number; taking back the other must not subtract the first's lines.
+        let store = Store::open(":memory:").unwrap();
+        let first = "inkling: build 1234 finished and every check passed on the widget branch";
+        store
+            .spool(Register::Prompt, Some("s"), first, "user")
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        for other in [
+            "inkling: build 1235 finished and every check passed on the widget branch",
+            "Inkling: build 1234 finished and every check passed on the widget branch",
+        ] {
+            let report =
+                unlearn(&store, &[learned(Register::Prompt, "user", other)], true).unwrap();
+            assert_eq!(report.unmatched, 1, "{other}");
+        }
+        let report = unlearn(
+            &store,
+            &[learned(Register::Prompt, "user", &format!("{first}  \r\n"))],
+            true,
+        )
+        .unwrap();
+        assert_eq!((report.unmatched, report.exemplars), (0, 1));
+    }
+
+    #[test]
+    fn a_capture_cut_short_is_found_by_its_whole_text() {
+        let store = Store::open(":memory:").unwrap();
+        let long = "the widget needs a zblorg restart. ".repeat(600);
+        store
+            .spool(
+                Register::Prompt,
+                Some("s"),
+                crate::hook::bounded(long.trim()),
+                "user",
+            )
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        let report = unlearn(&store, &[learned(Register::Prompt, "user", &long)], true).unwrap();
+        assert_eq!(report.unmatched, 0);
+        assert_eq!(store.ngram_count("zblorg restart").unwrap(), 0);
     }
 
     #[test]

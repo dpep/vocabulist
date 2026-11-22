@@ -486,12 +486,30 @@ pub(crate) fn content_key(register: Register, body: &str) -> String {
             (space, digit) = (false, false);
         }
     }
+    format!("{}:{:016x}", register.as_str(), fnv1a(folded.trim()))
+}
+
+/// The exact text a text's counts came from, for `prune --unlearn`. Unlike
+/// [`content_key`], case and digits count: two notifications differing by a
+/// number taught different lines, and taking one back must not subtract the
+/// other's. Only line endings and trailing spaces are ignored.
+pub(crate) fn learned_key(register: Register, body: &str) -> String {
+    let lines: Vec<&str> = body.lines().map(str::trim_end).collect();
+    let text = lines.join("\n");
+    format!(
+        "{}:{:016x}",
+        register.as_str(),
+        fnv1a(text.trim_matches('\n'))
+    )
+}
+
+fn fnv1a(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in folded.trim().as_bytes() {
+    for byte in text.as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    format!("{}:{hash:016x}", register.as_str())
+    hash
 }
 
 fn spool(store: &Store, register: Register, source: &str, body: &str) {
@@ -523,7 +541,7 @@ fn spool(store: &Store, register: Register, source: &str, body: &str) {
 
 /// `body` cut to `MAX_CAPTURE_BYTES`, at the last whitespace before it so
 /// no word is split.
-fn bounded(body: &str) -> &str {
+pub(crate) fn bounded(body: &str) -> &str {
     if body.len() <= MAX_CAPTURE_BYTES {
         return body;
     }

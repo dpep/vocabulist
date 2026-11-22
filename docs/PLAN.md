@@ -200,10 +200,15 @@ subtracts exactly what processing would have added, never below zero, where
 `rm --phrase` deletes a phrase the user also says. It reads records as
 `ingest` does (register default, `author`, `--self`, the assistant marker).
 
-Whether a text was learned is recorded, not inferred: processing writes each
-user text's content key (the capture dedupe hash, no prose) to `learned`
-(schema 10), and unlearn takes a text back only if its key is there, then
-deletes it. That makes a never-learned text, a wrong register, and a second
+Whether a text was learned is recorded, not inferred: processing writes a
+hash of each user text (no prose) to `learned` (schema 10), and unlearn
+takes a text back only if its hash is there, then deletes it. The hash is of
+the exact text, ignoring only line endings and trailing spaces — not the
+capture dedupe key, which folds case and digits so a template counts once.
+Under that folding, feeding "build 1235" took back "build 1234"'s key while
+subtracting counts computed from the text fed, leaving the learned
+sentence's exemplar behind with no way to retry. A long capture is learned
+cut short, so unlearn also tries the input cut the same way. That makes a never-learned text, a wrong register, and a second
 feeding all exact no-ops, and it does not depend on the text's phrases still
 being present after `rm --phrase` or `templates --apply`. Two inference rules
 came first and each was broken by the next hunt: "some count matched" (a
