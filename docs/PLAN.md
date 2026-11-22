@@ -503,6 +503,14 @@ assistant's replies in the same sessions (~22k sentences):
 | we/us/our/let's per 1000 words | 31.9 | 1.2 |
 | message ends unpunctuated | 0.61 | 0.17 |
 | message opens as a request | 0.11 | 0.00 |
+| sentence is a bare command | 0.065 | 0.010 |
+
+A bare command is recognized without a tagger: an imperative verb from a
+closed list, followed by a determiner, pronoun or particle (or nothing), so
+"fix the widget" counts and "test failures are down" does not. A question,
+a `Label:` and "let me check" (an announcement, unlike "let me know") are
+not commands. Requests and commands are the two halves of directness: one
+asks, the other tells.
 
 Markers that came out level (contraction rate, first person singular,
 run-on sentences, exclamations) were dropped or kept only where they

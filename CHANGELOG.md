@@ -36,8 +36,9 @@
 ### Added
 
 - **`vocab voice`** profiles how you write below the level of words:
-  lowercase starts, questions, commas, colons, dashes, hedges, `we`, how a
-  message opens and whether it ends with punctuation, per register. With a
+  lowercase starts, questions, commas, colons, dashes, hedges, `we`,
+  requests versus bare commands, and whether a message ends with
+  punctuation, per register. With a
   draft (`vocab voice -r slack "…"`, `--file`, or `--check` on stdin) it
   scores each marker against your profile and an assistant baseline, and
   exits 1 when a habit in the draft is unusual for you and typical of the

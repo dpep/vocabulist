@@ -152,6 +152,11 @@ pub const MARKERS: &[Marker] = &[
         per: Per::Message,
         gloss: "a message that opens as a request (can we, let's)",
     },
+    Marker {
+        name: "command",
+        per: Per::Sentence,
+        gloss: "a bare command (fix it, run the tests)",
+    },
 ];
 
 pub fn marker(name: &str) -> Option<&'static Marker> {
@@ -244,10 +249,94 @@ const REQUEST_OPENERS: &[&[&str]] = &[
     &["what", "if"],
     &["please"],
 ];
+/// Verbs common as bare commands in working prose, in the base form.
+const IMPERATIVE_VERBS: &[&str] = &[
+    "add", "ask", "avoid", "build", "call", "change", "check", "clean", "close", "commit",
+    "create", "delete", "do", "drop", "find", "fix", "get", "give", "go", "include", "install",
+    "keep", "let", "look", "make", "merge", "move", "note", "open", "push", "put", "read",
+    "rebase", "remove", "rename", "replace", "revert", "review", "run", "see", "send", "set",
+    "ship", "show", "skip", "start", "stop", "take", "tell", "test", "try", "update", "use",
+    "wait", "write",
+];
+/// What follows a verb used as a command. Without a tagger, "fix" before
+/// "the" is a verb and before "failures" may be a noun, so a command needs
+/// one of these, or nothing, after the verb.
+const COMMAND_OBJECTS: &[&str] = &[
+    "the",
+    "a",
+    "an",
+    "this",
+    "that",
+    "these",
+    "those",
+    "my",
+    "your",
+    "our",
+    "its",
+    "their",
+    "some",
+    "any",
+    "all",
+    "each",
+    "every",
+    "it",
+    "them",
+    "me",
+    "us",
+    "him",
+    "her",
+    "everything",
+    "something",
+    "again",
+    "up",
+    "out",
+    "down",
+    "back",
+    "off",
+    "on",
+    "in",
+    "over",
+    "away",
+    "to",
+];
+/// Lead-ins a command can carry ("so just run it") without being softened.
+const COMMAND_FILLERS: &[&str] = &["so", "just", "and", "then", "now", "ok", "okay", "also"];
 const CONTRACTION_SUFFIXES: &[&str] = &["n't", "'s", "'re", "'ve", "'ll", "'d", "'m"];
 
 fn starts_with_seq(words: &[String], seq: &[&str]) -> bool {
     words.len() >= seq.len() && words.iter().zip(seq).all(|(w, s)| w == s)
+}
+
+/// Whether a sentence is a bare command: an imperative verb, or `don't` and
+/// one, not asked as a question. "Please" or "can you" makes it a request.
+fn is_command(sentence: &str, words: &[String]) -> bool {
+    // A question asks; "Fix: the rename…" is a label.
+    if sentence.trim_end().ends_with('?')
+        || sentence
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| w.ends_with(':'))
+    {
+        return false;
+    }
+    let mut rest = words;
+    while let [first, tail @ ..] = rest
+        && COMMAND_FILLERS.contains(&first.as_str())
+    {
+        rest = tail;
+    }
+    match rest {
+        [neg, verb, ..] if neg == "don't" || neg == "never" => {
+            IMPERATIVE_VERBS.contains(&verb.as_str())
+        }
+        // "Let me check" announces; only "let me know" asks something of you.
+        [verb, me, after, ..] if verb == "let" && me == "me" => after == "know",
+        [verb] => IMPERATIVE_VERBS.contains(&verb.as_str()),
+        [verb, next, ..] => {
+            IMPERATIVE_VERBS.contains(&verb.as_str()) && COMMAND_OBJECTS.contains(&next.as_str())
+        }
+        [] => false,
+    }
 }
 
 fn count_seqs(words: &[String], seqs: &[&[&str]]) -> i64 {
@@ -455,6 +544,7 @@ pub fn measure(message: &str) -> Counts {
                         .count() as i64,
             );
             bump(&mut c, "long_sentence", i64::from(words.len() >= 20));
+            bump(&mut c, "command", i64::from(is_command(s, &words)));
         }
     }
 
@@ -731,6 +821,24 @@ mod tests {
         assert_eq!(get(&c, "comma"), 0);
         // The bullet's colon is the writer's, not the markdown's.
         assert_eq!(get(&c, "colon"), 1);
+    }
+
+    #[test]
+    fn a_command_is_a_bare_verb_and_a_request_is_asked() {
+        let commands = measure(
+            "Fix the widget. so just run the tests again\nDon't merge it yet. Let me know.",
+        );
+        assert_eq!(get(&commands, "command"), 4);
+        assert_eq!(get(&commands, "request"), 0);
+
+        // Asked, softened, or a noun that happens to be a verb: not commands.
+        let not = measure(
+            "Can you fix the widget? Please run the tests. Fix it? \
+             Test failures are down. The build needs a rerun. Check marks look fine. \
+             Let me verify that. Fix: the cache is warm now.",
+        );
+        assert_eq!(get(&not, "command"), 0);
+        assert_eq!(get(&not, "request"), 1);
     }
 
     #[test]
