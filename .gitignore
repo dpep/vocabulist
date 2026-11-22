@@ -5,3 +5,5 @@
 *.sqlite3
 *.sock
 .DS_Store
+# user-testing archives: logs quote real-store output, kept local
+/research/
