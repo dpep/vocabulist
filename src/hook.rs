@@ -116,7 +116,7 @@ pub fn run(event: &str, store: &Store, input: &HookInput) -> i32 {
             // and, with it, the detected identities that read-capture needs.
             maybe_seed(store);
             // Silent: a hook's stderr reaches nobody, and the CLI says it.
-            let _ = reconcile_spool(store);
+            let _ = reconcile_spool(store, STOP_PROCESS_LIMIT);
             let _ = crate::process::process_spool(store, STOP_PROCESS_LIMIT);
         }
         _ => {}
@@ -154,12 +154,22 @@ fn projects_root() -> Option<std::path::PathBuf> {
 }
 
 /// Re-attribute staged prompts nobody typed, against the transcripts in the
-/// usual place. Every path that drains the spool calls this first. Returns
-/// how many sessions had no transcript to check, whose prompts will be
-/// learned as typed.
-pub fn reconcile_spool(store: &Store) -> usize {
+/// usual place. Every path that drains the spool calls this first, with the
+/// limit it is about to drain, so no row is processed unchecked. Returns how
+/// many sessions had no transcript to check, whose prompts will be learned
+/// as typed.
+pub fn reconcile_spool(store: &Store, limit: usize) -> usize {
     let root = projects_root().unwrap_or_default();
-    reconcile_origins(store, &root)
+    reconcile_origins(store, &root, limit)
+}
+
+/// Claude Code's session ids are UUIDs.
+fn is_session_id(id: &str) -> bool {
+    let groups: Vec<&str> = id.split('-').collect();
+    groups.iter().map(|g| g.len()).eq([8, 4, 4, 4, 12])
+        && groups
+            .iter()
+            .all(|g| g.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Re-attribute staged prompts that another session submitted.
@@ -172,8 +182,8 @@ pub fn reconcile_spool(store: &Store) -> usize {
 /// this runs then, before the spool is processed. Undocumented schema, so it
 /// fails open: a transcript it cannot find or read changes nothing. Returns
 /// how many sessions had no transcript.
-fn reconcile_origins(store: &Store, projects: &std::path::Path) -> usize {
-    let Ok(pending) = store.pending_spool(STOP_PROCESS_LIMIT) else {
+fn reconcile_origins(store: &Store, projects: &std::path::Path, limit: usize) -> usize {
+    let Ok(pending) = store.pending_spool(limit) else {
         return 0;
     };
     let mut by_session: std::collections::HashMap<&str, Vec<&crate::store::SpoolRow>> =
@@ -189,7 +199,9 @@ fn reconcile_origins(store: &Store, projects: &std::path::Path) -> usize {
     let mut missing = 0;
     for (session, rows) in by_session {
         let found = transcripts(projects, session);
-        missing += usize::from(found.is_empty());
+        // An ingested prompt's source is whatever its export called it, not
+        // a session; only an id shaped like Claude Code's is missed.
+        missing += usize::from(found.is_empty() && is_session_id(session));
         let foreign = foreign_prompts(&found);
         for row in rows {
             if let Some(author) = foreign.get(&content_key(Register::Prompt, &row.body)) {
@@ -706,7 +718,7 @@ mod tests {
                 },
             );
         }
-        reconcile_origins(&s, &projects);
+        reconcile_origins(&s, &projects, 10);
         let mut authors: Vec<(String, String)> = s
             .pending_spool(10)
             .unwrap()
@@ -783,17 +795,54 @@ mod tests {
     fn reconcile_counts_the_sessions_it_could_not_check() {
         let s = store();
         let projects = projects_dir("missing");
+        let (here, gone) = (
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        );
         std::fs::create_dir_all(projects.join("-repo")).unwrap();
-        std::fs::write(projects.join("-repo/here.jsonl"), peer_line("x")).unwrap();
+        std::fs::write(projects.join(format!("-repo/{here}.jsonl")), peer_line("x")).unwrap();
         for (session, prompt) in [
-            ("here", "a widget"),
-            ("gone", "b widget"),
-            ("gone", "c widget"),
+            (here, "a widget"),
+            (gone, "b widget"),
+            (gone, "c widget"),
+            // An ingested export's source, which no transcript was promised for.
+            ("chatgpt-export", "d widget"),
         ] {
             s.spool(Register::Prompt, Some(session), prompt, "user")
                 .unwrap();
         }
-        assert_eq!(reconcile_origins(&s, &projects), 1);
+        assert_eq!(reconcile_origins(&s, &projects, 10), 1);
+        std::fs::remove_dir_all(&projects).unwrap();
+    }
+
+    #[test]
+    fn reconcile_checks_every_row_the_drain_will_take() {
+        let s = store();
+        let projects = projects_dir("limit");
+        std::fs::create_dir_all(projects.join("-repo")).unwrap();
+        std::fs::write(
+            projects.join("-repo/sess.jsonl"),
+            peer_line("the peer widget"),
+        )
+        .unwrap();
+        for i in 0..STOP_PROCESS_LIMIT {
+            s.spool(
+                Register::Prompt,
+                Some("sess"),
+                &format!("typed widget {i}"),
+                "user",
+            )
+            .unwrap();
+        }
+        s.spool(Register::Prompt, Some("sess"), "the peer widget", "user")
+            .unwrap();
+        reconcile_origins(&s, &projects, STOP_PROCESS_LIMIT + 1);
+        let pending = s.pending_spool(STOP_PROCESS_LIMIT + 1).unwrap();
+        let peer = pending
+            .iter()
+            .find(|r| r.body == "the peer widget")
+            .unwrap();
+        assert_eq!(peer.authored_by, "other");
         std::fs::remove_dir_all(&projects).unwrap();
     }
 

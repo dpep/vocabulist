@@ -306,7 +306,6 @@ impl Tally {
         let register = text.register;
         let body = text.body.as_str();
         *self.prose.entry((register, "documents")).or_default() += 1;
-        let distinct = |words: Vec<String>| words.into_iter().collect::<HashSet<_>>();
 
         if register == Register::Speech {
             if text.authored_by == "user" {
@@ -317,17 +316,9 @@ impl Tally {
             return;
         }
 
+        // Someone else's text taught only which documents its words were
+        // in, and which documents were never recorded; see `learned`.
         if text.authored_by != "user" {
-            if text.authored_by == "assistant" {
-                let writing = watermark::without_markers(body);
-                crate::voice::add(
-                    self.voice.entry((register, "assistant")).or_default(),
-                    &crate::voice::measure(&writing),
-                );
-            }
-            for word in distinct(body.lines().flat_map(text::prose_words).collect()) {
-                *self.sources.entry(word).or_default() += 1;
-            }
             return;
         }
 
@@ -372,6 +363,41 @@ impl Tally {
         );
     }
 
+    /// Whether the store holds every trace this text would have left: each
+    /// of its word pairs (longer phrases were counted only once their prefix
+    /// recurred, so they prove nothing), else each of its words, in its
+    /// register. One shared pair like `the widget` is not evidence that this
+    /// text was learned; all of them is. Someone else's text left no trace
+    /// in any register, so it is never found.
+    fn learned(&self, store: &Store) -> Result<bool, Box<dyn std::error::Error>> {
+        use crate::store::Unlearn;
+        let held = |target: Unlearn<'_>, by: i64| -> rusqlite::Result<bool> {
+            Ok(store.unlearn(target, by, false)?.0 >= by)
+        };
+        let mut pairs = self
+            .grams
+            .iter()
+            .filter(|((gram, _), _)| gram.split(' ').count() == 2)
+            .peekable();
+        if pairs.peek().is_some() {
+            for ((gram, register), by) in pairs {
+                if !held(Unlearn::Gram(gram, *register), *by)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        if !self.registers.is_empty() {
+            for ((word, register), by) in &self.registers {
+                if !held(Unlearn::WordIn(word, *register), *by)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// Take these counts back from the store, or only measure what would
     /// go. Document counts are taken but not reported: every text has one.
     fn take(
@@ -383,6 +409,19 @@ impl Tally {
 
         let mut report = UnlearnReport::default();
         let mut lost: HashMap<String, i64> = HashMap::new();
+        // Which documents a text added was never recorded, so taking one
+        // back takes the newest, which may be another document's. Only a
+        // word this leaves with no count of yours at all is safe to touch:
+        // nothing else you wrote vouches for it.
+        let mut orphaned = Vec::new();
+        for (word, by) in &self.counts {
+            let have = store.unlearn(Unlearn::Word(word), i64::MAX, false)?.0;
+            if have <= *by
+                && let Some(sources) = self.sources.get(word)
+            {
+                orphaned.push((word, *sources));
+            }
+        }
         for ((gram, register), by) in &self.grams {
             let (taken, emptied) = store.unlearn(Unlearn::Gram(gram, *register), *by, apply)?;
             if taken > 0 {
@@ -399,8 +438,8 @@ impl Tally {
         for (word, by) in &self.counts {
             store.unlearn(Unlearn::Word(word), *by, apply)?;
         }
-        for (word, by) in &self.sources {
-            report.word_sources += store.unlearn_sources(word, *by, apply)?;
+        for (word, by) in orphaned {
+            report.word_sources += store.unlearn_sources(word, by, apply)?;
         }
         for (register, line) in &self.exemplars {
             report.exemplars += store.unlearn_exemplar(*register, line, apply)?;
@@ -432,17 +471,17 @@ impl Tally {
 /// For a capture leak found after the fact: the prose is gone, but the text
 /// that leaked usually is not — a relayed notification is still in the
 /// transcript — so feeding it back here subtracts exactly its counts, where
-/// `rm --phrase` deletes a shared phrase like `merged by` outright. Each text
-/// takes back what its authorship let it teach: your own text its voice and
-/// phrases, someone else's only the documents its words appeared in.
+/// `rm --phrase` deletes a shared phrase like `merged by` outright.
 ///
-/// Counts never go below zero, but nothing records which counts a text
-/// added, so text that was never learned — or is fed twice — still takes from
-/// the phrases it shares with yours. Feed only what leaked, once. Every
-/// phrase length is taken back, though longer ones were counted only once
-/// their prefix recurred; the floor absorbs that. Words stay in the lexicon
-/// (a word in a leaked line is still a word), but lose the documents the
-/// text gave them, so a word only the leak vouched for is no longer trusted.
+/// Nothing records which counts a text added, so a text is taken back only
+/// when every trace it would have left is there (`Tally::learned`); one
+/// never learned, or fed under the wrong register, takes nothing. Someone
+/// else's text left no trace to find and is never taken back. A text fed
+/// twice can still take twice from phrases you also wrote: feed only what
+/// leaked, once. Words stay in the lexicon (a word in a leaked line is still
+/// a word); one the text leaves with no count of yours also loses the
+/// documents it gave, so a word only the leak vouched for is no longer
+/// trusted.
 pub fn unlearn(
     store: &Store,
     texts: &[Learned],
@@ -453,15 +492,9 @@ pub fn unlearn(
     for text in texts {
         let mut one = Tally::default();
         one.add(text);
-        let would = one.take(store, false)?;
-        // Judged by the counts kept per register, since the usual miss is
-        // the wrong one. Someone else's text kept none to judge by.
-        let matched = text.authored_by == "other"
-            || would.phrase_counts + would.word_counts + would.voice_counts > 0;
-        // A text that matched nothing takes nothing, not even the counts
-        // kept across registers, so feeding it again under the right
-        // register is safe.
-        if matched {
+        // A text not found takes nothing, not even the counts kept across
+        // registers, so feeding it again under the right register is safe.
+        if one.learned(store)? {
             all.add(text);
         } else {
             unmatched += 1;
@@ -776,37 +809,56 @@ mod tests {
     }
 
     #[test]
-    fn unlearning_someone_elses_text_takes_back_only_what_it_corroborated() {
+    fn someone_elses_text_left_nothing_to_find_and_takes_nothing() {
+        // Which documents their text added was never recorded, so taking
+        // one back could take yours: it is reported, and left alone.
         let store = Store::open(":memory:").unwrap();
         store
             .spool(Register::Prompt, None, "run the zblorg widget", "user")
             .unwrap();
-        for _ in 0..2 {
-            store
-                .spool(Register::Prompt, None, "run the zblorg widget", "other")
-                .unwrap();
-        }
+        store
+            .spool(Register::Prompt, None, "run the zblorg widget", "other")
+            .unwrap();
         process_spool(&store, 10).unwrap();
         assert!(trusted(&store, "zblorg"));
-        let before = store.voice(Register::Prompt, "user").unwrap();
 
         let report = unlearn(
             &store,
-            &[
-                learned(Register::Prompt, "other", "run the zblorg widget"),
-                learned(Register::Prompt, "other", "run the zblorg widget"),
-            ],
+            &[learned(Register::Prompt, "other", "run the zblorg widget")],
             true,
         )
         .unwrap();
-        assert_eq!(report.phrase_counts, 0);
-        assert_eq!(report.word_counts, 0);
-        assert_eq!(report.voice_counts, 0);
-        assert_eq!(store.voice(Register::Prompt, "user").unwrap(), before);
-        assert_eq!(store.ngram_count("zblorg widget").unwrap(), 1);
-        // Your one document is all that vouches for it now.
-        assert_eq!(store.source_count("zblorg").unwrap(), 1);
-        assert!(!trusted(&store, "zblorg"));
+        assert_eq!(report.unmatched, 1);
+        assert_eq!(report.word_sources, 0);
+        assert!(trusted(&store, "zblorg"));
+    }
+
+    #[test]
+    fn a_text_never_learned_takes_nothing_though_it_shares_your_phrases() {
+        let store = Store::open(":memory:").unwrap();
+        for body in [
+            "merged the zblorg widget today",
+            "merged the zblorg widget again",
+        ] {
+            store.spool(Register::Slack, None, body, "user").unwrap();
+        }
+        store
+            .spool(Register::Prompt, None, "merged the quux", "user")
+            .unwrap();
+        process_spool(&store, 10).unwrap();
+        assert!(trusted(&store, "zblorg"));
+
+        // Under the wrong register it shares only `merged the`; and an
+        // unseen text shares `the zblorg`. Neither was learned there.
+        for (register, body) in [
+            (Register::Prompt, "merged the zblorg widget today"),
+            (Register::Slack, "the zblorg broke"),
+        ] {
+            let report = unlearn(&store, &[learned(register, "user", body)], true).unwrap();
+            assert_eq!(report.unmatched, 1, "{body}");
+        }
+        assert_eq!(store.ngram_count("merged the").unwrap(), 3);
+        assert!(trusted(&store, "zblorg"));
     }
 
     #[test]

@@ -298,8 +298,10 @@ pub enum Command {
         /// `vocab ingest`'s shape (`{body, author?, register?}`) and
         /// attributed as ingest attributes them. For a capture leak found
         /// after the fact: subtracts exactly their counts, never below zero,
-        /// where `rm --phrase` deletes a phrase you also use. A prompt that
-        /// leaked needs `-r prompt`.
+        /// where `rm --phrase` deletes a phrase you also use. A text is taken
+        /// back only if everything it would have taught is there; one not
+        /// found, or written by someone else, is reported and takes nothing.
+        /// A prompt that leaked needs `-r prompt`.
         #[arg(long, conflicts_with = "strict")]
         unlearn: bool,
         /// With `--unlearn`: the register for records that don't name one,
@@ -995,8 +997,8 @@ fn dispatch_inner(
                 store.transaction(|| crate::process::unlearn(&store, &texts, !*dry_run))?;
             if report.unmatched > 0 && format == Format::Human && !cli.quiet {
                 eprintln!(
-                    "vocab: {} of {} texts matched nothing learned — was it captured \
-                     under another register? (-r, default {})",
+                    "vocab: {} of {} texts were not found as learned and took nothing — \
+                     captured under another register (-r, default {}), or written by someone else?",
                     report.unmatched,
                     report.texts,
                     register.as_str()
@@ -1069,7 +1071,7 @@ fn dispatch_inner(
         }
 
         Some(Command::Process { limit }) => {
-            let missing = crate::hook::reconcile_spool(&store);
+            let missing = crate::hook::reconcile_spool(&store, *limit);
             if missing > 0 {
                 log::warn!(
                     "no transcript found for {missing} session(s) (is CLAUDE_CONFIG_DIR set as it was \

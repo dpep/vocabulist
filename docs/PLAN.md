@@ -198,16 +198,21 @@ notification is still in the transcript — even though the prose the store
 learned it from is gone. `prune --unlearn` takes that text on stdin and
 subtracts exactly what processing would have added, never below zero, where
 `rm --phrase` deletes a phrase the user also says. It reads records as
-`ingest` does (register default, `author`, `--self`, the assistant marker),
-so each takes back only what its authorship let it teach — someone else's
-text just the documents its words appeared in. Documents are taken back
-too, newest first, since trust counts them: a word only the leak vouched for
-stops being trusted. A text that matches none of the per-register counts is
-reported and takes nothing, so a wrong register is a no-op rather than a
-partial subtraction. Nothing records which counts a given text added, so
-text that was never learned, or is fed twice, still takes from the phrases
-it shares with the user's: feed only what leaked, once, and read the dry
-run.
+`ingest` does (register default, `author`, `--self`, the assistant marker).
+Nothing records which counts a given text added, so a text is taken back
+only when every trace it would have left is present in its register — each
+word pair, or each word for a text with none. A shared phrase like `the
+widget` is not evidence that this text was learned; all of its pairs are.
+A text not found is reported and takes nothing, so a wrong register or a
+never-learned text is a no-op rather than a partial subtraction from the
+user's phrases. Someone else's text left no per-register trace, only the
+documents its words appeared in, and which documents were never recorded,
+so it is reported and never taken back: taking the newest document could
+take one of the user's. For the user's own text, documents (what trust
+counts) are taken only from words it leaves with no count at all, so a word
+only the leak vouched for stops being trusted and no other word loses one.
+A text fed twice can still take twice from pairs the user also wrote: feed
+only what leaked, once, and read the dry run.
 
 ## 6. Registers
 

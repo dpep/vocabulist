@@ -442,24 +442,27 @@ fn masked(line: &str) -> String {
 }
 
 /// `i.e.` and `e.g.` as one word each (`ie`, `eg`), so neither splits into
-/// sentences nor reads as a first-person `i`.
+/// sentences nor reads as a first-person `i`. Only these two: a general
+/// initialism rule took the period that ends "…to the U.S."
 fn join_initialisms(line: &str) -> String {
-    let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
-    let mut i = 0;
-    while i < chars.len() {
-        let starts_word = i == 0 || !chars[i - 1].is_alphanumeric();
-        let mut j = i;
-        while chars.get(j).is_some_and(|c| c.is_alphabetic()) && chars.get(j + 1) == Some(&'.') {
-            j += 2;
-        }
-        let letters = (j - i) / 2;
-        if starts_word && letters >= 2 && chars.get(j).is_none_or(|c| !c.is_alphanumeric()) {
-            out.extend(chars[i..j].iter().step_by(2));
-            i = j;
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
+        let starts_word = out.chars().last().is_none_or(|p| !p.is_alphanumeric());
+        let head = rest.get(..4).map(str::to_ascii_lowercase);
+        // A matched head is ASCII, so byte 4 is a character boundary.
+        if starts_word
+            && matches!(head.as_deref(), Some("i.e." | "e.g."))
+            && rest[4..]
+                .chars()
+                .next()
+                .is_none_or(|n| !n.is_alphanumeric())
+        {
+            out.push_str(&format!("{}{}", &rest[..1], &rest[2..3]));
+            rest = &rest[4..];
         } else {
-            out.push(chars[i]);
-            i += 1;
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
         }
     }
     out
@@ -999,6 +1002,13 @@ mod tests {
         let c = measure("e.g. fix the widget. i.e. run it.");
         assert_eq!(get(&c, "first_singular"), 0);
         assert_eq!(get(&c, "sentences"), 2);
+        // Other initialisms keep their periods, the last one ending a sentence.
+        let c = measure("We shipped it to the U.S.\nSee you at 5 p.m. We can talk then");
+        assert_eq!(get(&c, "sentences"), 3);
+        assert_eq!(
+            get(&measure("We shipped it to the U.S."), "unterminated"),
+            0
+        );
     }
 
     #[test]

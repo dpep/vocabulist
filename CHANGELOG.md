@@ -37,7 +37,8 @@
   of your voice, and a prompt suggestion you accepted with tab counts as
   the assistant's, which wrote it. To take back what one already taught,
   feed it to `vocab prune --unlearn -r prompt`, which subtracts its phrase,
-  word and style counts and the documents that vouched for its words. `vocab process` warns when it finds
+  word and style counts, and stops trusting a word only it vouched for. A
+  text it can't find as learned is reported and takes nothing. `vocab process` warns when it finds
   no transcript for a session, which happens when `CLAUDE_CONFIG_DIR`
   differs from the session's.
 - **Two drains at once no longer count the same text twice.** A `vocab

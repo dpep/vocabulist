@@ -970,13 +970,19 @@ fn unlearn_takes_back_only_what_a_leaked_text_taught() {
     // The user's own use of a phrase the leak shared survives.
     assert_eq!(count("merged by"), 2);
 
-    // Asking for more than is there empties it, and goes no further.
-    run(
+    // Fed again, the leak is no longer there to find, and takes nothing
+    // from the phrase it shared with you.
+    let again = run(
         &db,
-        &["prune", "--unlearn", "-r", "prompt", "-q"],
-        Some("{\"body\":\"merged by merged by merged by\"}"),
+        &["prune", "--unlearn", "-r", "prompt", "-j"],
+        Some(&stdin),
     );
-    assert_eq!(count("merged by"), 0);
+    assert!(
+        again.stdout.contains("\"unmatched\": 2"),
+        "{}",
+        again.stdout
+    );
+    assert_eq!(count("merged by"), 2);
     let all = vocab(&db, &["phrases", "--min-count", "1", "--limit", "500"]);
     assert!(
         !all.stdout.contains('-'),
@@ -1002,8 +1008,8 @@ fn unlearn_reads_records_as_ingest_does() {
     };
     assert_eq!(prompt_words(), 5);
 
-    // No register means `other`, as ingest read it; bob's record, as ingest
-    // read it, taught your voice nothing to take back.
+    // No register means `other`, as ingest read it; bob's record taught
+    // your voice nothing, left nothing to find, and is reported.
     let out = run(
         &db,
         &["prune", "--unlearn", "-j"],
@@ -1011,7 +1017,7 @@ fn unlearn_reads_records_as_ingest_does() {
     );
     assert_eq!(out.code, 0, "{}", out.stderr);
     let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
-    assert_eq!(v["unmatched"], 0, "{}", out.stdout);
+    assert_eq!(v["unmatched"], 1, "{}", out.stdout);
     assert_eq!(prompt_words(), 5, "your prompts are untouched");
     assert_eq!(
         vocab(&db, &["voice", "-r", "other"]).code,
@@ -1032,7 +1038,11 @@ fn unlearn_reads_records_as_ingest_does() {
         &["prune", "--unlearn", "--dry-run"],
         Some("{\"body\":\"run the widget suite again\"}"),
     );
-    assert!(out.stderr.contains("matched nothing"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("not found as learned"),
+        "{}",
+        out.stderr
+    );
     assert_eq!(prompt_words(), 5);
 }
 
@@ -2193,7 +2203,7 @@ fn process_says_when_it_cannot_check_who_sent_a_prompt() {
         String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned()
     };
     for prompt in ["we shipped the widget", "the widget is done"] {
-        let input = serde_json::json!({"prompt": prompt, "session_id": "gone"}).to_string();
+        let input = serde_json::json!({"prompt": prompt, "session_id": "00000000-0000-4000-8000-00000000dead"}).to_string();
         vocab_in_config(&["hook", "user-prompt-submit"], Some(&input));
     }
 
